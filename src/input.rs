@@ -1879,7 +1879,10 @@ pub fn handle_mouse(app: &mut AppState, me: MouseEvent, window_area: Rect) -> io
                         let button_state = ((wheel_delta as i32) << 16) as u32;
                         forward_mouse_to_pane_ex(active, area, me.column, me.row,
                             button_state, crate::platform::mouse_inject::MOUSE_WHEELED,
-                            64, true); // SGR button 64 = scroll-up
+                            64, true); // SGR button 64 = scroll-up, press
+                        forward_mouse_to_pane_ex(active, area, me.column, me.row,
+                            button_state, crate::platform::mouse_inject::MOUSE_WHEELED,
+                            64, false); // SGR button 64 = scroll-up, release
                     }
                 }
             } else {
@@ -1922,7 +1925,10 @@ pub fn handle_mouse(app: &mut AppState, me: MouseEvent, window_area: Rect) -> io
                         let button_state = ((wheel_delta as i32) << 16) as u32;
                         forward_mouse_to_pane_ex(active, area, me.column, me.row,
                             button_state, crate::platform::mouse_inject::MOUSE_WHEELED,
-                            65, true); // SGR button 65 = scroll-down
+                            65, true); // SGR button 65 = scroll-down, press
+                        forward_mouse_to_pane_ex(active, area, me.column, me.row,
+                            button_state, crate::platform::mouse_inject::MOUSE_WHEELED,
+                            65, false); // SGR button 65 = scroll-down, release
                     }
                 }
             }

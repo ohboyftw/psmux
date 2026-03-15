@@ -640,27 +640,35 @@ pub fn run_server(session_name: String, socket_name: Option<String>, initial_com
                     if let Some(dir) = &start_dir { env::set_current_dir(dir).ok(); }
                     let prev_path = app.windows[app.active_idx].active_path.clone();
                     let stashed_warm = if start_dir.is_some() { app.warm_pane.take() } else { None };
-                    if let Err(e) = split_active_with_command(&mut app, k, cmd.as_deref(), Some(&*pty_system), start_dir.as_deref()) {
-                        eprintln!("psmux: split-window error: {e}");
-                    }
-                    if let Some(wp) = stashed_warm { app.warm_pane = Some(wp); }
-                    if let Some(pct) = size_pct {
-                        let pct = pct.clamp(1, 99);
-                        let win = &mut app.windows[app.active_idx];
-                        if let Some(Node::Split { sizes, .. }) = get_split_mut(&mut win.root, &prev_path) {
-                            sizes[0] = 100 - pct;
-                            sizes[1] = pct;
+                    let split_ok = match split_active_with_command(&mut app, k, cmd.as_deref(), Some(&*pty_system), start_dir.as_deref()) {
+                        Ok(()) => true,
+                        Err(e) => {
+                            eprintln!("psmux: split-window error: {e}");
+                            false
                         }
+                    };
+                    if let Some(wp) = stashed_warm { app.warm_pane = Some(wp); }
+                    if split_ok {
+                        if let Some(pct) = size_pct {
+                            let pct = pct.clamp(1, 99);
+                            let win = &mut app.windows[app.active_idx];
+                            if let Some(Node::Split { sizes, .. }) = get_split_mut(&mut win.root, &prev_path) {
+                                sizes[0] = 100 - pct;
+                                sizes[1] = pct;
+                            }
+                        }
+                        // Use full format engine for -P output (tmux compatible)
+                        let fmt = format_str.as_deref().unwrap_or("#{session_name}:#{window_index}.#{pane_index}");
+                        let pane_info = crate::format::expand_format_for_window(fmt, &app, app.active_idx);
+                        if detached {
+                            let mut revert_path = prev_path;
+                            revert_path.push(0);
+                            app.windows[app.active_idx].active_path = revert_path;
+                        }
+                        let _ = resp.send(pane_info);
+                    } else {
+                        let _ = resp.send(String::new());
                     }
-                    // Use full format engine for -P output (tmux compatible)
-                    let fmt = format_str.as_deref().unwrap_or("#{session_name}:#{window_index}.#{pane_index}");
-                    let pane_info = crate::format::expand_format_for_window(fmt, &app, app.active_idx);
-                    if detached {
-                        let mut revert_path = prev_path;
-                        revert_path.push(0);
-                        app.windows[app.active_idx].active_path = revert_path;
-                    }
-                    let _ = resp.send(pane_info);
                     if let Some(prev) = saved_dir { env::set_current_dir(prev).ok(); }
                     // Replenish warm pane
                     if app.warm_pane.is_none() {
@@ -669,7 +677,7 @@ pub fn run_server(session_name: String, socket_name: Option<String>, initial_com
                             Err(_) => {}
                         }
                     }
-                    resize_all_panes(&mut app); meta_dirty = true; hook_event = Some("after-split-window");
+                    if split_ok { resize_all_panes(&mut app); meta_dirty = true; hook_event = Some("after-split-window"); }
                 }
                 CtrlReq::KillPane => { let _ = kill_active_pane(&mut app); resize_all_panes(&mut app); meta_dirty = true; hook_event = Some("after-kill-pane"); }
                 CtrlReq::KillPaneById(pid) => { let _ = kill_pane_by_id(&mut app, pid); resize_all_panes(&mut app); meta_dirty = true; hook_event = Some("after-kill-pane"); }
