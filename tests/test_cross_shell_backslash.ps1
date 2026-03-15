@@ -140,7 +140,7 @@ if ($hasGitBash) {
     Clean-Start -Session "bs_t5"
     $marker5 = "BST5_$(Get-Random)"
     $psmuxUnix = $PSMUX -replace '\\', '/'
-    bash.exe -c "$psmuxUnix send-keys -t bs_t5 'echo ${marker5}\:from_bash' Enter" 2>&1 | Out-Null
+    & $bashPath -c "$psmuxUnix send-keys -t bs_t5 'echo ${marker5}\:from_bash' Enter" 2>&1 | Out-Null
     Start-Sleep -Seconds 2
     $output = (& $PSMUX capture-pane -t bs_t5 -p 2>&1) | Out-String
     if ($output -match $marker5) {

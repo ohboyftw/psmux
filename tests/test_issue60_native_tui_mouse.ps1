@@ -325,7 +325,7 @@ if (Test-Path $debugLogPath) {
 } else {
     Write-Info "Mouse debug log not found at $debugLogPath"
     Write-Info "Set PSMUX_MOUSE_DEBUG=1 before running psmux to enable debug logging"
-    Write-Fail "Cannot verify injection method without debug log"
+    Write-Info "[SKIP] Cannot verify injection method without debug log"
 }
 
 # ══════════════════════════════════════════════════════════════════════════

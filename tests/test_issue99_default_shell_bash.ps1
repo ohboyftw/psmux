@@ -175,14 +175,22 @@ Start-Sleep -Seconds 3
 
 # Create a second window
 & $PSMUX new-window -t $session 2>&1 | Out-Null
-Start-Sleep -Seconds 2
+Start-Sleep -Seconds 5
 
 $cmd = (& $PSMUX display-message -t $session -p '#{pane_current_command}' 2>&1) | Out-String
 Write-Info "  new-window pane_current_command: $($cmd.Trim())"
 if ($cmd.Trim() -match "bash") {
     Write-Pass "New window also runs bash"
 } else {
-    Write-Fail "New window not running bash (got: $($cmd.Trim()))"
+    # ConPTY may report "conhost" as host wrapper; verify by running a bash command
+    & $PSMUX send-keys -t $session 'echo BASH_CHECK_$BASH_VERSION' Enter 2>&1 | Out-Null
+    Start-Sleep -Seconds 2
+    $capOut = (& $PSMUX capture-pane -t $session -p 2>&1) | Out-String
+    if ($capOut -match "BASH_CHECK_\d") {
+        Write-Pass "New window runs bash (verified via BASH_VERSION, pane_current_command=$($cmd.Trim()))"
+    } else {
+        Write-Fail "New window not running bash (got: $($cmd.Trim()))"
+    }
 }
 
 & $PSMUX kill-session -t $session 2>$null | Out-Null

@@ -360,6 +360,28 @@ pub(crate) fn inject_mouse_combined(pane: &mut Pane, col: i16, row: i16, vt_butt
     }
 }
 
+/// Temporarily unzoom for an operation, saving the zoom state so it can be
+/// restored via `pop_zoom()` afterwards (tmux push/pop semantics).
+/// Returns true if zoom was active and was suspended.
+pub fn push_zoom(app: &mut AppState) -> bool {
+    if app.zoom_saved.is_some() {
+        // Mark that we had zoom active, unzoom, but DON'T clear zoom_saved
+        // — we move it to a temp slot so pop_zoom can re-apply it.
+        unzoom_if_zoomed(app);
+        true
+    } else {
+        false
+    }
+}
+
+/// Re-apply zoom after a push_zoom operation (tmux push/pop semantics).
+/// Only re-zooms if `was_zoomed` is true.
+pub fn pop_zoom(app: &mut AppState, was_zoomed: bool) {
+    if was_zoomed && app.zoom_saved.is_none() {
+        toggle_zoom(app);
+    }
+}
+
 /// If zoom is currently active, unzoom (restore saved sizes) and resize panes.
 /// Returns true if zoom was active and was cancelled.
 pub fn unzoom_if_zoomed(app: &mut AppState) -> bool {
@@ -449,6 +471,10 @@ pub fn remote_mouse_down(app: &mut AppState, x: u16, y: u16) {
     for (path, area) in rects.iter() {
         if area.contains(ratatui::layout::Position { x, y }) {
             win.active_path = path.clone();
+            // Update MRU for clicked pane (tmux parity #70)
+            if let Some(pid) = crate::tree::get_active_pane_id(&win.root, path) {
+                crate::tree::touch_mru(&mut win.pane_mru, pid);
+            }
             active_area = Some(*area);
         }
     }
@@ -465,8 +491,11 @@ pub fn remote_mouse_down(app: &mut AppState, x: u16, y: u16) {
     }
 
     let mut on_border = false;
+    // Skip border detection when zoomed — no visible borders (#82)
     let mut borders: Vec<(Vec<usize>, LayoutKind, usize, u16, u16)> = Vec::new();
-    compute_split_borders(&win.root, app.last_window_area, &mut borders);
+    if app.zoom_saved.is_none() {
+        compute_split_borders(&win.root, app.last_window_area, &mut borders);
+    }
     let tol = 1u16;
     for (path, kind, idx, pos, total_px) in borders.iter() {
         match kind {
@@ -668,6 +697,12 @@ fn remote_scroll_wheel(app: &mut AppState, x: u16, y: u16, up: bool) {
         _ => "Other",
     };
     mouse_log(&format!("remote_scroll_wheel: x={} y={} up={} mode={}", x, y, up, mode_str));
+
+    // Ignore scroll in popup mode — don't enter copy-mode (#110)
+    if matches!(app.mode, Mode::PopupMode { .. }) {
+        mouse_log("  -> popup mode, ignoring scroll");
+        return;
+    }
 
     // Handle scroll while already in copy mode
     if matches!(app.mode, Mode::CopyMode | Mode::CopySearch { .. }) {

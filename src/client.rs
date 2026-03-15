@@ -515,6 +515,9 @@ pub fn run_remote(terminal: &mut Terminal<CrosstermBackend<crate::platform::Psmu
         /// Repeat key timeout in ms (default: 500, synced from server)
         #[serde(default = "default_repeat_time")]
         repeat_time: u64,
+        /// Whether a pane is currently zoomed (borders should be hidden)
+        #[serde(default)]
+        zoomed: bool,
         // ── Server-side overlay state ──
         /// Popup overlay active
         #[serde(default)]
@@ -544,6 +547,9 @@ pub fn run_remote(terminal: &mut Terminal<CrosstermBackend<crate::platform::Psmu
         /// Display-panes overlay active
         #[serde(default)]
         display_panes: bool,
+        /// Status bar message from display-message (without -p)
+        #[serde(default)]
+        status_message: Option<String>,
     }
 
     let mut cmd_batch: Vec<String> = Vec::new();
@@ -940,6 +946,14 @@ pub fn run_remote(terminal: &mut Terminal<CrosstermBackend<crate::platform::Psmu
                                     cmd_batch.push(format!("menu-select {}\n", srv_menu_selected));
                                 }
                                 KeyCode::Esc | KeyCode::Char('q') => { cmd_batch.push("overlay-close\n".into()); }
+                                KeyCode::Char(c) => {
+                                    // Shortcut key: find menu item with matching key
+                                    if let Some(idx) = srv_menu_items.iter().position(|item| {
+                                        item.key.as_ref().map(|k| k.len() == 1 && k.chars().next() == Some(c)).unwrap_or(false)
+                                    }) {
+                                        cmd_batch.push(format!("menu-select {}\n", idx));
+                                    }
+                                }
                                 _ => {}
                             }
                         }
@@ -1550,10 +1564,13 @@ pub fn run_remote(terminal: &mut Terminal<CrosstermBackend<crate::platform::Psmu
                                 } else { false };
 
                                 // Detect if click is on a separator line (for border resize)
+                                // Skip when zoomed — no borders to drag (#82)
                                 let on_sep = if !prev_dump_buf.is_empty() {
                                     if let Ok(state) = serde_json::from_str::<DumpState>(&prev_dump_buf) {
-                                        let content_area = Rect { x: 0, y: 0, width: last_sent_size.0, height: last_sent_size.1 };
-                                        is_on_separator(&state.layout, content_area, me.column, me.row)
+                                        if state.zoomed { false } else {
+                                            let content_area = Rect { x: 0, y: 0, width: last_sent_size.0, height: last_sent_size.1 };
+                                            is_on_separator(&state.layout, content_area, me.column, me.row)
+                                        }
                                     } else { false }
                                 } else { false };
 
@@ -2105,7 +2122,7 @@ pub fn run_remote(terminal: &mut Terminal<CrosstermBackend<crate::platform::Psmu
                 }
             }
 
-            fn render_json(f: &mut Frame, node: &LayoutJson, area: Rect, dim_preds: bool, border_fg: Color, active_border_fg: Color, clock_mode: bool, active_rect: Option<Rect>, mode_style_str: &str) {
+            fn render_json(f: &mut Frame, node: &LayoutJson, area: Rect, dim_preds: bool, border_fg: Color, active_border_fg: Color, clock_mode: bool, active_rect: Option<Rect>, mode_style_str: &str, zoomed: bool) {
                 match node {
                     LayoutJson::Leaf {
                         id: _,
@@ -2318,10 +2335,12 @@ pub fn run_remote(terminal: &mut Terminal<CrosstermBackend<crate::platform::Psmu
 
                         // Render children first
                         for (i, child) in children.iter().enumerate() {
-                            if i < rects.len() { render_json(f, child, rects[i], dim_preds, border_fg, active_border_fg, clock_mode, active_rect, mode_style_str); }
+                            if i < rects.len() { render_json(f, child, rects[i], dim_preds, border_fg, active_border_fg, clock_mode, active_rect, mode_style_str, zoomed); }
                         }
 
                         // Draw separator lines between children using direct buffer access.
+                        // Skip when zoomed — no visible borders (#82)
+                        if zoomed { return; }
                         let border_style = Style::default().fg(border_fg);
                         let active_border_style = Style::default().fg(active_border_fg);
                         let buf = f.buffer_mut();
@@ -2413,7 +2432,7 @@ pub fn run_remote(terminal: &mut Terminal<CrosstermBackend<crate::platform::Psmu
             }
 
             let active_rect = compute_active_rect_json(&root, content_chunk);
-            render_json(f, &root, content_chunk, dim_preds, pane_border_fg, pane_active_border_fg, clock_active, active_rect, &mode_style_str);
+            render_json(f, &root, content_chunk, dim_preds, pane_border_fg, pane_active_border_fg, clock_active, active_rect, &mode_style_str, state.zoomed);
             fix_border_intersections(f.buffer_mut());
 
             // ── Left-click drag text selection overlay ────────────────
@@ -2720,7 +2739,20 @@ pub fn run_remote(terminal: &mut Terminal<CrosstermBackend<crate::platform::Psmu
                     status_spans.extend(right_spans);
                 }
             }
-            let status_bar = Paragraph::new(Line::from(status_spans)).style(sb_base);
+            // If a display-message is active, show it on the status bar
+            // instead of the normal status content (tmux parity).
+            // Uses message-style (default: bg=yellow,fg=black) matching tmux.
+            let status_bar = if let Some(ref msg) = state.status_message {
+                let msg_style = crate::rendering::parse_tmux_style("bg=yellow,fg=black");
+                let padded = if msg.len() < status_chunk.width as usize {
+                    format!("{}{}", msg, " ".repeat(status_chunk.width as usize - msg.len()))
+                } else {
+                    msg.chars().take(status_chunk.width as usize).collect()
+                };
+                Paragraph::new(Line::from(Span::styled(padded, msg_style))).style(msg_style)
+            } else {
+                Paragraph::new(Line::from(status_spans)).style(sb_base)
+            };
             f.render_widget(Clear, status_chunk);
             // Render the first status line (line 0)
             let line0_area = Rect { x: status_chunk.x, y: status_chunk.y, width: status_chunk.width, height: 1.min(status_chunk.height) };
@@ -2787,7 +2819,7 @@ pub fn run_remote(terminal: &mut Terminal<CrosstermBackend<crate::platform::Psmu
                     width: w,
                     height: h,
                 };
-                let title = if srv_popup_command.is_empty() { "Popup" } else { &srv_popup_command };
+                let title = if srv_popup_command.is_empty() { "Popup".to_string() } else { let max_title = (w as usize).saturating_sub(4); if srv_popup_command.len() > max_title { format!("{}...", &srv_popup_command[..max_title.saturating_sub(3)]) } else { srv_popup_command.clone() } };
                 let block = Block::default()
                     .borders(Borders::ALL)
                     .border_style(Style::default().fg(Color::Yellow))

@@ -763,7 +763,7 @@ pub fn lookup_option_pub(name: &str, app: &AppState) -> Option<String> {
 
 fn lookup_option(name: &str, app: &AppState) -> Option<String> {
     if name.starts_with('@') {
-        return app.environment.get(name).cloned();
+        return app.user_options.get(name).cloned();
     }
     match name {
         "status-left" => Some(app.status_left.clone()),
@@ -817,12 +817,14 @@ fn lookup_option(name: &str, app: &AppState) -> Option<String> {
         "claude-code-fix-tty" => Some(if app.claude_code_fix_tty { "on".into() } else { "off".into() }),
         "claude-code-force-interactive" => Some(if app.claude_code_force_interactive { "on".into() } else { "off".into() }),
         _ => {
-            // Try exact name first, then @name for plugin user-option compat
-            // (plugins store @cpu_percentage but format strings use #{cpu_percentage})
-            app.environment.get(name).cloned()
+            // Try user_options first (plugins store @cpu_percentage etc.),
+            // then environment, then @name fallback for plugin compat
+            // (format strings use #{cpu_percentage} without the @ prefix).
+            app.user_options.get(name).cloned()
+                .or_else(|| app.environment.get(name).cloned())
                 .or_else(|| {
                     if !name.starts_with('@') {
-                        app.environment.get(&format!("@{}", name)).cloned()
+                        app.user_options.get(&format!("@{}", name)).cloned()
                     } else {
                         None
                     }
@@ -1068,16 +1070,32 @@ pub fn expand_var(var: &str, app: &AppState, win_idx: usize) -> String {
                 }
             } else { String::new() }
         }
-        "pane_current_path" | "pane_path" => {
+        "pane_current_path" => {
             if let Some(p) = target_pane() {
+                // Layer 1: PEB walk (authoritative for local processes)
                 if let Some(pid) = p.child_pid {
-                    crate::platform::process_info::get_foreground_cwd(pid)
-                        .unwrap_or_default()
-                } else {
-                    std::env::current_dir()
-                        .map(|d| d.to_string_lossy().into_owned())
-                        .unwrap_or_default()
+                    if let Some(cwd) = crate::platform::process_info::get_foreground_cwd(pid) {
+                        return cwd;
+                    }
                 }
+                // Layer 2: OSC 7 path (works over SSH/WSL where PEB fails)
+                if let Ok(parser) = p.term.lock() {
+                    if let Some(osc_path) = parser.screen().path() {
+                        return osc_path.to_string();
+                    }
+                }
+                // Layer 3: fallback to server CWD
+                std::env::current_dir()
+                    .map(|d| d.to_string_lossy().into_owned())
+                    .unwrap_or_default()
+            } else { String::new() }
+        }
+        "pane_path" => {
+            // Pure OSC 7 value (tmux-compatible: only what the shell announced)
+            if let Some(p) = target_pane() {
+                if let Ok(parser) = p.term.lock() {
+                    parser.screen().path().unwrap_or_default().to_string()
+                } else { String::new() }
             } else { String::new() }
         }
         "pane_pid" => {

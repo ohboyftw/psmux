@@ -218,7 +218,8 @@ let args: Vec<&str> = {
     filtered
 };
 // Commands that should permanently change focus when used with -t
-let is_focus_cmd = matches!(cmd, "select-window" | "selectw" | "select-pane" | "selectp");
+let is_focus_cmd = matches!(cmd, "select-window" | "selectw" | "select-pane" | "selectp")
+    || (matches!(cmd, "split-window" | "splitw") && !args.iter().any(|a| *a == "-d"));
 if let Some(wid) = target_win {
     if is_focus_cmd {
         let _ = tx.send(CtrlReq::FocusWindow(wid));
@@ -231,7 +232,8 @@ let targeted_kill_pane_id = if matches!(cmd, "kill-pane" | "killp") && pane_is_i
 } else {
     None
 };
-if targeted_kill_pane_id.is_none() {
+let skip_pane_focus = matches!(cmd, "display-message" | "display");
+if !skip_pane_focus && targeted_kill_pane_id.is_none() {
     if let Some(pid) = target_pane {
         if is_focus_cmd {
             if pane_is_id {
@@ -695,8 +697,10 @@ match cmd {
         }
 
         let fmt = parts.join(" ");
+        // Pass target pane index for PANE_POS_OVERRIDE (#113).
+        let target_pane_idx: Option<usize> = if !pane_is_id { target_pane } else { None };
         let (rtx, rrx) = mpsc::channel::<String>();
-        let _ = tx.send(CtrlReq::DisplayMessage(rtx, fmt, !print_stdout));
+        let _ = tx.send(CtrlReq::DisplayMessage(rtx, fmt, target_pane_idx));
         if let Ok(text) = rrx.recv() {
             if print_stdout {
                 let _ = writeln!(write_stream, "{}", text);
@@ -961,8 +965,13 @@ match cmd {
         let _ = tx.send(CtrlReq::LoadBuffer(path));
     }
     "set-environment" | "setenv" => {
+        let has_u = args.iter().any(|a| *a == "-u");
         let non_flag: Vec<&str> = args.iter().filter(|a| !a.starts_with('-')).copied().collect();
-        if non_flag.len() >= 2 {
+        if has_u {
+            if let Some(key) = non_flag.first() {
+                let _ = tx.send(CtrlReq::UnsetEnvironment(key.to_string()));
+            }
+        } else if non_flag.len() >= 2 {
             let _ = tx.send(CtrlReq::SetEnvironment(non_flag[0].to_string(), non_flag[1].to_string()));
         } else if non_flag.len() == 1 {
             let _ = tx.send(CtrlReq::SetEnvironment(non_flag[0].to_string(), String::new()));
@@ -1036,7 +1045,8 @@ match cmd {
         }
     }
     "display-popup" | "popup" => {
-        let close_on_exit = args.iter().any(|a| *a == "-E");
+        // Default close-on-exit = true (tmux parity: popup closes when command finishes)
+        let close_on_exit = !args.iter().any(|a| *a == "-K");
         let mut width: u16 = 80;
         let mut height: u16 = 24;
         let mut skip_indices = std::collections::HashSet::new();
@@ -1045,7 +1055,7 @@ match cmd {
             match args[i] {
                 "-w" => { if let Some(v) = args.get(i+1) { width = v.trim_end_matches('%').parse().unwrap_or(80); skip_indices.insert(i); skip_indices.insert(i+1); i += 1; } }
                 "-h" => { if let Some(v) = args.get(i+1) { height = v.trim_end_matches('%').parse().unwrap_or(24); skip_indices.insert(i); skip_indices.insert(i+1); i += 1; } }
-                "-E" => { skip_indices.insert(i); }
+                "-E" | "-K" => { skip_indices.insert(i); }
                 _ => {}
             }
             i += 1;
@@ -1064,7 +1074,7 @@ match cmd {
         }
         let non_flag: Vec<&str> = args.iter().filter(|a| !a.starts_with('-') && Some(&a.to_string()) != prompt.as_ref()).copied().collect();
         let command = non_flag.join(" ");
-        let prompt_str = prompt.unwrap_or_else(|| format!("Run '{}'?", command));
+        let prompt_str = prompt.unwrap_or_else(|| format!("Run '{}'", command));
         let _ = tx.send(CtrlReq::ConfirmBefore(prompt_str, command));
     }
     // tmux standard aliases
@@ -1212,7 +1222,7 @@ match cmd {
         let fmt = args.windows(2).find(|w| w[0] == "-F").map(|w| w[1].to_string());
         if let Some(fmt_str) = fmt {
             let (rtx, rrx) = mpsc::channel::<String>();
-            let _ = tx.send(CtrlReq::DisplayMessage(rtx, fmt_str, false));
+            let _ = tx.send(CtrlReq::DisplayMessage(rtx, fmt_str, None));
             if let Ok(text) = rrx.recv() { let _ = write!(write_stream, "{}\n", text); let _ = write_stream.flush(); }
         } else {
             let (rtx, rrx) = mpsc::channel::<String>();

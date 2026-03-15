@@ -1,3 +1,4 @@
+#![allow(dead_code)]
 //! This crate parses a terminal byte stream and provides an in-memory
 //! representation of the rendered contents.
 //!

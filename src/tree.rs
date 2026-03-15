@@ -588,7 +588,7 @@ pub fn focus_pane_by_id(app: &mut AppState, pid: usize) {
         let mut path = Vec::new();
         let mut found = None;
         rec(&w.root, &mut path, &mut found, pid);
-        if let Some(p) = found { app.active_idx = wi; let win = &mut app.windows[wi]; win.active_path = p; return; }
+        if let Some(p) = found { app.active_idx = wi; let win = &mut app.windows[wi]; win.active_path = p; touch_mru(&mut win.pane_mru, pid); return; }
     }
 }
 

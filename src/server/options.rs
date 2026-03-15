@@ -95,8 +95,10 @@ pub(crate) fn get_option_value(app: &AppState, name: &str) -> String {
         "claude-code-fix-tty" => if app.claude_code_fix_tty { "on".into() } else { "off".into() },
         "claude-code-force-interactive" => if app.claude_code_force_interactive { "on".into() } else { "off".into() },
         _ => {
-            // Support @user-options and other env-stored options (e.g. default-terminal)
-            app.environment.get(name).cloned().unwrap_or_default()
+            // Check user_options first (@-prefixed), then environment
+            app.user_options.get(name).cloned()
+                .or_else(|| app.environment.get(name).cloned())
+                .unwrap_or_default()
         }
     }
 }
@@ -332,10 +334,10 @@ pub(crate) fn apply_set_option(app: &mut AppState, option: &str, value: &str, qu
                     return;
                 }
             }
-            // Store @user-options (used by plugins like tmux-resurrect, tmux-continuum)
-            // Also store other environment-stored options (default-terminal, terminal-overrides, etc.)
+            // Store @user-options in dedicated map (NOT environment) to avoid
+            // leaking into child shell env vars (#105).
             if option.starts_with('@') {
-                app.environment.insert(option.to_string(), value.to_string());
+                app.user_options.insert(option.to_string(), value.to_string());
             } else {
                 // Store in environment as a generic option (e.g. default-terminal, terminal-overrides)
                 app.environment.insert(option.to_string(), value.to_string());

@@ -1,6 +1,54 @@
 use crate::term::BufWrite as _;
 use unicode_width::UnicodeWidthChar as _;
 
+/// Parse an OSC 7 URI into a filesystem path.
+/// Accepts `file://hostname/path`, `file:///path`, or a bare `/path`.
+/// Percent-decodes the path component.
+fn parse_osc7_uri(raw: &str) -> String {
+    let stripped = if let Some(rest) = raw.strip_prefix("file://") {
+        // Skip hostname: everything up to the next '/'
+        if let Some(slash) = rest.find('/') {
+            &rest[slash..]
+        } else {
+            rest
+        }
+    } else {
+        raw
+    };
+    percent_decode(stripped)
+}
+
+/// Minimal percent-decoding for OSC 7 paths (e.g. `%20` → ` `).
+fn percent_decode(input: &str) -> String {
+    let mut out = String::with_capacity(input.len());
+    let bytes = input.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'%' && i + 2 < bytes.len() {
+            if let (Some(hi), Some(lo)) = (
+                hex_val(bytes[i + 1]),
+                hex_val(bytes[i + 2]),
+            ) {
+                out.push(char::from(hi << 4 | lo));
+                i += 3;
+                continue;
+            }
+        }
+        out.push(char::from(bytes[i]));
+        i += 1;
+    }
+    out
+}
+
+fn hex_val(b: u8) -> Option<u8> {
+    match b {
+        b'0'..=b'9' => Some(b - b'0'),
+        b'a'..=b'f' => Some(b - b'a' + 10),
+        b'A'..=b'F' => Some(b - b'A' + 10),
+        _ => None,
+    }
+}
+
 const MODE_APPLICATION_KEYPAD: u8 = 0b0000_0001;
 const MODE_APPLICATION_CURSOR: u8 = 0b0000_0010;
 const MODE_HIDE_CURSOR: u8 = 0b0000_0100;
@@ -62,6 +110,10 @@ pub struct Screen {
     modes: u8,
     mouse_protocol_mode: MouseProtocolMode,
     mouse_protocol_encoding: MouseProtocolEncoding,
+
+    /// Path announced by the shell via OSC 7 (`\e]7;file://host/path\a`).
+    /// Used as a fallback for CWD when PEB walking fails (SSH, WSL).
+    osc7_path: Option<String>,
 }
 
 impl Screen {
@@ -81,6 +133,7 @@ impl Screen {
             modes: 0,
             mouse_protocol_mode: MouseProtocolMode::default(),
             mouse_protocol_encoding: MouseProtocolEncoding::default(),
+            osc7_path: None,
         }
     }
 
@@ -583,6 +636,23 @@ impl Screen {
     #[must_use]
     pub fn mouse_protocol_encoding(&self) -> MouseProtocolEncoding {
         self.mouse_protocol_encoding
+    }
+
+    /// Returns the path announced by the shell via OSC 7, if any.
+    #[must_use]
+    pub fn path(&self) -> Option<&str> {
+        self.osc7_path.as_deref()
+    }
+
+    /// Store a path announced via OSC 7.
+    /// The raw URI is parsed: `file://host/path` → `/path`.
+    pub fn set_path(&mut self, raw: &[u8]) {
+        if let Ok(s) = std::str::from_utf8(raw) {
+            let path = parse_osc7_uri(s);
+            if !path.is_empty() {
+                self.osc7_path = Some(path);
+            }
+        }
     }
 
     /// Returns the currently active foreground color.
@@ -1311,5 +1381,158 @@ fn u16_to_u8(i: u16) -> Option<u8> {
     } else {
         // safe because we just ensured that the value fits in a u8
         Some(i.try_into().unwrap())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // ── parse_osc7_uri tests ──────────────────────────────────
+
+    #[test]
+    fn osc7_full_uri_with_hostname() {
+        assert_eq!(parse_osc7_uri("file://myhost/home/user/project"), "/home/user/project");
+    }
+
+    #[test]
+    fn osc7_localhost() {
+        assert_eq!(parse_osc7_uri("file://localhost/home/user"), "/home/user");
+    }
+
+    #[test]
+    fn osc7_empty_hostname() {
+        assert_eq!(parse_osc7_uri("file:///home/user"), "/home/user");
+    }
+
+    #[test]
+    fn osc7_bare_path_no_scheme() {
+        assert_eq!(parse_osc7_uri("/home/user/code"), "/home/user/code");
+    }
+
+    #[test]
+    fn osc7_percent_encoded_spaces() {
+        assert_eq!(parse_osc7_uri("file:///home/user/my%20project"), "/home/user/my project");
+    }
+
+    #[test]
+    fn osc7_percent_encoded_special_chars() {
+        assert_eq!(parse_osc7_uri("file:///path/%23hash%25pct"), "/path/#hash%pct");
+    }
+
+    #[test]
+    fn osc7_windows_path_via_uri() {
+        // WezTerm-style: file://hostname/C:/Users/foo
+        assert_eq!(parse_osc7_uri("file://DESKTOP-ABC/C:/Users/foo"), "/C:/Users/foo");
+    }
+
+    #[test]
+    fn osc7_empty_string() {
+        assert_eq!(parse_osc7_uri(""), "");
+    }
+
+    #[test]
+    fn osc7_file_no_slash_after_host() {
+        // Malformed: file://hostname-only (no path)
+        assert_eq!(parse_osc7_uri("file://hostname-only"), "hostname-only");
+    }
+
+    // ── percent_decode tests ──────────────────────────────────
+
+    #[test]
+    fn decode_no_encoding() {
+        assert_eq!(percent_decode("/simple/path"), "/simple/path");
+    }
+
+    #[test]
+    fn decode_space() {
+        assert_eq!(percent_decode("/my%20path"), "/my path");
+    }
+
+    #[test]
+    fn decode_mixed_case_hex() {
+        assert_eq!(percent_decode("%2f%2F"), "//");
+    }
+
+    #[test]
+    fn decode_invalid_hex_passthrough() {
+        assert_eq!(percent_decode("%ZZ"), "%ZZ");
+    }
+
+    #[test]
+    fn decode_truncated_percent() {
+        assert_eq!(percent_decode("trail%2"), "trail%2");
+    }
+
+    // ── Screen::set_path / path() integration ─────────────────
+
+    #[test]
+    fn screen_path_initially_none() {
+        let s = Screen::new(crate::grid::Size { rows: 24, cols: 80 }, 0);
+        assert!(s.path().is_none());
+    }
+
+    #[test]
+    fn screen_set_path_from_osc7() {
+        let mut s = Screen::new(crate::grid::Size { rows: 24, cols: 80 }, 0);
+        s.set_path(b"file:///home/user/code");
+        assert_eq!(s.path(), Some("/home/user/code"));
+    }
+
+    #[test]
+    fn screen_set_path_overwrites() {
+        let mut s = Screen::new(crate::grid::Size { rows: 24, cols: 80 }, 0);
+        s.set_path(b"file:///first");
+        s.set_path(b"file:///second");
+        assert_eq!(s.path(), Some("/second"));
+    }
+
+    #[test]
+    fn screen_set_path_ignores_invalid_utf8() {
+        let mut s = Screen::new(crate::grid::Size { rows: 24, cols: 80 }, 0);
+        s.set_path(&[0xff, 0xfe, 0xfd]);
+        assert!(s.path().is_none());
+    }
+
+    // ── Full parser round-trip via VTE ─────────────────────────
+
+    #[test]
+    fn parser_osc7_roundtrip() {
+        let mut parser = crate::Parser::new(24, 80, 0);
+        // OSC 7 ; file:///tmp/test ST
+        parser.process(b"\x1b]7;file:///tmp/test\x1b\\");
+        assert_eq!(parser.screen().path(), Some("/tmp/test"));
+    }
+
+    #[test]
+    fn parser_osc7_bel_terminated() {
+        let mut parser = crate::Parser::new(24, 80, 0);
+        // OSC 7 ; file://host/path BEL
+        parser.process(b"\x1b]7;file://host/home/user\x07");
+        assert_eq!(parser.screen().path(), Some("/home/user"));
+    }
+
+    #[test]
+    fn parser_osc7_with_percent_encoding() {
+        let mut parser = crate::Parser::new(24, 80, 0);
+        parser.process(b"\x1b]7;file:///home/user/my%20project\x07");
+        assert_eq!(parser.screen().path(), Some("/home/user/my project"));
+    }
+
+    #[test]
+    fn parser_osc7_updates_on_cd() {
+        let mut parser = crate::Parser::new(24, 80, 0);
+        parser.process(b"\x1b]7;file:///first/dir\x07");
+        assert_eq!(parser.screen().path(), Some("/first/dir"));
+        parser.process(b"\x1b]7;file:///second/dir\x07");
+        assert_eq!(parser.screen().path(), Some("/second/dir"));
+    }
+
+    #[test]
+    fn parser_other_osc_does_not_affect_path() {
+        let mut parser = crate::Parser::new(24, 80, 0);
+        // OSC 0 (set title) should not touch path
+        parser.process(b"\x1b]0;my-title\x07");
+        assert!(parser.screen().path().is_none());
     }
 }

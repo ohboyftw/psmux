@@ -14,7 +14,10 @@
 #>
 $ErrorActionPreference = "Continue"
 $results = @()
-$PSMUX = "psmux"
+$PSMUX = "$PSScriptRoot\..\target\release\psmux.exe"
+if (-not (Test-Path $PSMUX)) { $PSMUX = "$PSScriptRoot\..\target\debug\psmux.exe" }
+if (-not (Test-Path $PSMUX)) { $PSMUX = (Get-Command psmux -ErrorAction SilentlyContinue).Source }
+if (-not $PSMUX -or -not (Test-Path $PSMUX)) { Write-Error "psmux binary not found"; exit 1 }
 $PSMUX_DIR = "$env:USERPROFILE\.psmux"
 
 function Add-Result($name, $pass, $detail="") {
@@ -111,12 +114,12 @@ if (Start-SessionWithConfig $conf4 "cruntime") {
     $opt4a = Get-Opt "cursor-style" "cruntime"
     Add-Result "Runtime: starts as block" ($opt4a -eq "block") "($opt4a)"
 
-    psmux set-option -g -t cruntime cursor-style bar 2>$null
+    & $PSMUX set-option -g -t cruntime cursor-style bar 2>$null
     Start-Sleep -Seconds 1
     $opt4b = Get-Opt "cursor-style" "cruntime"
     Add-Result "Runtime: changed to bar" ($opt4b -eq "bar") "($opt4b)"
 
-    psmux set-option -g -t cruntime cursor-blink on 2>$null
+    & $PSMUX set-option -g -t cruntime cursor-blink on 2>$null
     Start-Sleep -Seconds 1
     $blink4 = Get-Opt "cursor-blink" "cruntime"
     Add-Result "Runtime: cursor-blink changed to on" ($blink4 -eq "on") "($blink4)"
@@ -142,8 +145,8 @@ if (Start-SessionWithConfig $conf5 "ccode") {
     )
 
     foreach ($c in $combos) {
-        psmux set-option -g -t ccode cursor-style $c.style 2>$null
-        psmux set-option -g -t ccode cursor-blink $c.blink 2>$null
+        & $PSMUX set-option -g -t ccode cursor-style $c.style 2>$null
+        & $PSMUX set-option -g -t ccode cursor-blink $c.blink 2>$null
         Start-Sleep -Milliseconds 500
         $s = Get-Opt "cursor-style" "ccode"
         $b = Get-Opt "cursor-blink" "ccode"
@@ -177,7 +180,7 @@ Write-Host -NoNewline "$esc[?1049l"
     $fakeTuiScript = "$env:TEMP\fake_tui_cursor.ps1"
     Set-Content -Path $fakeTuiScript -Value $fakeTui -Encoding UTF8
 
-    psmux send-keys -t creset "pwsh -NoProfile -File `"$fakeTuiScript`"" Enter
+    & $PSMUX send-keys -t creset "pwsh -NoProfile -File `"$fakeTuiScript`"" Enter
     Start-Sleep -Seconds 4
 
     # After TUI exit, the configured option should still be underline
@@ -192,7 +195,7 @@ Write-Host -NoNewline "$esc[?1049l"
 # Cleanup
 Remove-Item "$env:TEMP\psmux_cursor_*.conf" -Force -ErrorAction SilentlyContinue
 Remove-Item $fakeTuiScript -Force -ErrorAction SilentlyContinue
-psmux kill-server 2>$null
+& $PSMUX kill-server 2>$null
 
 # --- Summary ---
 Write-Host "`n=== RESULTS ==="

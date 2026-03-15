@@ -61,11 +61,11 @@ Start-Sleep -Seconds 2
 # Create 3-pane layout: left | top-right / bottom-right
 # Step 1: Split vertically → left + right (right is active)
 psmux split-window -t "mru1" -h 2>$null
-Start-Sleep -Milliseconds 800
+Start-Sleep -Milliseconds 1500
 
 # Step 2: Split right horizontally → top-right + bottom-right (bottom-right active)
 psmux split-window -t "mru1" -v 2>$null
-Start-Sleep -Milliseconds 800
+Start-Sleep -Milliseconds 1500
 
 # Now we have 3 panes: left(0), top-right(1), bottom-right(2)
 # MRU order should be: bottom-right, top-right, left

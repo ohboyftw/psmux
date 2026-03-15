@@ -118,7 +118,11 @@ pub fn send_auth_cmd_response(addr: &str, key: &str, cmd: &[u8]) -> io::Result<S
 
 pub fn send_control(line: String) -> io::Result<()> {
     let home = env::var("USERPROFILE").or_else(|_| env::var("HOME")).unwrap_or_default();
-    let target = env::var("PSMUX_TARGET_SESSION").ok().unwrap_or_else(|| "default".to_string());
+    let mut target = env::var("PSMUX_TARGET_SESSION").ok().unwrap_or_else(|| "default".to_string());
+    // Never target a warm (standby) session — resolve to a real session instead
+    if is_warm_session(&target) {
+        target = resolve_last_session_name().unwrap_or_else(|| "default".to_string());
+    }
     let full_target = env::var("PSMUX_TARGET_FULL").ok();
     let path = format!("{}\\.psmux\\{}.port", home, target);
     let port = std::fs::read_to_string(&path).ok().and_then(|s| s.trim().parse::<u16>().ok()).ok_or_else(|| io::Error::new(io::ErrorKind::Other, format!("no server running on session '{}'", target)))?.clone();
@@ -143,7 +147,11 @@ pub fn send_control(line: String) -> io::Result<()> {
 
 pub fn send_control_with_response(line: String) -> io::Result<String> {
     let home = env::var("USERPROFILE").or_else(|_| env::var("HOME")).unwrap_or_default();
-    let target = env::var("PSMUX_TARGET_SESSION").ok().unwrap_or_else(|| "default".to_string());
+    let mut target = env::var("PSMUX_TARGET_SESSION").ok().unwrap_or_else(|| "default".to_string());
+    // Never target a warm (standby) session — resolve to a real session instead
+    if is_warm_session(&target) {
+        target = resolve_last_session_name().unwrap_or_else(|| "default".to_string());
+    }
     let full_target = env::var("PSMUX_TARGET_FULL").ok();
     let path = format!("{}\\.psmux\\{}.port", home, target);
     let port = std::fs::read_to_string(&path).ok().and_then(|s| s.trim().parse::<u16>().ok()).ok_or_else(|| io::Error::new(io::ErrorKind::Other, format!("no server running on session '{}'", target)))?.clone();
@@ -180,11 +188,18 @@ pub fn send_control_with_response(line: String) -> io::Result<String> {
     Ok(result)
 }
 
-/// Send a control message to a specific port
-pub fn send_control_to_port(port: u16, msg: &str) -> io::Result<()> {
+/// Send a control message to a specific port with authentication
+pub fn send_control_to_port(port: u16, msg: &str, session_key: &str) -> io::Result<()> {
     let addr = format!("127.0.0.1:{}", port);
     if let Ok(mut stream) = std::net::TcpStream::connect(&addr) {
+        let _ = stream.set_nodelay(true);
+        let _ = write!(stream, "AUTH {}\n", session_key);
         let _ = stream.write_all(msg.as_bytes());
+        let _ = stream.flush();
+        // Drain the OK response to prevent RST
+        let mut buf = [0u8; 64];
+        let _ = stream.set_read_timeout(Some(Duration::from_millis(50)));
+        let _ = std::io::Read::read(&mut stream, &mut buf);
     }
     Ok(())
 }

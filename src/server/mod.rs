@@ -35,8 +35,8 @@ use crate::window_ops::{toggle_zoom, remote_mouse_down, remote_mouse_drag, remot
     swap_pane, break_pane_to_window, unzoom_if_zoomed, resize_pane_vertical,
     resize_pane_horizontal, resize_pane_absolute, rotate_panes, respawn_active_pane};
 use crate::config::{load_config, parse_key_string, format_key_binding, normalize_key_for_binding,
-    parse_config_content, parse_config_line};
-use crate::commands::{parse_command_to_action, format_action, parse_menu_definition};
+    parse_config_content};
+use crate::commands::{parse_command_to_action, format_action, parse_menu_definition, execute_command_string};
 use crate::util::{list_windows_json, list_tree_json, list_windows_tmux, base64_encode};
 use crate::format::{expand_format, format_list_windows, format_list_panes, set_buffer_idx_override};
 use crate::help;
@@ -133,6 +133,16 @@ fn serialize_overlay_json(app: &AppState) -> String {
             out.push_str(",\"display_panes\":true");
         }
         _ => {}
+    }
+    // Include status_message for display-message without -p (#110)
+    if let Some((ref msg, since)) = app.status_message {
+        let elapsed = since.elapsed().as_millis() as u64;
+        let display_time = app.display_time_ms as u64;
+        if elapsed < display_time {
+            out.push_str(",\"status_message\":\"");
+            out.push_str(&json_escape_string(msg));
+            out.push('"');
+        }
     }
     out
 }
@@ -232,6 +242,88 @@ fn compute_effective_client_size(app: &AppState) -> Option<(u16, u16)> {
     }
 }
 
+/// Process a single CtrlReq during the post-config plugin drain loop.
+/// Handles the subset of requests that plugin scripts send (set, show, bind,
+/// source-file) and silently drops others.
+fn drain_plugin_req(
+    app: &mut AppState,
+    req: CtrlReq,
+    shared_aliases: &std::sync::Arc<std::sync::RwLock<std::collections::HashMap<String, String>>>,
+) {
+    match req {
+        CtrlReq::SetOption(option, value) => {
+            apply_set_option(app, &option, &value, false);
+            if option == "command-alias" {
+                if let Ok(mut map) = shared_aliases.write() {
+                    *map = app.command_aliases.clone();
+                }
+            }
+        }
+        CtrlReq::SetOptionQuiet(option, value, quiet) => {
+            apply_set_option(app, &option, &value, quiet);
+            if option == "command-alias" {
+                if let Ok(mut map) = shared_aliases.write() {
+                    *map = app.command_aliases.clone();
+                }
+            }
+        }
+        CtrlReq::SetOptionAppend(option, value) => {
+            if option.starts_with('@') {
+                let existing = app.user_options.get(&option).cloned().unwrap_or_default();
+                app.user_options.insert(option, format!("{}{}", existing, value));
+            } else {
+                match option.as_str() {
+                    "status-left" => app.status_left.push_str(&value),
+                    "status-right" => app.status_right.push_str(&value),
+                    "status-style" => app.status_style.push_str(&value),
+                    _ => {}
+                }
+            }
+        }
+        CtrlReq::SetOptionUnset(option) => {
+            if option.starts_with('@') {
+                app.user_options.remove(&option);
+            }
+        }
+        CtrlReq::ShowOptionValue(resp, name) => {
+            let val = get_option_value(app, &name);
+            let _ = resp.send(val);
+        }
+        CtrlReq::ShowWindowOptionValue(resp, name) => {
+            let val = get_window_option_value(app, &name);
+            let _ = resp.send(val);
+        }
+        CtrlReq::ShowOptions(resp) => {
+            // Minimal: just send empty to unblock the caller
+            let _ = resp.send(String::new());
+        }
+        CtrlReq::ShowWindowOptions(resp) => {
+            let _ = resp.send(render_window_options(app));
+        }
+        CtrlReq::BindKey(table_name, key, command, repeat) => {
+            if let Some(kc) = parse_key_string(&key) {
+                let kc = normalize_key_for_binding(kc);
+                let sub_cmds = crate::config::split_chained_commands_pub(&command);
+                let action = if sub_cmds.len() > 1 {
+                    Some(Action::CommandChain(sub_cmds))
+                } else {
+                    parse_command_to_action(&command)
+                };
+                if let Some(act) = action {
+                    let table = app.key_tables.entry(table_name).or_default();
+                    table.retain(|b| b.key != kc);
+                    table.push(Bind { key: kc, action: act, repeat });
+                }
+            }
+        }
+        CtrlReq::SourceFile(path) => {
+            crate::config::source_file(app, &path);
+        }
+        // Ignore other request types during plugin drain
+        _ => {}
+    }
+}
+
 pub fn run_server(session_name: String, socket_name: Option<String>, initial_command: Option<String>, raw_command: Option<Vec<String>>, start_dir: Option<String>, window_name: Option<String>, init_size: Option<(u16, u16)>) -> io::Result<()> {
     // Write crash info to a log file when stderr is unavailable (detached server)
     std::panic::set_hook(Box::new(|info| {
@@ -276,6 +368,8 @@ pub fn run_server(session_name: String, socket_name: Option<String>, initial_com
         h.write_u64(std::process::id() as u64);
         format!("{:016x}", h.finish())
     };
+
+    app.session_key = session_key.clone();
 
     let regpath = format!("{}\\{}.port", dir, app.port_file_base());
     let _ = std::fs::write(&regpath, port.to_string());
@@ -346,6 +440,55 @@ pub fn run_server(session_name: String, socket_name: Option<String>, initial_com
 
     load_config(&mut app);
 
+    // Execute queued plugin .ps1 scripts (e.g. theme plugins that use
+    // PowerShell variables and call back to psmux via CLI).  We spawn
+    // them async and then drain the CtrlReq channel in a mini-loop so
+    // show-options / set requests from the scripts are handled before
+    // the main UI starts.
+    if !app.pending_plugin_scripts.is_empty() {
+        let scripts: Vec<String> = app.pending_plugin_scripts.drain(..).collect();
+        let target_session = app.port_file_base();
+        let mut children: Vec<std::process::Child> = Vec::new();
+        for ps1 in &scripts {
+            let mut cmd = std::process::Command::new("pwsh");
+            cmd.args(["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", ps1]);
+            if !target_session.is_empty() {
+                cmd.env("PSMUX_TARGET_SESSION", &target_session);
+            }
+            cmd.stdout(std::process::Stdio::null());
+            cmd.stderr(std::process::Stdio::null());
+            if let Ok(child) = cmd.spawn() {
+                children.push(child);
+            }
+        }
+
+        // Drain CtrlReq messages until all scripts finish (max 5s).
+        if !children.is_empty() {
+            let deadline = Instant::now() + Duration::from_secs(5);
+            // Temporarily take rx out of app to avoid borrow conflict
+            if let Some(rx) = app.control_rx.take() {
+                loop {
+                    let all_done = children.iter_mut().all(|c| {
+                        matches!(c.try_wait(), Ok(Some(_)))
+                    });
+                    let remaining = deadline.saturating_duration_since(Instant::now());
+                    if all_done || remaining.is_zero() {
+                        while let Ok(req) = rx.try_recv() {
+                            drain_plugin_req(&mut app, req, &shared_aliases_main);
+                        }
+                        break;
+                    }
+                    match rx.recv_timeout(Duration::from_millis(50).min(remaining)) {
+                        Ok(req) => drain_plugin_req(&mut app, req, &shared_aliases_main),
+                        Err(mpsc::RecvTimeoutError::Timeout) => {}
+                        Err(_) => break,
+                    }
+                }
+                app.control_rx = Some(rx);
+            }
+        }
+    }
+
     // If the user configured a custom default-shell in their config, the
     // early warm pane has the wrong shell — kill it so create_window falls
     // through to a cold spawn with the correct shell.
@@ -414,7 +557,7 @@ pub fn run_server(session_name: String, socket_name: Option<String>, initial_com
     {
         let cmds: Vec<String> = app.hooks.get("client-attached").cloned().unwrap_or_default();
         for cmd in cmds {
-            parse_config_line(&mut app, &cmd);
+            let _ = execute_command_string(&mut app, &cmd);
         }
     }
     // Spawn a warm server for the NEXT new-session when the current session
@@ -458,6 +601,11 @@ pub fn run_server(session_name: String, socket_name: Option<String>, initial_com
     // loop iteration wastes CPU.  Exited processes are still reaped promptly
     // (250ms is imperceptible to users).
     let mut last_reap = Instant::now();
+
+    // Persist temp_focus_restore across batch boundaries so that a
+    // FocusWindowTemp/FocusPaneByIndexTemp in one batch plus the actual
+    // command (e.g. CapturePane) in the next batch still works correctly.
+    let mut temp_focus_restore: Option<(usize, usize)> = None;
 
     loop {
         // Adaptive timeout: ramps from 1ms (active typing/echo) through
@@ -507,10 +655,15 @@ pub fn run_server(session_name: String, socket_name: Option<String>, initial_com
                     CtrlReq::DumpLayout(_) => 1,
                     _ => 0,
                 });
-                // Track temporary -t focus: save (active_idx, active_path) when
+                // Track temporary -t focus: save (active_idx, pane_id) when
                 // FocusWindowTemp/FocusPaneTemp is seen, restore after next
                 // non-temp command so the user's view doesn't jump.
-                let mut temp_focus_restore: Option<(usize, Vec<usize>)> = None;
+                // We store the pane ID (not path) because kill-pane
+                // restructures the tree, invalidating saved paths (#71).
+                // NOTE: temp_focus_restore lives outside the loop so it
+                // persists across batch boundaries (prevents race where
+                // FocusWindowTemp and the actual command land in different
+                // batches).
                 for req in pending {
                     let mutates_state = !matches!(&req,
                         CtrlReq::DumpState(..)
@@ -549,6 +702,8 @@ pub fn run_server(session_name: String, socket_name: Option<String>, initial_com
                     match req {
                 CtrlReq::NewWindow(cmd, name, detached, start_dir) => {
                     let prev_idx = app.active_idx;
+                    // Expand format variables like #{pane_current_path} (#111)
+                    let start_dir = start_dir.map(|d| expand_format(&d, &app)).filter(|d| !d.is_empty());
                     let saved_dir = if start_dir.is_some() { env::current_dir().ok() } else { None };
                     if let Some(dir) = &start_dir { env::set_current_dir(dir).ok(); }
                     // Hide the warm pane when an explicit start dir is requested
@@ -572,6 +727,7 @@ pub fn run_server(session_name: String, socket_name: Option<String>, initial_com
                 }
                 CtrlReq::NewWindowPrint(cmd, name, detached, start_dir, format_str, resp) => {
                     let prev_idx = app.active_idx;
+                    let start_dir = start_dir.map(|d| expand_format(&d, &app)).filter(|d| !d.is_empty());
                     let saved_dir = if start_dir.is_some() { env::current_dir().ok() } else { None };
                     if let Some(dir) = &start_dir { env::set_current_dir(dir).ok(); }
                     let stashed_warm = if start_dir.is_some() { app.warm_pane.take() } else { None };
@@ -597,6 +753,9 @@ pub fn run_server(session_name: String, socket_name: Option<String>, initial_com
                     resize_all_panes(&mut app); meta_dirty = true; hook_event = Some("after-new-window");
                 }
                 CtrlReq::SplitWindow(k, cmd, detached, start_dir, size_pct, resp) => {
+                    // tmux: split-window without -Z permanently unzooms (#82)
+                    unzoom_if_zoomed(&mut app);
+                    let start_dir = start_dir.map(|d| expand_format(&d, &app)).filter(|d| !d.is_empty());
                     let saved_dir = if start_dir.is_some() { env::current_dir().ok() } else { None };
                     if let Some(dir) = &start_dir { env::set_current_dir(dir).ok(); }
                     let prev_path = app.windows[app.active_idx].active_path.clone();
@@ -618,12 +777,28 @@ pub fn run_server(session_name: String, socket_name: Option<String>, initial_com
                         }
                     }
                     if detached {
+                        // Capture new pane ID before reverting focus
+                        let new_pane_id = crate::tree::get_active_pane_id(
+                            &app.windows[app.active_idx].root,
+                            &app.windows[app.active_idx].active_path,
+                        );
                         // Revert focus to the previously active pane.
                         // After split, prev_path now points to a Split node;
                         // the original pane is child [0] of that Split.
                         let mut revert_path = prev_path;
                         revert_path.push(0);
                         app.windows[app.active_idx].active_path = revert_path;
+                        // Detached splits never focus the new pane — remove
+                        // from MRU entirely so directional nav tie-breaks by
+                        // pane_index among equally-unvisited candidates (#70).
+                        if let Some(nid) = new_pane_id {
+                            let win = &mut app.windows[app.active_idx];
+                            win.pane_mru.retain(|&id| id != nid);
+                        }
+                    } else {
+                        // Non-detached: new pane keeps focus.
+                        // Cancel temp_focus_restore so -t doesn't revert (#112).
+                        temp_focus_restore = None;
                     }
                     if let Some(prev) = saved_dir { env::set_current_dir(prev).ok(); }
                     // Replenish warm pane for the next new-window/split
@@ -636,6 +811,8 @@ pub fn run_server(session_name: String, socket_name: Option<String>, initial_com
                     resize_all_panes(&mut app); meta_dirty = true; hook_event = Some("after-split-window");
                 }
                 CtrlReq::SplitWindowPrint(k, cmd, detached, start_dir, size_pct, format_str, resp) => {
+                    unzoom_if_zoomed(&mut app);
+                    let start_dir = start_dir.map(|d| expand_format(&d, &app)).filter(|d| !d.is_empty());
                     let saved_dir = if start_dir.is_some() { env::current_dir().ok() } else { None };
                     if let Some(dir) = &start_dir { env::set_current_dir(dir).ok(); }
                     let prev_path = app.windows[app.active_idx].active_path.clone();
@@ -661,9 +838,21 @@ pub fn run_server(session_name: String, socket_name: Option<String>, initial_com
                         let fmt = format_str.as_deref().unwrap_or("#{session_name}:#{window_index}.#{pane_index}");
                         let pane_info = crate::format::expand_format_for_window(fmt, &app, app.active_idx);
                         if detached {
+                            // Capture new pane ID before reverting focus
+                            let new_pane_id = crate::tree::get_active_pane_id(
+                                &app.windows[app.active_idx].root,
+                                &app.windows[app.active_idx].active_path,
+                            );
                             let mut revert_path = prev_path;
                             revert_path.push(0);
                             app.windows[app.active_idx].active_path = revert_path;
+                            // Detached splits: remove from MRU (#70 pane_index tie-break)
+                            if let Some(nid) = new_pane_id {
+                                let win = &mut app.windows[app.active_idx];
+                                win.pane_mru.retain(|&id| id != nid);
+                            }
+                        } else {
+                            temp_focus_restore = None;
                         }
                         let _ = resp.send(pane_info);
                     } else {
@@ -679,8 +868,8 @@ pub fn run_server(session_name: String, socket_name: Option<String>, initial_com
                     }
                     if split_ok { resize_all_panes(&mut app); meta_dirty = true; hook_event = Some("after-split-window"); }
                 }
-                CtrlReq::KillPane => { let _ = kill_active_pane(&mut app); resize_all_panes(&mut app); meta_dirty = true; hook_event = Some("after-kill-pane"); }
-                CtrlReq::KillPaneById(pid) => { let _ = kill_pane_by_id(&mut app, pid); resize_all_panes(&mut app); meta_dirty = true; hook_event = Some("after-kill-pane"); }
+                CtrlReq::KillPane => { unzoom_if_zoomed(&mut app); let _ = kill_active_pane(&mut app); resize_all_panes(&mut app); meta_dirty = true; hook_event = Some("after-kill-pane"); }
+                CtrlReq::KillPaneById(pid) => { unzoom_if_zoomed(&mut app); let _ = kill_pane_by_id(&mut app, pid); resize_all_panes(&mut app); meta_dirty = true; hook_event = Some("after-kill-pane"); }
                 CtrlReq::CapturePane(resp) => {
                     if let Some(text) = capture_active_pane_text(&mut app)? { let _ = resp.send(text); } else { let _ = resp.send(String::new()); }
                 }
@@ -715,6 +904,11 @@ pub fn run_server(session_name: String, socket_name: Option<String>, initial_com
                     let old_path = app.windows[app.active_idx].active_path.clone();
                     switch_with_copy_save(&mut app, |app| { focus_pane_by_index(app, idx); });
                     if app.windows[app.active_idx].active_path != old_path { unzoom_if_zoomed(&mut app); }
+                    // Update MRU so directional navigation remembers this focus change
+                    let win = &mut app.windows[app.active_idx];
+                    if let Some(pid) = crate::tree::get_active_pane_id(&win.root, &win.active_path) {
+                        crate::tree::touch_mru(&mut win.pane_mru, pid);
+                    }
                     meta_dirty = true;
                 }
                 // ── Temporary focus variants for -t targeting ────────────
@@ -724,7 +918,11 @@ pub fn run_server(session_name: String, socket_name: Option<String>, initial_com
                 // the original focus (see temp_focus_restore below).
                 CtrlReq::FocusWindowTemp(wid) => {
                     if temp_focus_restore.is_none() {
-                        temp_focus_restore = Some((app.active_idx, app.windows[app.active_idx].active_path.clone()));
+                        let pane_id = crate::tree::get_active_pane_id(
+                            &app.windows[app.active_idx].root,
+                            &app.windows[app.active_idx].active_path,
+                        ).unwrap_or(usize::MAX);
+                        temp_focus_restore = Some((app.active_idx, pane_id));
                     }
                     if wid >= app.window_base_index {
                         let internal_idx = wid - app.window_base_index;
@@ -735,13 +933,21 @@ pub fn run_server(session_name: String, socket_name: Option<String>, initial_com
                 }
                 CtrlReq::FocusPaneTemp(pid) => {
                     if temp_focus_restore.is_none() {
-                        temp_focus_restore = Some((app.active_idx, app.windows[app.active_idx].active_path.clone()));
+                        let pane_id = crate::tree::get_active_pane_id(
+                            &app.windows[app.active_idx].root,
+                            &app.windows[app.active_idx].active_path,
+                        ).unwrap_or(usize::MAX);
+                        temp_focus_restore = Some((app.active_idx, pane_id));
                     }
                     focus_pane_by_id(&mut app, pid);
                 }
                 CtrlReq::FocusPaneByIndexTemp(idx) => {
                     if temp_focus_restore.is_none() {
-                        temp_focus_restore = Some((app.active_idx, app.windows[app.active_idx].active_path.clone()));
+                        let pane_id = crate::tree::get_active_pane_id(
+                            &app.windows[app.active_idx].root,
+                            &app.windows[app.active_idx].active_path,
+                        ).unwrap_or(usize::MAX);
+                        temp_focus_restore = Some((app.active_idx, pane_id));
                     }
                     focus_pane_by_index(&mut app, idx);
                 }
@@ -878,12 +1084,13 @@ pub fn run_server(session_name: String, socket_name: Option<String>, initial_com
                     };
                     let cursor_style_code = crate::rendering::configured_cursor_code();
                     let _ = std::fmt::Write::write_fmt(&mut combined_buf, format_args!(
-                        "{{\"layout\":{},\"windows\":{},\"prefix\":\"{}\",\"prefix2\":\"{}\",\"tree\":{},\"base_index\":{},\"prediction_dimming\":{},\"status_style\":\"{}\",\"status_left\":\"{}\",\"status_right\":\"{}\",\"pane_border_style\":\"{}\",\"pane_active_border_style\":\"{}\",\"wsf\":\"{}\",\"wscf\":\"{}\",\"wss\":\"{}\",\"ws_style\":\"{}\",\"wsc_style\":\"{}\",\"clock_mode\":{},\"bindings\":{},\"status_left_length\":{},\"status_right_length\":{},\"status_lines\":{},\"status_format\":{},\"mode_style\":\"{}\",\"status_position\":\"{}\",\"status_justify\":\"{}\",\"cursor_style_code\":{},\"status_visible\":{},\"repeat_time\":{}}}",
+                        "{{\"layout\":{},\"windows\":{},\"prefix\":\"{}\",\"prefix2\":\"{}\",\"tree\":{},\"base_index\":{},\"prediction_dimming\":{},\"status_style\":\"{}\",\"status_left\":\"{}\",\"status_right\":\"{}\",\"pane_border_style\":\"{}\",\"pane_active_border_style\":\"{}\",\"wsf\":\"{}\",\"wscf\":\"{}\",\"wss\":\"{}\",\"ws_style\":\"{}\",\"wsc_style\":\"{}\",\"clock_mode\":{},\"bindings\":{},\"status_left_length\":{},\"status_right_length\":{},\"status_lines\":{},\"status_format\":{},\"mode_style\":\"{}\",\"status_position\":\"{}\",\"status_justify\":\"{}\",\"cursor_style_code\":{},\"status_visible\":{},\"repeat_time\":{},\"zoomed\":{}}}",
                         layout_json, cached_windows_json, cached_prefix_str, cached_prefix2_str, cached_tree_json, cached_base_index, cached_pred_dim, ss_escaped, sl_expanded, sr_expanded, pbs_escaped, pabs_escaped, wsf_escaped, wscf_escaped, wss_escaped, ws_style_escaped, wsc_style_escaped,
                         matches!(app.mode, Mode::ClockMode), cached_bindings_json,
                         app.status_left_length, app.status_right_length, app.status_lines, status_format_json,
                         mode_style_escaped, status_position_escaped, status_justify_escaped,
                         cursor_style_code, app.status_visible, app.repeat_time_ms,
+                        app.zoom_saved.is_some(),
                     ));
                     // Inject overlay state (popup, menu, confirm, display_panes)
                     {
@@ -934,8 +1141,8 @@ pub fn run_server(session_name: String, socket_name: Option<String>, initial_com
                     crate::types::push_frame(&cached_dump_state);
                     let _ = resp.send(combined_buf.clone());
                 }
-                CtrlReq::SendText(s) => { send_text_to_active(&mut app, &s)?; echo_pending_until = Some(Instant::now()); }
-                CtrlReq::SendKey(k) => { send_key_to_active(&mut app, &k)?; echo_pending_until = Some(Instant::now()); }
+                CtrlReq::SendText(s) => { app.status_message = None; send_text_to_active(&mut app, &s)?; echo_pending_until = Some(Instant::now()); }
+                CtrlReq::SendKey(k) => { app.status_message = None; send_key_to_active(&mut app, &k)?; echo_pending_until = Some(Instant::now()); }
                 CtrlReq::SendPaste(s) => { send_paste_to_active(&mut app, &s)?; echo_pending_until = Some(Instant::now()); }
                 CtrlReq::ZoomPane => { toggle_zoom(&mut app); hook_event = Some("after-resize-pane"); }
                 CtrlReq::CopyEnter => { enter_copy_mode(&mut app); }
@@ -1630,6 +1837,8 @@ pub fn run_server(session_name: String, socket_name: Option<String>, initial_com
                         }
                     }
                     app.session_name = name;
+                    // Update env so run-shell/hooks from this server target the new name
+                    env::set_var("PSMUX_TARGET_SESSION", app.port_file_base());
                     hook_event = Some("after-rename-session");
                 }
                 CtrlReq::ClaimSession(name, resp) => {
@@ -1654,6 +1863,8 @@ pub fn run_server(session_name: String, socket_name: Option<String>, initial_com
                         }
                     }
                     app.session_name = name;
+                    // Update env so run-shell/hooks from this server target the new name
+                    env::set_var("PSMUX_TARGET_SESSION", app.port_file_base());
                     // Re-load user config so the claimed session reflects the
                     // current config file.  The warm server loaded config at
                     // its own startup, but the user may have changed their
@@ -1672,6 +1883,8 @@ pub fn run_server(session_name: String, socket_name: Option<String>, initial_com
                     hook_event = Some("after-rename-session");
                 }
                 CtrlReq::SwapPane(dir) => {
+                    // tmux: swap-pane without -Z permanently unzooms (#82)
+                    unzoom_if_zoomed(&mut app);
                     match dir.as_str() {
                         "U" => { swap_pane(&mut app, FocusDir::Up); }
                         "D" => { swap_pane(&mut app, FocusDir::Down); }
@@ -1680,6 +1893,7 @@ pub fn run_server(session_name: String, socket_name: Option<String>, initial_com
                     hook_event = Some("after-swap-pane");
                 }
                 CtrlReq::ResizePane(dir, amount) => {
+                    unzoom_if_zoomed(&mut app);
                     match dir.as_str() {
                         "U" | "D" => { resize_pane_vertical(&mut app, if dir == "U" { -(amount as i16) } else { amount as i16 }); }
                         "L" | "R" => { resize_pane_horizontal(&mut app, if dir == "L" { -(amount as i16) } else { amount as i16 }); }
@@ -1719,12 +1933,15 @@ pub fn run_server(session_name: String, socket_name: Option<String>, initial_com
                 CtrlReq::DeleteBuffer => {
                     if !app.paste_buffers.is_empty() { app.paste_buffers.remove(0); }
                 }
-                CtrlReq::DisplayMessage(resp, fmt, show_on_status) => {
-                    let result = expand_format(&fmt, &app);
-                    if show_on_status {
-                        app.status_message = Some((result.clone(), std::time::Instant::now()));
-                        state_dirty = true;
-                    }
+                CtrlReq::DisplayMessage(resp, fmt, target_pane_idx) => {
+                    let result = if let Some(pane_idx) = target_pane_idx {
+                        // -t targeting: evaluate format for the specific pane
+                        // using PANE_POS_OVERRIDE so #{pane_active} reflects
+                        // the REAL active pane, not the target (#113)
+                        crate::format::expand_format_for_pane(&fmt, &app, app.active_idx, pane_idx)
+                    } else {
+                        expand_format(&fmt, &app)
+                    };
                     let _ = resp.send(result);
                 }
                 CtrlReq::LastWindow => {
@@ -1763,11 +1980,13 @@ pub fn run_server(session_name: String, socket_name: Option<String>, initial_com
                     state_dirty = true;
                 }
                 CtrlReq::BreakPane => {
+                    unzoom_if_zoomed(&mut app);
                     break_pane_to_window(&mut app);
                     hook_event = Some("after-break-pane");
                     meta_dirty = true;
                 }
                 CtrlReq::JoinPane(target_win) => {
+                    unzoom_if_zoomed(&mut app);
                     // Real join-pane: extract active pane from current window and
                     // graft it as a vertical split into the target window.
                     let src_idx = app.active_idx;
@@ -1885,7 +2104,7 @@ pub fn run_server(session_name: String, socket_name: Option<String>, initial_com
                 CtrlReq::SetOptionUnset(option) => {
                     // Reset option to default or remove @user-option
                     if option.starts_with('@') {
-                        app.environment.remove(&option);
+                        app.user_options.remove(&option);
                     } else {
                         match option.as_str() {
                             "status-left" => { app.status_left = "psmux:#I".to_string(); }
@@ -1917,8 +2136,8 @@ pub fn run_server(session_name: String, socket_name: Option<String>, initial_com
                 CtrlReq::SetOptionAppend(option, value) => {
                     // Append to existing option value
                     if option.starts_with('@') {
-                        let existing = app.environment.get(&option).cloned().unwrap_or_default();
-                        app.environment.insert(option, format!("{}{}", existing, value));
+                        let existing = app.user_options.get(&option).cloned().unwrap_or_default();
+                        app.user_options.insert(option, format!("{}{}", existing, value));
                     } else {
                         match option.as_str() {
                             "status-left" => { app.status_left.push_str(&value); }
@@ -2010,10 +2229,8 @@ pub fn run_server(session_name: String, socket_name: Option<String>, initial_com
                         output.push_str(&format!("mode-style \"{}\"\n", app.mode_style));
                     }
                     // Include @user-options (used by plugins)
-                    for (key, val) in &app.environment {
-                        if key.starts_with('@') {
-                            output.push_str(&format!("{} \"{}\"\n", key, val));
-                        }
+                    for (key, val) in &app.user_options {
+                        output.push_str(&format!("{} \"{}\"\n", key, val));
                     }
                     // New options
                     output.push_str(&format!("main-pane-width {}\n", app.main_pane_width));
@@ -2179,10 +2396,12 @@ pub fn run_server(session_name: String, socket_name: Option<String>, initial_com
                     }
                 }
                 CtrlReq::SelectLayout(layout) => {
+                    unzoom_if_zoomed(&mut app);
                     apply_layout(&mut app, &layout);
                     state_dirty = true;
                 }
                 CtrlReq::NextLayout => {
+                    unzoom_if_zoomed(&mut app);
                     cycle_layout(&mut app);
                     state_dirty = true;
                 }
@@ -2241,6 +2460,16 @@ pub fn run_server(session_name: String, socket_name: Option<String>, initial_com
                     if let Some(ref mut wp) = app.warm_pane {
                         let escaped = value.replace('\'', "''");
                         let cmd = format!("$env:{}='{}'\r\n", key, escaped);
+                        use std::io::Write as _;
+                        let _ = wp.writer.write_all(cmd.as_bytes());
+                    }
+                }
+                CtrlReq::UnsetEnvironment(key) => {
+                    app.environment.remove(&key);
+                    env::remove_var(&key);
+                    // Clear the var in the waiting warm pane too.
+                    if let Some(ref mut wp) = app.warm_pane {
+                        let cmd = format!("Remove-Item Env:{} -ErrorAction SilentlyContinue\r\n", key);
                         use std::io::Write as _;
                         let _ = wp.writer.write_all(cmd.as_bytes());
                     }
@@ -2396,9 +2625,15 @@ pub fn run_server(session_name: String, socket_name: Option<String>, initial_com
                 }
                 CtrlReq::ConfirmBefore(prompt, cmd) => {
                     let prompt_text = if prompt.is_empty() {
-                        format!("Confirm: {} (y/n)?", cmd)
+                        format!("Confirm: {}? (y/n)", cmd)
                     } else {
-                        format!("{} (y/n)?", prompt)
+                        // Don't append (y/n) if prompt already contains it
+                        if prompt.contains("(y/n)") {
+                            prompt.clone()
+                        } else {
+                            let base = prompt.trim_end_matches('?');
+                            format!("{}? (y/n)", base)
+                        }
                     };
                     app.mode = Mode::ConfirmMode {
                         prompt: prompt_text,
@@ -2408,9 +2643,11 @@ pub fn run_server(session_name: String, socket_name: Option<String>, initial_com
                     state_dirty = true;
                 }
                 CtrlReq::ResizePaneAbsolute(axis, size) => {
+                    unzoom_if_zoomed(&mut app);
                     resize_pane_absolute(&mut app, &axis, size);
                 }
                 CtrlReq::ResizePanePercent(axis, pct) => {
+                    unzoom_if_zoomed(&mut app);
                     // Convert percentage to absolute size based on current window dimensions
                     let area = app.last_window_area;
                     let total = if axis == "x" { area.width } else { area.height };
@@ -2471,6 +2708,7 @@ pub fn run_server(session_name: String, socket_name: Option<String>, initial_com
                     }
                 }
                 CtrlReq::PrevLayout => {
+                    unzoom_if_zoomed(&mut app);
                     cycle_layout_reverse(&mut app);
                     state_dirty = true;
                 }
@@ -2521,8 +2759,19 @@ pub fn run_server(session_name: String, socket_name: Option<String>, initial_com
                 CtrlReq::PopupInput(data) => {
                     if let Mode::PopupMode { ref mut popup_pty, .. } = app.mode {
                         if let Some(ref mut pty) = popup_pty {
-                            let _ = pty.writer.write_all(&data);
-                            let _ = pty.writer.flush();
+                            // If child has exited, 'q' closes the popup
+                            let child_exited = matches!(pty.child.try_wait(), Ok(Some(_)));
+                            if child_exited && data == b"q" {
+                                app.mode = Mode::Passthrough;
+                            } else if !child_exited {
+                                let _ = pty.writer.write_all(&data);
+                                let _ = pty.writer.flush();
+                            }
+                        } else {
+                            // No PTY means static popup — 'q' closes it
+                            if data == b"q" {
+                                app.mode = Mode::Passthrough;
+                            }
                         }
                     }
                     state_dirty = true;
@@ -2541,7 +2790,7 @@ pub fn run_server(session_name: String, socket_name: Option<String>, initial_com
                         let cmd = command.clone();
                         app.mode = Mode::Passthrough;
                         if yes {
-                            parse_config_line(&mut app, &cmd);
+                            let _ = execute_command_string(&mut app, &cmd);
                         }
                         state_dirty = true;
                     }
@@ -2552,7 +2801,7 @@ pub fn run_server(session_name: String, socket_name: Option<String>, initial_com
                             if !item.is_separator && !item.command.is_empty() {
                                 let cmd = item.command.clone();
                                 app.mode = Mode::Passthrough;
-                                parse_config_line(&mut app, &cmd);
+                                let _ = execute_command_string(&mut app, &cmd);
                                 state_dirty = true;
                             }
                         }
@@ -2597,7 +2846,7 @@ pub fn run_server(session_name: String, socket_name: Option<String>, initial_com
                 let _pre_hook_idx = app.active_idx;
                 let cmds: Vec<String> = app.hooks.get(event).cloned().unwrap_or_default();
                 for cmd in cmds {
-                    parse_config_line(&mut app, &cmd);
+                    let _ = execute_command_string(&mut app, &cmd);
                 }
                 // Check if the hook itself changed active_idx
                 if app.active_idx != _pre_hook_idx && crate::debug_log::server_log_enabled() {
@@ -2606,12 +2855,19 @@ pub fn run_server(session_name: String, socket_name: Option<String>, initial_com
                         _pre_hook_idx, app.active_idx, event));
                 }
             }
-            // Restore temporary -t focus after non-temp command completes
+            // Restore temporary -t focus after non-temp command completes.
+            // Use pane ID (not path) because kill-pane restructures the
+            // tree and invalidates saved paths (#71).
             if !is_temp_focus {
-                if let Some((restore_idx, restore_path)) = temp_focus_restore.take() {
+                if let Some((restore_idx, restore_pane_id)) = temp_focus_restore.take() {
                     if restore_idx < app.windows.len() {
                         app.active_idx = restore_idx;
-                        app.windows[restore_idx].active_path = restore_path;
+                        let win = &mut app.windows[restore_idx];
+                        if let Some(path) = crate::tree::find_path_by_id(&win.root, restore_pane_id) {
+                            win.active_path = path;
+                        }
+                        // If the pane was killed, keep whatever active_path
+                        // kill_pane_at_path already set (MRU target).
                     }
                 }
             }
@@ -2619,13 +2875,10 @@ pub fn run_server(session_name: String, socket_name: Option<String>, initial_com
                 state_dirty = true;
             }
         }
-                // Clean up any trailing temp focus at end of batch
-                if let Some((restore_idx, restore_path)) = temp_focus_restore {
-                    if restore_idx < app.windows.len() {
-                        app.active_idx = restore_idx;
-                        app.windows[restore_idx].active_path = restore_path;
-                    }
-                }
+                // No trailing cleanup: temp_focus_restore persists across
+                // batch boundaries so the actual command that follows in a
+                // later batch can still benefit from the temp focus (and
+                // will restore when it processes as a non-temp-focus req).
             }
         }
         // ── Server-push: proactively send frames to attached clients ──
@@ -2675,12 +2928,13 @@ pub fn run_server(session_name: String, socket_name: Option<String>, initial_com
             };
             let cursor_style_code = crate::rendering::configured_cursor_code();
             let _ = std::fmt::Write::write_fmt(&mut combined_buf, format_args!(
-                "{{\"layout\":{},\"windows\":{},\"prefix\":\"{}\",\"prefix2\":\"{}\",\"tree\":{},\"base_index\":{},\"prediction_dimming\":{},\"status_style\":\"{}\",\"status_left\":\"{}\",\"status_right\":\"{}\",\"pane_border_style\":\"{}\",\"pane_active_border_style\":\"{}\",\"wsf\":\"{}\",\"wscf\":\"{}\",\"wss\":\"{}\",\"ws_style\":\"{}\",\"wsc_style\":\"{}\",\"clock_mode\":{},\"bindings\":{},\"status_left_length\":{},\"status_right_length\":{},\"status_lines\":{},\"status_format\":{},\"mode_style\":\"{}\",\"status_position\":\"{}\",\"status_justify\":\"{}\",\"cursor_style_code\":{},\"status_visible\":{},\"repeat_time\":{}}}",
+                "{{\"layout\":{},\"windows\":{},\"prefix\":\"{}\",\"prefix2\":\"{}\",\"tree\":{},\"base_index\":{},\"prediction_dimming\":{},\"status_style\":\"{}\",\"status_left\":\"{}\",\"status_right\":\"{}\",\"pane_border_style\":\"{}\",\"pane_active_border_style\":\"{}\",\"wsf\":\"{}\",\"wscf\":\"{}\",\"wss\":\"{}\",\"ws_style\":\"{}\",\"wsc_style\":\"{}\",\"clock_mode\":{},\"bindings\":{},\"status_left_length\":{},\"status_right_length\":{},\"status_lines\":{},\"status_format\":{},\"mode_style\":\"{}\",\"status_position\":\"{}\",\"status_justify\":\"{}\",\"cursor_style_code\":{},\"status_visible\":{},\"repeat_time\":{},\"zoomed\":{}}}",
                 layout_json, cached_windows_json, cached_prefix_str, cached_prefix2_str, cached_tree_json, cached_base_index, cached_pred_dim, ss_escaped, sl_expanded, sr_expanded, pbs_escaped, pabs_escaped, wsf_escaped, wscf_escaped, wss_escaped, ws_style_escaped, wsc_style_escaped,
                 matches!(app.mode, Mode::ClockMode), cached_bindings_json,
                 app.status_left_length, app.status_right_length, app.status_lines, status_format_json,
                 mode_style_escaped, status_position_escaped, status_justify_escaped,
                 cursor_style_code, app.status_visible, app.repeat_time_ms,
+                app.zoom_saved.is_some(),
             ));
             // Inject overlay state (popup, menu, confirm, display_panes)
             {
@@ -2715,7 +2969,7 @@ pub fn run_server(session_name: String, socket_name: Option<String>, initial_com
                 let _pre_status_idx = app.active_idx;
                 let cmds: Vec<String> = app.hooks.get("status-interval").cloned().unwrap_or_default();
                 for cmd in cmds {
-                    parse_config_line(&mut app, &cmd);
+                    let _ = execute_command_string(&mut app, &cmd);
                 }
                 if app.active_idx != _pre_status_idx && crate::debug_log::server_log_enabled() {
                     crate::debug_log::server_log("switch", &format!(

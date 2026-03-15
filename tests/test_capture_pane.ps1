@@ -5,7 +5,10 @@
 # =============================================================================
 
 $ErrorActionPreference = "Continue"
-$exe = "psmux"
+$exe = "$PSScriptRoot\..\target\release\psmux.exe"
+if (-not (Test-Path $exe)) { $exe = "$PSScriptRoot\..\target\debug\psmux.exe" }
+if (-not (Test-Path $exe)) { $exe = (Get-Command psmux -ErrorAction SilentlyContinue).Source }
+if (-not $exe -or -not (Test-Path $exe)) { Write-Error "psmux binary not found"; exit 1 }
 $pass = 0; $fail = 0; $skip = 0
 $SESSION = "test_cap_$(Get-Random -Maximum 9999)"
 

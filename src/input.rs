@@ -1111,7 +1111,9 @@ pub fn find_best_pane_in_direction(
         let dominated = if let Some((_, bg, bd, bo, br)) = best {
             // Prefer: (1) perp-overlapping over non-overlapping,
             //         (2) smaller primary gap,
-            //         (3) MRU recency when geometrically tied (tmux parity #70)
+            //         (3) among overlapping candidates with same gap → MRU (tmux parity #70),
+            //         (4) among non-overlapping candidates → perpendicular center distance,
+            //         (5) final fallback → MRU rank
             if perp_overlap && !bo {
                 false  // new candidate has overlap, current best doesn't → new wins
             } else if !perp_overlap && bo {
@@ -1120,8 +1122,14 @@ pub fn find_best_pane_in_direction(
                 false  // closer on primary axis
             } else if primary_gap > bg {
                 true   // farther on primary axis
+            } else if perp_overlap && bo {
+                // Both candidates overlap the active pane's perpendicular
+                // range with the same primary gap — use MRU directly.
+                // tmux does NOT compare center distance for overlapping
+                // candidates; it picks the most recently focused one.
+                rank >= br
             } else if perp_dist < bd {
-                false  // closer perpendicular center
+                false  // neither overlaps → closer perpendicular center
             } else if perp_dist > bd {
                 true   // farther perpendicular center
             } else {
@@ -1206,6 +1214,9 @@ pub fn find_wrap_target(
                 false
             } else if edge_score > be {
                 true
+            } else if perp_overlap && bo {
+                // Both overlap with same edge score → MRU (tmux parity #70)
+                rank >= br
             } else if perp_dist < bd {
                 false
             } else if perp_dist > bd {
@@ -1258,6 +1269,12 @@ pub fn parse_modified_special_key(s: &str) -> Option<String> {
     if m <= 1 { return None; } // no modifiers found
     // Match the base key name
     match rest {
+        "TAB" => Some(format!("\x1b[9;{}~", m)),
+        "BTAB" | "BACKTAB" => {
+            // Shift is implicit in BackTab; ensure Shift bit is set
+            let sm = m | 1; // set Shift bit
+            Some(format!("\x1b[9;{}~", sm))
+        }
         "LEFT" => Some(format!("\x1b[1;{}D", m)),
         "RIGHT" => Some(format!("\x1b[1;{}C", m)),
         "UP" => Some(format!("\x1b[1;{}A", m)),
@@ -1346,8 +1363,25 @@ pub fn encode_key_event(key: &KeyEvent) -> Option<Vec<u8>> {
             format!("{}", c).into_bytes()
         }
         KeyCode::Enter => b"\r".to_vec(),
-        KeyCode::Tab => b"\t".to_vec(),
-        KeyCode::BackTab => b"\x1b[Z".to_vec(),
+        KeyCode::Tab => {
+            let m = modifier_param(key.modifiers);
+            if m > 1 {
+                // xterm modified-Tab: CSI 9 ; mod ~
+                format!("\x1b[9;{}~", m).into_bytes()
+            } else {
+                b"\t".to_vec()
+            }
+        }
+        KeyCode::BackTab => {
+            let m = modifier_param(key.modifiers);
+            if m > 1 {
+                // Shift is implicit in BackTab; add it back for the modifier param
+                let sm = m | 1; // ensure Shift bit is set
+                format!("\x1b[9;{}~", sm).into_bytes()
+            } else {
+                b"\x1b[Z".to_vec()
+            }
+        }
         KeyCode::Backspace => b"\x08".to_vec(),
         KeyCode::Esc => b"\x1b".to_vec(),
         // Arrow keys and special keys with xterm modifier encoding.
@@ -1846,6 +1880,10 @@ pub fn handle_mouse(app: &mut AppState, me: MouseEvent, window_area: Rect) -> io
             }
         }
         MouseEventKind::ScrollUp => {
+            // Ignore scroll in popup mode — don't enter copy-mode (#110)
+            if matches!(app.mode, Mode::PopupMode { .. }) {
+                return Ok(());
+            }
             if matches!(app.mode, Mode::CopyMode | Mode::CopySearch { .. }) {
                 scroll_copy_up(app, 3);
                 return Ok(());
@@ -1893,6 +1931,10 @@ pub fn handle_mouse(app: &mut AppState, me: MouseEvent, window_area: Rect) -> io
             }
         }
         MouseEventKind::ScrollDown => {
+            // Ignore scroll in popup mode — don't enter copy-mode (#110)
+            if matches!(app.mode, Mode::PopupMode { .. }) {
+                return Ok(());
+            }
             if matches!(app.mode, Mode::CopyMode | Mode::CopySearch { .. }) {
                 scroll_copy_down(app, 3);
                 // Auto-exit copy mode when scrolled back to live output

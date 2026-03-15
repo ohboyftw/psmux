@@ -71,7 +71,7 @@ pub fn create_window(pty_system: &dyn portable_pty::PtySystem, app: &mut AppStat
     // ── Fast path: use pre-spawned warm pane when creating a default shell ──
     // The warm pane has its shell already loaded (~470ms for pwsh), so the
     // prompt appears instantly — matching wezterm's "instant tab" feel.
-    if command.is_none() && app.warm_pane.is_some() {
+    if command.is_none() && start_dir.is_none() && app.warm_pane.is_some() {
         let wp = app.warm_pane.take().unwrap();
         // Resize to current terminal dimensions if they changed since pre-spawn
         let area = app.last_window_area;
@@ -335,7 +335,9 @@ pub fn split_active_with_command(app: &mut AppState, kind: LayoutKind, command: 
     // though its ConPTY was created at full-window size, resizing to the
     // split dimensions only costs a ConPTY repaint (~10-50ms) vs a full
     // cold spawn (~500ms).  Net result: split feels nearly instant.
-    if command.is_none() && app.warm_pane.is_some() {
+    // Skip warm pane when start_dir is set — the warm pane was spawned
+    // in the server's CWD, not the requested directory (#107).
+    if command.is_none() && start_dir.is_none() && app.warm_pane.is_some() {
         let wp = app.warm_pane.take().unwrap();
         // Resize ConPTY + parser to the split dimensions
         if rows != wp.rows || cols != wp.cols {
@@ -585,6 +587,63 @@ const ENV_SHIM_PS: &str = concat!(
     "else{ & claude.exe --teammate-mode $env:PSMUX_CLAUDE_TEAMMATE_MODE @args } } }",
 );
 
+/// PSReadLine prediction fix — disables predictions that crash with
+/// NullReferenceException in GetHistoryItems() during ConPTY startup.
+/// See https://github.com/marlocarlo/psmux/issues/109
+const PSRL_FIX: &str = concat!(
+    "$PSStyle.OutputRendering = 'Ansi'; ",
+    "try { Set-PSReadLineOption -PredictionSource None -ErrorAction Stop } catch {}; ",
+    "try { Set-PSReadLineOption -PredictionViewStyle InlineView -ErrorAction Stop } catch {}; ",
+    "try { Remove-PSReadLineKeyHandler -Chord 'F2' -ErrorAction Stop } catch {}",
+);
+
+/// Source all four PowerShell profile scripts in the standard order.
+/// Used with -NoProfile to give us control over execution order — we disable
+/// PSReadLine predictions BEFORE the profile loads (preventing the
+/// GetHistoryItems NullReferenceException), then re-disable after the profile
+/// in case the user's profile re-enables predictions.
+const PROFILE_SOURCE: &str = concat!(
+    "foreach ($__p in @(",
+    "$PROFILE.AllUsersAllHosts,",
+    "$PROFILE.AllUsersCurrentHost,",
+    "$PROFILE.CurrentUserAllHosts,",
+    "$PROFILE.CurrentUserCurrentHost",
+    ")) { if ($__p -and (Test-Path $__p)) { try { . $__p } catch { Write-Warning \"psmux: profile error in ${__p}: $_\" } } }",
+);
+
+/// Sync PowerShell's $PWD to the OS-level CWD on every prompt (#111).
+/// PowerShell's `cd` (Set-Location) only updates `$PWD` internally and
+/// does NOT call Win32 SetCurrentDirectory(). This means the process PEB
+/// still shows the original spawn directory, causing #{pane_current_path}
+/// to always return the initial CWD.
+/// This hook wraps the prompt function to call SetCurrentDirectory after
+/// every command, keeping the PEB CWD in sync with PowerShell's $PWD.
+const CWD_SYNC: &str = concat!(
+    "if (-not $__psmux_cwd_hook) { ",
+    "$Global:__psmux_cwd_hook = $true; ",
+    "$__psmux_orig_prompt = if (Test-Path Function:\\prompt) { Get-Content Function:\\prompt } else { $null }; ",
+    "function Global:prompt { ",
+    "[System.IO.Directory]::SetCurrentDirectory($PWD.ProviderPath); ",
+    "if ($__psmux_orig_prompt) { & ([scriptblock]::Create($__psmux_orig_prompt)) } ",
+    "else { \"PS $($executionContext.SessionState.Path.CurrentLocation)$('>' * ($nestedPromptLevel + 1)) \" } ",
+    "} }",
+);
+
+/// Build the full interactive init string for PowerShell:
+/// 1. Disable PSReadLine predictions (before profile — prevents #109 crash)
+/// 2. Source the user's profile scripts
+/// 3. Re-disable predictions (in case the profile re-enabled them)
+/// 4. Install CWD sync hook (enables #{pane_current_path} — #111)
+/// 5. Optionally append the env shim
+fn build_psrl_init(env_shim: bool) -> String {
+    let mut s = format!("{}; {}; {}; {}", PSRL_FIX, PROFILE_SOURCE, PSRL_FIX, CWD_SYNC);
+    if env_shim {
+        s.push_str("; ");
+        s.push_str(ENV_SHIM_PS);
+    }
+    s
+}
+
 pub fn build_command(command: Option<&str>, env_shim: bool) -> CommandBuilder {
     // Capture CWD early — portable_pty on Windows defaults to USERPROFILE
     // (home dir) when no cwd is set on CommandBuilder, so we must set it
@@ -592,7 +651,7 @@ pub fn build_command(command: Option<&str>, env_shim: bool) -> CommandBuilder {
     let cwd = std::env::current_dir().ok();
     if let Some(cmd) = command {
         let shell = cached_shell().map(|s| s.to_string());
-        
+
         match shell {
             Some(path) => {
                 let mut builder = CommandBuilder::new(&path);
@@ -600,7 +659,7 @@ pub fn build_command(command: Option<&str>, env_shim: bool) -> CommandBuilder {
                 builder.env("TERM", "xterm-256color");
                 builder.env("COLORTERM", "truecolor");
                 builder.env("PSMUX_SESSION", "1");
-                
+
                 let stem = std::path::Path::new(&path).file_stem()
                     .and_then(|s| s.to_str()).unwrap_or("").to_lowercase();
                 if stem == "pwsh" || stem == "powershell" {
@@ -627,18 +686,11 @@ pub fn build_command(command: Option<&str>, env_shim: bool) -> CommandBuilder {
         // PSReadLine v2.2.6+ enables PredictionSource HistoryAndPlugin by default.
         // Predictions cause display corruption in terminal multiplexers because
         // PSReadLine's VT rendering races with ConPTY output capture.
-        // We aggressively disable ALL prediction features with multiple fallback layers.
-        let psrl_base = concat!(
-            "$PSStyle.OutputRendering = 'Ansi'; ",
-            "try { Set-PSReadLineOption -PredictionSource None -ErrorAction Stop } catch {}; ",
-            "try { Set-PSReadLineOption -PredictionViewStyle InlineView -ErrorAction Stop } catch {}; ",
-            "try { Remove-PSReadLineKeyHandler -Chord 'F2' -ErrorAction Stop } catch {}",
-        );
-        let psrl_init = if env_shim {
-            format!("{}; {}", psrl_base, ENV_SHIM_PS)
-        } else {
-            psrl_base.to_string()
-        };
+        // Issue #109: GetHistoryItems() throws NullReferenceException when
+        // predictions are enabled in the profile before PSReadLine is fully
+        // initialized inside ConPTY.  We use -NoProfile and source profiles
+        // ourselves, sandwiching them between prediction-disable commands.
+        let psrl_init = build_psrl_init(env_shim);
         match shell {
             Some(path) => {
                 let mut builder = CommandBuilder::new(&path);
@@ -647,7 +699,7 @@ pub fn build_command(command: Option<&str>, env_shim: bool) -> CommandBuilder {
                 builder.env("COLORTERM", "truecolor");
                 builder.env("PSMUX_SESSION", "1");
                 if path.to_lowercase().contains("pwsh") {
-                    builder.args(["-NoLogo", "-NoExit", "-Command", &psrl_init]);
+                    builder.args(["-NoLogo", "-NoProfile", "-NoExit", "-Command", &psrl_init]);
                 }
                 builder
             }
@@ -657,6 +709,9 @@ pub fn build_command(command: Option<&str>, env_shim: bool) -> CommandBuilder {
                 builder.env("TERM", "xterm-256color");
                 builder.env("COLORTERM", "truecolor");
                 builder.env("PSMUX_SESSION", "1");
+                // Apply the same -NoProfile + manual profile sourcing for
+                // the fallback pwsh.exe path (previously had no PSRL fix).
+                builder.args(["-NoLogo", "-NoProfile", "-NoExit", "-Command", &psrl_init]);
                 builder
             }
         }
@@ -733,18 +788,27 @@ pub fn build_default_shell(shell_path: &str, env_shim: bool) -> CommandBuilder {
     }
 
     if lower.contains("pwsh") || lower.contains("powershell") {
-        // PSReadLine prediction workaround for PowerShell-based shells.
-        let psrl_base = concat!(
-            "$PSStyle.OutputRendering = 'Ansi'; ",
-            "try { Set-PSReadLineOption -PredictionSource None -ErrorAction Stop } catch {}; ",
-            "try { Set-PSReadLineOption -PredictionViewStyle InlineView -ErrorAction Stop } catch {}; ",
-            "try { Remove-PSReadLineKeyHandler -Chord 'F2' -ErrorAction Stop } catch {}",
-        );
-        let psrl_init = if env_shim {
-            format!("{}; {}", psrl_base, ENV_SHIM_PS)
+        // Issue #109: -NoProfile + manual profile sourcing to prevent
+        // PSReadLine GetHistoryItems NullReferenceException.
+        // If the user already passed -NoProfile in extra_args, we still
+        // add ours (PowerShell accepts duplicates harmlessly) and skip
+        // profile sourcing only if they explicitly opted out.
+        let has_noprofile = extra_args.iter()
+            .any(|a| a.eq_ignore_ascii_case("-NoProfile"));
+        let psrl_init = if has_noprofile {
+            // User explicitly wants no profile — just apply PSRL fix + shim.
+            let mut s = PSRL_FIX.to_string();
+            if env_shim {
+                s.push_str("; ");
+                s.push_str(ENV_SHIM_PS);
+            }
+            s
         } else {
-            psrl_base.to_string()
+            build_psrl_init(env_shim)
         };
+        if !has_noprofile {
+            builder.args(["-NoProfile"]);
+        }
         builder.args(["-NoLogo", "-NoExit", "-Command", &psrl_init]);
     }
 

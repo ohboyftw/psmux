@@ -7,6 +7,11 @@
 ###############################################################################
 $ErrorActionPreference = "Continue"
 
+$PSMUX = "$PSScriptRoot\..\target\release\psmux.exe"
+if (-not (Test-Path $PSMUX)) { $PSMUX = "$PSScriptRoot\..\target\debug\psmux.exe" }
+if (-not (Test-Path $PSMUX)) { $PSMUX = (Get-Command psmux -ErrorAction SilentlyContinue).Source }
+if (-not $PSMUX -or -not (Test-Path $PSMUX)) { Write-Error "psmux binary not found"; exit 1 }
+
 $pass = 0
 $fail = 0
 
@@ -44,36 +49,36 @@ Write-Host "  Long CJK: $($longCjk.Length) chars, $longBytes UTF-8 bytes" -Foreg
 Write-Host "`n--- TEST 1: Paste CJK + split-window -h ---" -ForegroundColor Yellow
 Kill-All
 
-psmux new-session -d -s "cjk_test1" -x 120 -y 30 2>$null
+& $PSMUX new-session -d -s "cjk_test1" -x 120 -y 30 2>$null
 Start-Sleep -Seconds 2
 
 # Paste CJK text
-psmux send-keys -t "cjk_test1" "$cjkText" Enter 2>$null
+& $PSMUX send-keys -t "cjk_test1" "$cjkText" Enter 2>$null
 Start-Sleep -Milliseconds 500
 
 # Split pane
-psmux split-window -t "cjk_test1" -h 2>$null
+& $PSMUX split-window -t "cjk_test1" -h 2>$null
 Start-Sleep -Seconds 1
 
 # Check if session survived
-psmux has-session -t "cjk_test1" 2>$null
+& $PSMUX has-session -t "cjk_test1" 2>$null
 $alive = ($LASTEXITCODE -eq 0)
 Report "Paste CJK + split-h: session survives" $alive
 
 if ($alive) {
     # Paste again in the new pane
-    psmux send-keys -t "cjk_test1" "$cjkText" Enter 2>$null
+    & $PSMUX send-keys -t "cjk_test1" "$cjkText" Enter 2>$null
     Start-Sleep -Milliseconds 500
 
     # Split again
-    psmux split-window -t "cjk_test1" -v 2>$null
+    & $PSMUX split-window -t "cjk_test1" -v 2>$null
     Start-Sleep -Seconds 1
 
-    psmux has-session -t "cjk_test1" 2>$null
+    & $PSMUX has-session -t "cjk_test1" 2>$null
     Report "Paste CJK + split-v: session survives" ($LASTEXITCODE -eq 0)
 }
 
-psmux kill-session -t "cjk_test1" 2>$null
+& $PSMUX kill-session -t "cjk_test1" 2>$null
 Start-Sleep -Milliseconds 500
 
 ###############################################################################
@@ -82,19 +87,19 @@ Start-Sleep -Milliseconds 500
 Write-Host "`n--- TEST 2: Paste long CJK ($longBytes bytes) + split ---" -ForegroundColor Yellow
 Kill-All
 
-psmux new-session -d -s "cjk_test2" -x 80 -y 24 2>$null
+& $PSMUX new-session -d -s "cjk_test2" -x 80 -y 24 2>$null
 Start-Sleep -Seconds 2
 
-psmux send-keys -t "cjk_test2" "$longCjk" Enter 2>$null
+& $PSMUX send-keys -t "cjk_test2" "$longCjk" Enter 2>$null
 Start-Sleep -Milliseconds 500
 
-psmux split-window -t "cjk_test2" -h 2>$null
+& $PSMUX split-window -t "cjk_test2" -h 2>$null
 Start-Sleep -Seconds 1
 
-psmux has-session -t "cjk_test2" 2>$null
+& $PSMUX has-session -t "cjk_test2" 2>$null
 Report "Long CJK paste + split: session survives" ($LASTEXITCODE -eq 0)
 
-psmux kill-session -t "cjk_test2" 2>$null
+& $PSMUX kill-session -t "cjk_test2" 2>$null
 Start-Sleep -Milliseconds 500
 
 ###############################################################################
@@ -103,24 +108,24 @@ Start-Sleep -Milliseconds 500
 Write-Host "`n--- TEST 3: Repeated paste + split cycle ---" -ForegroundColor Yellow
 Kill-All
 
-psmux new-session -d -s "cjk_test3" -x 120 -y 40 2>$null
+& $PSMUX new-session -d -s "cjk_test3" -x 120 -y 40 2>$null
 Start-Sleep -Seconds 2
 
 $cycleOk = $true
 for ($i = 1; $i -le 4; $i++) {
     # Paste CJK text
-    psmux send-keys -t "cjk_test3" "$cjkText" Enter 2>$null
+    & $PSMUX send-keys -t "cjk_test3" "$cjkText" Enter 2>$null
     Start-Sleep -Milliseconds 300
 
     # Split
     if ($i % 2 -eq 1) {
-        psmux split-window -t "cjk_test3" -h 2>$null
+        & $PSMUX split-window -t "cjk_test3" -h 2>$null
     } else {
-        psmux split-window -t "cjk_test3" -v 2>$null
+        & $PSMUX split-window -t "cjk_test3" -v 2>$null
     }
     Start-Sleep -Seconds 1
 
-    psmux has-session -t "cjk_test3" 2>$null
+    & $PSMUX has-session -t "cjk_test3" 2>$null
     if ($LASTEXITCODE -ne 0) {
         Report "Cycle ${i}: session crashed" $false
         $cycleOk = $false
@@ -133,7 +138,7 @@ if ($cycleOk) {
     Report "4x paste+split cycle: session survives" $true
 }
 
-psmux kill-session -t "cjk_test3" 2>$null
+& $PSMUX kill-session -t "cjk_test3" 2>$null
 Start-Sleep -Milliseconds 500
 
 ###############################################################################
@@ -142,19 +147,19 @@ Start-Sleep -Milliseconds 500
 Write-Host "`n--- TEST 4: Narrow pane (20 cols) + CJK paste ---" -ForegroundColor Yellow
 Kill-All
 
-psmux new-session -d -s "cjk_test4" -x 20 -y 24 2>$null
+& $PSMUX new-session -d -s "cjk_test4" -x 20 -y 24 2>$null
 Start-Sleep -Seconds 2
 
-psmux send-keys -t "cjk_test4" "$cjkText" Enter 2>$null
+& $PSMUX send-keys -t "cjk_test4" "$cjkText" Enter 2>$null
 Start-Sleep -Milliseconds 500
 
-psmux split-window -t "cjk_test4" -h 2>$null
+& $PSMUX split-window -t "cjk_test4" -h 2>$null
 Start-Sleep -Seconds 1
 
-psmux has-session -t "cjk_test4" 2>$null
+& $PSMUX has-session -t "cjk_test4" 2>$null
 Report "Narrow pane CJK + split: session survives" ($LASTEXITCODE -eq 0)
 
-psmux kill-session -t "cjk_test4" 2>$null
+& $PSMUX kill-session -t "cjk_test4" 2>$null
 Start-Sleep -Milliseconds 500
 
 ###############################################################################
@@ -164,19 +169,19 @@ Write-Host "`n--- TEST 5: Mixed ASCII + CJK paste + split ---" -ForegroundColor 
 Kill-All
 
 $mixedText = "Hello World " + $cjkText + " Test 123 " + $cjkText
-psmux new-session -d -s "cjk_test5" -x 100 -y 30 2>$null
+& $PSMUX new-session -d -s "cjk_test5" -x 100 -y 30 2>$null
 Start-Sleep -Seconds 2
 
-psmux send-keys -t "cjk_test5" "$mixedText" Enter 2>$null
+& $PSMUX send-keys -t "cjk_test5" "$mixedText" Enter 2>$null
 Start-Sleep -Milliseconds 500
 
-psmux split-window -t "cjk_test5" -h 2>$null
+& $PSMUX split-window -t "cjk_test5" -h 2>$null
 Start-Sleep -Seconds 1
 
-psmux has-session -t "cjk_test5" 2>$null
+& $PSMUX has-session -t "cjk_test5" 2>$null
 Report "Mixed ASCII+CJK + split: session survives" ($LASTEXITCODE -eq 0)
 
-psmux kill-session -t "cjk_test5" 2>$null
+& $PSMUX kill-session -t "cjk_test5" 2>$null
 Start-Sleep -Milliseconds 500
 
 ###############################################################################
@@ -190,19 +195,19 @@ Remove-Item $crashLog -Force -ErrorAction SilentlyContinue 2>$null
 
 # Run the crash scenario one more time
 Kill-All
-psmux new-session -d -s "cjk_crash_check" -x 80 -y 24 2>$null
+& $PSMUX new-session -d -s "cjk_crash_check" -x 80 -y 24 2>$null
 Start-Sleep -Seconds 2
 
-psmux send-keys -t "cjk_crash_check" "$longCjk" Enter 2>$null
+& $PSMUX send-keys -t "cjk_crash_check" "$longCjk" Enter 2>$null
 Start-Sleep -Milliseconds 500
-psmux split-window -t "cjk_crash_check" -h 2>$null
+& $PSMUX split-window -t "cjk_crash_check" -h 2>$null
 Start-Sleep -Seconds 1
-psmux send-keys -t "cjk_crash_check" "$cjkText" Enter 2>$null
+& $PSMUX send-keys -t "cjk_crash_check" "$cjkText" Enter 2>$null
 Start-Sleep -Milliseconds 500
-psmux split-window -t "cjk_crash_check" -v 2>$null
+& $PSMUX split-window -t "cjk_crash_check" -v 2>$null
 Start-Sleep -Seconds 1
 
-psmux has-session -t "cjk_crash_check" 2>$null
+& $PSMUX has-session -t "cjk_crash_check" 2>$null
 $sessionAlive = ($LASTEXITCODE -eq 0)
 
 if (Test-Path $crashLog) {
@@ -212,7 +217,7 @@ if (Test-Path $crashLog) {
     Report "No crash log generated" $sessionAlive
 }
 
-psmux kill-session -t "cjk_crash_check" 2>$null
+& $PSMUX kill-session -t "cjk_crash_check" 2>$null
 Kill-All
 
 ###############################################################################

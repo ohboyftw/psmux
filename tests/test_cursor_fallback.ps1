@@ -8,6 +8,10 @@
 #>
 $ErrorActionPreference = "Continue"
 $results = @()
+$PSMUX = "$PSScriptRoot\..\target\release\psmux.exe"
+if (-not (Test-Path $PSMUX)) { $PSMUX = "$PSScriptRoot\..\target\debug\psmux.exe" }
+if (-not (Test-Path $PSMUX)) { $PSMUX = (Get-Command psmux -ErrorAction SilentlyContinue).Source }
+if (-not $PSMUX -or -not (Test-Path $PSMUX)) { Write-Error "psmux binary not found"; exit 1 }
 
 function Add-Result($name, $pass, $detail="") {
     $script:results += [PSCustomObject]@{ Test=$name; Result=if($pass){"PASS"}else{"FAIL"}; Detail=$detail }
@@ -18,15 +22,16 @@ function Add-Result($name, $pass, $detail="") {
 Write-Host "=== Cursor-Style Fallback Test ==="
 
 # Clean up any existing sessions
-psmux kill-server 2>$null
+& $PSMUX kill-server 2>$null
 Start-Sleep -Seconds 1
 
 # --- Test 1: Default cursor-style is "bar" ---
 Write-Host "`n--- Test 1: Default cursor-style value ---"
-psmux new-session -d 2>$null
+$session = "cursor_fb"
+& $PSMUX new-session -d -s $session 2>$null
 Start-Sleep -Seconds 3
 
-$opts = psmux show-options -g 2>&1 | Out-String
+$opts = & $PSMUX show-options -g -t $session 2>&1 | Out-String
 $cursorLine = $opts -split "`n" | Where-Object { $_ -match "cursor-style" } | Select-Object -First 1
 if ($cursorLine -match "bar") {
     Add-Result "Default cursor-style is bar" $true
@@ -35,9 +40,9 @@ if ($cursorLine -match "bar") {
 }
 
 # --- Test 2: cursor-style can be set ---
-psmux set -g cursor-style block 2>$null
+& $PSMUX set -g cursor-style block -t $session 2>$null
 Start-Sleep -Milliseconds 500
-$opts2 = psmux show-options -g 2>&1 | Out-String
+$opts2 = & $PSMUX show-options -g -t $session 2>&1 | Out-String
 $cursorLine2 = $opts2 -split "`n" | Where-Object { $_ -match "cursor-style" } | Select-Object -First 1
 if ($cursorLine2 -match "block") {
     Add-Result "cursor-style set to block" $true
@@ -46,9 +51,9 @@ if ($cursorLine2 -match "block") {
 }
 
 # --- Test 3: cursor-style can be set back to bar ---
-psmux set -g cursor-style bar 2>$null
+& $PSMUX set -g cursor-style bar -t $session 2>$null
 Start-Sleep -Milliseconds 500
-$opts3 = psmux show-options -g 2>&1 | Out-String
+$opts3 = & $PSMUX show-options -g -t $session 2>&1 | Out-String
 $cursorLine3 = $opts3 -split "`n" | Where-Object { $_ -match "cursor-style" } | Select-Object -First 1
 if ($cursorLine3 -match "bar") {
     Add-Result "cursor-style set back to bar" $true
@@ -69,7 +74,7 @@ if ($blinkLine -match "on") {
 # hasn't sent any DECSCUSR. The fallback should use cursor-style config.
 # We can't directly query what DECSCUSR psmux emits to the real terminal,
 # but we can verify the cursor_shape field in layout JSON is 255 (or 0 on passthrough).
-$layout = psmux display -p "#{cursor_shape}" 2>&1 | Out-String
+$layout = & $PSMUX display -t $session -p "#{cursor_shape}" 2>&1 | Out-String
 $layoutTrimmed = $layout.Trim()
 # On Windows 10 (no passthrough): cursor_shape is 255 (sentinel)
 # On Windows 11 22H2+ (passthrough): cursor_shape could be 0 (child's default reset)
@@ -82,11 +87,11 @@ if ($layoutTrimmed -match "255" -or $layoutTrimmed -match "^0$") {
 
 # --- Test 6: DECSCUSR forwarding still works when child sends it ---
 Write-Host "`n--- Test 6: DECSCUSR forwarding (when received) ---"
-psmux send-keys 'Write-Host -NoNewline ([char]27 + "[3 q")' Enter
+& $PSMUX send-keys -t $session 'Write-Host -NoNewline ([char]27 + "[3 q")' Enter
 Start-Sleep -Seconds 1
 # The scan_cursor_shape should have picked this up
 # We verify via capture-pane that the command ran successfully
-$cap = psmux capture-pane -p 2>&1 | Out-String
+$cap = & $PSMUX capture-pane -t $session -p 2>&1 | Out-String
 if ($cap -match "\[3 q" -or $cap -match "3 q") {
     Add-Result "DECSCUSR echo visible in capture" $true
 } else {
@@ -95,7 +100,7 @@ if ($cap -match "\[3 q" -or $cap -match "3 q") {
 }
 
 # Cleanup
-psmux kill-server 2>$null
+& $PSMUX kill-server 2>$null
 
 # --- Summary ---
 Write-Host "`n=== RESULTS ==="

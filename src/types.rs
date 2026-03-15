@@ -277,6 +277,7 @@ pub struct AppState {
     pub current_key_table: Option<String>,
     pub control_rx: Option<mpsc::Receiver<CtrlReq>>,
     pub control_port: Option<u16>,
+    pub session_key: String,
     pub session_name: String,
     /// Numeric session ID (tmux-compatible: $0, $1, $2...).
     pub session_id: usize,
@@ -348,6 +349,10 @@ pub struct AppState {
     pub set_titles_string: String,
     /// Environment variables set via set-environment
     pub environment: std::collections::HashMap<String, String>,
+    /// User/plugin options (@-prefixed, tmux convention).
+    /// Stored separately from `environment` so they are NOT passed as
+    /// shell environment variables to child panes (#105).
+    pub user_options: std::collections::HashMap<String, String>,
     /// pane-border-style: style for inactive pane borders
     pub pane_border_style: String,
     /// pane-active-border-style: style for active pane borders
@@ -447,6 +452,9 @@ pub struct AppState {
     pub status_message: Option<(String, std::time::Instant)>,
     /// Pre-spawned warm pane: shell already loaded, ready for instant new-window.
     pub warm_pane: Option<WarmPane>,
+    /// Plugin .ps1 scripts queued during config loading for post-startup execution.
+    /// These need the server to be running (TCP listener) before they can apply.
+    pub pending_plugin_scripts: Vec<String>,
 }
 
 impl AppState {
@@ -492,6 +500,7 @@ impl AppState {
             current_key_table: None,
             control_rx: None,
             control_port: None,
+            session_key: String::new(),
             session_name,
             session_id: {
                 static NEXT_SESSION_ID: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
@@ -534,6 +543,7 @@ impl AppState {
             set_titles: false,
             set_titles_string: String::new(),
             environment: std::collections::HashMap::new(),
+            user_options: std::collections::HashMap::new(),
             pane_border_style: String::new(),
             pane_active_border_style: "fg=green".to_string(),
             window_status_format: "#I:#W#{?window_flags,#{window_flags}, }".to_string(),
@@ -576,6 +586,7 @@ impl AppState {
             last_hover_pos: None,
             status_message: None,
             warm_pane: None,
+            pending_plugin_scripts: Vec::new(),
         }
     }
 
@@ -709,7 +720,7 @@ pub enum CtrlReq {
     ShowBuffer(mpsc::Sender<String>),
     ShowBufferAt(mpsc::Sender<String>, usize),
     DeleteBuffer,
-    DisplayMessage(mpsc::Sender<String>, String, bool),  // resp, format, show_on_status_bar
+    DisplayMessage(mpsc::Sender<String>, String, Option<usize>),  // resp, format, target_pane_idx
     LastWindow,
     LastPane,
     RotateWindow(bool),
@@ -746,6 +757,7 @@ pub enum CtrlReq {
     SaveBuffer(String),
     LoadBuffer(String),
     SetEnvironment(String, String),
+    UnsetEnvironment(String),
     ShowEnvironment(mpsc::Sender<String>),
     SetHook(String, String),
     ShowHooks(mpsc::Sender<String>),
