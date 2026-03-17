@@ -7,7 +7,7 @@
 # ReadConsoleInputW and cannot reassemble VT sequences from individual key
 # events, so the bracket markers appeared as literal visible text.
 #
-# https://github.com/marlocarlo/psmux/issues/98
+# https://github.com/psmux/psmux/issues/98
 #
 # Run: pwsh -NoProfile -ExecutionPolicy Bypass -File tests\test_issue98_bracketed_paste.ps1
 

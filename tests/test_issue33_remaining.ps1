@@ -1,7 +1,7 @@
 #!/usr/bin/env pwsh
 # test_issue33_remaining.ps1
 # Tests for the 4 remaining issues from GitHub Issue #33 comment:
-# https://github.com/marlocarlo/psmux/issues/33#issuecomment-3912890080
+# https://github.com/psmux/psmux/issues/33#issuecomment-3912890080
 #
 # Issue 1: -L <socket> flag not supported (High)
 # Issue 2: new-session -P -F '#{pane_id}' returns empty (Medium)

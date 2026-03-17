@@ -159,9 +159,9 @@ if (!$hasScoop) {
         $zipUrl = "file:///$($zipPath -replace '\\','/')"
 
         $scoopManifest = @{
-            version = "3.1.0-local"
+            version = "3.2.0-local"
             description = "psmux local test"
-            homepage = "https://github.com/marlocarlo/psmux"
+            homepage = "https://github.com/psmux/psmux"
             license = "MIT"
             url = $zipUrl
             hash = $sha256
@@ -297,10 +297,10 @@ Uninstall-BinFile -Name "tmux"
 <package xmlns="http://schemas.microsoft.com/packaging/2015/06/nuspec.xsd">
   <metadata>
     <id>psmux</id>
-    <version>3.1.0-local</version>
+    <version>3.2.0-local</version>
     <title>psmux local test</title>
-    <authors>marlocarlo</authors>
-    <owners>marlocarlo</owners>
+    <authors>Josh</authors>
+    <owners>Josh</owners>
     <description>psmux local install test</description>
     <requireLicenseAcceptance>false</requireLicenseAcceptance>
   </metadata>

@@ -82,7 +82,7 @@ Write-Host " Connect:" -ForegroundColor Cyan
 Write-Host "   ssh -i ~/.ssh/psmux_docker_key -p 2222 ContainerAdministrator@$containerIP"
 Write-Host ""
 Write-Host " Quick build:" -ForegroundColor Cyan
-Write-Host "   git clone https://github.com/marlocarlo/psmux.git"
+Write-Host "   git clone https://github.com/psmux/psmux.git"
 Write-Host "   cd psmux && cargo install --path ."
 Write-Host ""
 Write-Host " Stop:" -ForegroundColor Cyan

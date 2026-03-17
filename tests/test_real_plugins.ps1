@@ -22,7 +22,7 @@ Write-Info "Using: $PSMUX"
 $PLUGIN_DIR = "$env:USERPROFILE\.psmux\plugins\psmux-plugins"
 if (-not (Test-Path $PLUGIN_DIR)) {
     Write-Info "Cloning psmux-plugins repo..."
-    git clone https://github.com/marlocarlo/psmux-plugins $PLUGIN_DIR 2>&1 | Out-Null
+    git clone https://github.com/psmux/psmux-plugins $PLUGIN_DIR 2>&1 | Out-Null
 }
 if (-not (Test-Path $PLUGIN_DIR)) { Write-Error "Plugin repo not found at $PLUGIN_DIR"; exit 1 }
 Write-Info "Plugin dir: $PLUGIN_DIR"

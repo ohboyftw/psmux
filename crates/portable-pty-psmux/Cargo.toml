@@ -31,7 +31,7 @@ description = "Cross platform pty interface (psmux fork with ConPTY PASSTHROUGH_
 documentation = "https://docs.rs/portable-pty"
 readme = false
 license = "MIT"
-repository = "https://github.com/marlocarlo/portable-pty-patched"
+repository = "https://github.com/psmux/portable-pty-patched"
 resolver = "2"
 
 [features]

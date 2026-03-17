@@ -13,7 +13,7 @@
 edition = "2021"
 rust-version = "1.70"
 name = "vt100-psmux"
-version = "0.16.2"
+version = "0.16.3"
 authors = ["Jesse Luehrs <doy@tozt.net>"]
 build = false
 include = [
@@ -28,7 +28,7 @@ autoexamples = false
 autotests = false
 autobenches = false
 description = "Library for parsing terminal data (psmux fork with blink/hidden/strikethrough SGR + CSI cursor patches)"
-homepage = "https://github.com/marlocarlo/vt100-rust-patched"
+homepage = "https://github.com/psmux/vt100-rust-patched"
 readme = "README.md"
 keywords = [
     "terminal",
@@ -39,7 +39,7 @@ categories = [
     "encoding",
 ]
 license = "MIT"
-repository = "https://github.com/marlocarlo/vt100-rust-patched"
+repository = "https://github.com/psmux/vt100-rust-patched"
 
 [lib]
 name = "vt100_psmux"

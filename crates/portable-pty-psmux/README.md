@@ -1,6 +1,6 @@
 # portable-pty-patched
 
-Patched version of [portable-pty](https://crates.io/crates/portable-pty) v0.9.0 (originally from [wez/wezterm](https://github.com/wez/wezterm)) with ConPTY flag support required by [psmux](https://github.com/marlocarlo/psmux).
+Patched version of [portable-pty](https://crates.io/crates/portable-pty) v0.9.0 (originally from [wez/wezterm](https://github.com/wez/wezterm)) with ConPTY flag support required by [psmux](https://github.com/psmux/psmux).
 
 ## Why this exists
 
@@ -29,7 +29,7 @@ Added `libloaderapi` and `winnt` features to `winapi` dependency for `GetModuleH
 
 In your `Cargo.toml`:
 ```toml
-portable-pty = { git = "https://github.com/marlocarlo/portable-pty-patched.git", branch = "main" }
+portable-pty = { git = "https://github.com/psmux/portable-pty-patched.git", branch = "main" }
 ```
 
 ## Keeping up to date

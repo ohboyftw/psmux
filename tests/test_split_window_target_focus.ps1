@@ -1,6 +1,6 @@
 #!/usr/bin/env pwsh
 # Test: split-window -t does not reliably focus the newly created pane
-# Issue: https://github.com/marlocarlo/psmux/issues/112
+# Issue: https://github.com/psmux/psmux/issues/112
 #
 # tmux parity: split-window should move focus to the newly created pane
 # regardless of whether -t is used to specify a target.

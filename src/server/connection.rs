@@ -1060,7 +1060,7 @@ match cmd {
             }
             i += 1;
         }
-        let content = args.iter().enumerate().filter(|(idx, a)| !skip_indices.contains(idx) && !a.starts_with('-')).map(|(_, a)| *a).collect::<Vec<&str>>().join(" ");
+        let content = args.iter().enumerate().filter(|(idx, _)| !skip_indices.contains(idx)).map(|(_, a)| *a).collect::<Vec<&str>>().join(" ");
         let _ = tx.send(CtrlReq::DisplayPopup(content, width, height, close_on_exit));
     }
     "confirm-before" | "confirm" => {

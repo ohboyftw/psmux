@@ -3,7 +3,7 @@
 # parsed when combined with modifiers (C-, M-, S-) in both config file and
 # runtime set-option contexts.
 #
-# https://github.com/marlocarlo/psmux/issues/100
+# https://github.com/psmux/psmux/issues/100
 #
 # Run: pwsh -NoProfile -ExecutionPolicy Bypass -File tests\test_issue100_key_names.ps1
 

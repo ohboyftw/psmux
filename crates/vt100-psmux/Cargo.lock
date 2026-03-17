@@ -427,7 +427,7 @@ checksum = "ebc1c04c71510c7f702b52b7c350734c9ff1295c464a03335b00bb84fc54f853"
 
 [[package]]
 name = "vt100-psmux"
-version = "0.16.2"
+version = "0.16.3"
 dependencies = [
  "itoa",
  "nix",

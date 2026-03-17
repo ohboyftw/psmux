@@ -4,20 +4,20 @@ psmux has a full plugin ecosystem — ports of the most popular tmux plugins, re
 
 ## Plugin Repository
 
-**Browse available plugins and themes:** [**psmux-plugins**](https://github.com/marlocarlo/psmux-plugins)
+**Browse available plugins and themes:** [**psmux-plugins**](https://github.com/psmux/psmux-plugins)
 
-**Install & manage plugins with a TUI:** [**Tmux Plugin Panel (tppanel)**](https://github.com/marlocarlo/tppanel) — a terminal UI for browsing, installing, updating, and removing plugins and themes.
+**Install & manage plugins with a TUI:** [**Tmux Plugin Panel (tppanel)**](https://github.com/psmux/tppanel) — a terminal UI for browsing, installing, updating, and removing plugins and themes.
 
 ## Available Plugins
 
 | Plugin | Description |
 |--------|-------------|
-| [psmux-sensible](https://github.com/marlocarlo/psmux-plugins/tree/main/psmux-sensible) | Sensible defaults for psmux |
-| [psmux-yank](https://github.com/marlocarlo/psmux-plugins/tree/main/psmux-yank) | Windows clipboard integration |
-| [psmux-resurrect](https://github.com/marlocarlo/psmux-plugins/tree/main/psmux-resurrect) | Save/restore sessions |
-| [psmux-pain-control](https://github.com/marlocarlo/psmux-plugins/tree/main/psmux-pain-control) | Better pane navigation |
-| [psmux-prefix-highlight](https://github.com/marlocarlo/psmux-plugins/tree/main/psmux-prefix-highlight) | Prefix key indicator |
-| [ppm](https://github.com/marlocarlo/psmux-plugins/tree/main/ppm) | Plugin manager (like tpm) |
+| [psmux-sensible](https://github.com/psmux/psmux-plugins/tree/main/psmux-sensible) | Sensible defaults for psmux |
+| [psmux-yank](https://github.com/psmux/psmux-plugins/tree/main/psmux-yank) | Windows clipboard integration |
+| [psmux-resurrect](https://github.com/psmux/psmux-plugins/tree/main/psmux-resurrect) | Save/restore sessions |
+| [psmux-pain-control](https://github.com/psmux/psmux-plugins/tree/main/psmux-pain-control) | Better pane navigation |
+| [psmux-prefix-highlight](https://github.com/psmux/psmux-plugins/tree/main/psmux-prefix-highlight) | Prefix key indicator |
+| [ppm](https://github.com/psmux/psmux-plugins/tree/main/ppm) | Plugin manager (like tpm) |
 
 ## Themes
 
@@ -27,7 +27,7 @@ Catppuccin · Dracula · Nord · Tokyo Night · Gruvbox
 
 ```powershell
 # Install the plugin manager
-git clone https://github.com/marlocarlo/psmux-plugins.git "$env:TEMP\psmux-plugins"
+git clone https://github.com/psmux/psmux-plugins.git "$env:TEMP\psmux-plugins"
 Copy-Item "$env:TEMP\psmux-plugins\ppm" "$env:USERPROFILE\.psmux\plugins\ppm" -Recurse
 Remove-Item "$env:TEMP\psmux-plugins" -Recurse -Force
 ```

@@ -143,8 +143,8 @@ Start-Sleep -Milliseconds 500
 # Test 3: display-popup → popup_active + popup_command
 # ============================================================
 Write-Test "display-popup sets popup_active and popup_command in dump-state"
-& $PSMUX display-popup -t $SESSION -w 40 -h 10 "echo popup_test_marker" 2>$null
-Start-Sleep -Milliseconds 800
+& $PSMUX display-popup -t $SESSION -w 40 -h 10 "pwsh -NoProfile -Command 'Write-Host popup_test_marker; Start-Sleep 60'" 2>$null
+Start-Sleep -Seconds 2
 $json = Get-DumpState -Session $SESSION
 if ($null -eq $json) {
     Write-Fail "Could not get dump-state after display-popup"
@@ -255,8 +255,8 @@ if ($null -eq $json) {
 # Test 8: Popup content — verify PTY output appears in popup_lines
 # ============================================================
 Write-Test "display-popup PTY output appears in popup_lines"
-& $PSMUX display-popup -t $SESSION -w 50 -h 10 "echo OVERLAY_CONTENT_CHECK" 2>$null
-Start-Sleep -Seconds 2
+& $PSMUX display-popup -t $SESSION -w 50 -h 10 "pwsh -NoProfile -Command 'Write-Host OVERLAY_CONTENT_CHECK; Start-Sleep 60'" 2>$null
+Start-Sleep -Seconds 3
 $json = Get-DumpState -Session $SESSION
 if ($null -eq $json) {
     Write-Fail "Could not get dump-state for popup content check"

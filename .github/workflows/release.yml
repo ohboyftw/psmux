@@ -121,7 +121,7 @@ jobs:
             
             **Via Scoop (recommended):**
             ```powershell
-            scoop bucket add psmux https://github.com/marlocarlo/scoop-psmux
+            scoop bucket add psmux https://github.com/psmux/scoop-psmux
             scoop install psmux
             ```
             
@@ -142,7 +142,7 @@ jobs:
             
             **Via PowerShell:**
             ```powershell
-            irm https://raw.githubusercontent.com/marlocarlo/psmux/master/scripts/install.ps1 | iex
+            irm https://raw.githubusercontent.com/psmux/psmux/master/scripts/install.ps1 | iex
             ```
             
             **Manual Installation:**
@@ -301,18 +301,18 @@ jobs:
             '    <id>psmux</id>'
             ('    <version>{0}</version>' -f $ver)
             '    <title>psmux - Terminal Multiplexer for Windows</title>'
-            '    <authors>marlocarlo</authors>'
-            '    <owners>marlocarlo</owners>'
-            '    <licenseUrl>https://github.com/marlocarlo/psmux/blob/master/LICENSE</licenseUrl>'
-            '    <projectUrl>https://github.com/marlocarlo/psmux</projectUrl>'
+            '    <authors>Josh</authors>'
+            '    <owners>Josh</owners>'
+            '    <licenseUrl>https://github.com/psmux/psmux/blob/master/LICENSE</licenseUrl>'
+            '    <projectUrl>https://github.com/psmux/psmux</projectUrl>'
             '    <requireLicenseAcceptance>false</requireLicenseAcceptance>'
             '    <description>Terminal multiplexer for Windows - tmux alternative for PowerShell and Windows Terminal. Includes psmux, pmux, and tmux commands.</description>'
             '    <summary>Terminal multiplexer for Windows (tmux alternative)</summary>'
-            '    <releaseNotes>https://github.com/marlocarlo/psmux/releases</releaseNotes>'
+            '    <releaseNotes>https://github.com/psmux/psmux/releases</releaseNotes>'
             '    <tags>terminal multiplexer tmux powershell cli windows psmux pmux</tags>'
-            '    <packageSourceUrl>https://github.com/marlocarlo/psmux</packageSourceUrl>'
-            '    <docsUrl>https://github.com/marlocarlo/psmux#readme</docsUrl>'
-            '    <bugTrackerUrl>https://github.com/marlocarlo/psmux/issues</bugTrackerUrl>'
+            '    <packageSourceUrl>https://github.com/psmux/psmux</packageSourceUrl>'
+            '    <docsUrl>https://github.com/psmux/psmux#readme</docsUrl>'
+            '    <bugTrackerUrl>https://github.com/psmux/psmux/issues</bugTrackerUrl>'
             '  </metadata>'
             '  <files>'
             '    <file src="tools\**" target="tools" />'
@@ -373,7 +373,7 @@ jobs:
       - name: Clone scoop bucket repo
         shell: bash
         run: |
-          git clone https://x-access-token:${{ secrets.WINGET_PAT }}@github.com/marlocarlo/scoop-psmux.git scoop-bucket
+          git clone https://x-access-token:${{ secrets.WINGET_PAT }}@github.com/psmux/scoop-psmux.git scoop-bucket
 
       - name: Update scoop manifest
         shell: bash
@@ -390,7 +390,7 @@ jobs:
           {
               "version": "$ver",
               "description": "Terminal multiplexer for Windows - tmux alternative for PowerShell and Windows Terminal",
-              "homepage": "https://github.com/marlocarlo/psmux",
+              "homepage": "https://github.com/psmux/psmux",
               "license": "MIT",
               "architecture": {
                   "64bit": {
@@ -412,18 +412,18 @@ jobs:
                   "tmux.exe"
               ],
               "checkver": {
-                  "github": "https://github.com/marlocarlo/psmux"
+                  "github": "https://github.com/psmux/psmux"
               },
               "autoupdate": {
                   "architecture": {
                       "64bit": {
-                          "url": "https://github.com/marlocarlo/psmux/releases/download/v\$version/psmux-v\$version-windows-x64.zip"
+                          "url": "https://github.com/psmux/psmux/releases/download/v\$version/psmux-v\$version-windows-x64.zip"
                       },
                       "32bit": {
-                          "url": "https://github.com/marlocarlo/psmux/releases/download/v\$version/psmux-v\$version-windows-x86.zip"
+                          "url": "https://github.com/psmux/psmux/releases/download/v\$version/psmux-v\$version-windows-x86.zip"
                       },
                       "arm64": {
-                          "url": "https://github.com/marlocarlo/psmux/releases/download/v\$version/psmux-v\$version-windows-arm64.zip"
+                          "url": "https://github.com/psmux/psmux/releases/download/v\$version/psmux-v\$version-windows-arm64.zip"
                       }
                   }
               }
@@ -598,14 +598,14 @@ jobs:
           PackageIdentifier: $pkgId
           PackageVersion: $ver
           PackageLocale: en-US
-          Publisher: marlocarlo
-          PublisherUrl: https://github.com/marlocarlo
-          PublisherSupportUrl: https://github.com/marlocarlo/psmux/issues
+          Publisher: Josh
+          PublisherUrl: https://github.com/psmux
+          PublisherSupportUrl: https://github.com/psmux/psmux/issues
           PackageName: psmux
-          PackageUrl: https://github.com/marlocarlo/psmux
+          PackageUrl: https://github.com/psmux/psmux
           License: MIT
-          LicenseUrl: https://github.com/marlocarlo/psmux/blob/master/LICENSE
-          Copyright: Copyright (c) marlocarlo
+          LicenseUrl: https://github.com/psmux/psmux/blob/master/LICENSE
+          Copyright: Copyright (c) Josh
           ShortDescription: Terminal multiplexer for Windows - tmux alternative for PowerShell and Windows Terminal
           Description: |-
             psmux is a terminal multiplexer for Windows, bringing tmux-style split panes,
@@ -623,7 +623,7 @@ jobs:
           - pane
           - session
           - pmux
-          ReleaseNotesUrl: https://github.com/marlocarlo/psmux/releases/tag/$tag
+          ReleaseNotesUrl: https://github.com/psmux/psmux/releases/tag/$tag
           ManifestType: defaultLocale
           ManifestVersion: 1.9.0
           "@ -replace '(?m)^\s{10}','' | Set-Content "$outDir/$pkgId.locale.en-US.yaml" -Encoding utf8NoBOM

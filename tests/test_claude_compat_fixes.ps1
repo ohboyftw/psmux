@@ -101,9 +101,10 @@ try {
     Start-Sleep -Seconds 2
     $cap = Capture-Pane $SESSION
 
-    # Check if the test dir appears in the output (handle forward/back slashes)
+    # Check if the test dir appears in the output (handle forward/back slashes and line wrapping)
     $testDirName = Split-Path $testDir -Leaf
-    if ($cap -match [regex]::Escape($testDirName)) {
+    $capNormalized = ($cap -replace "`r?`n", "") -replace "\s+", " "
+    if ($capNormalized -match [regex]::Escape($testDirName)) {
         Pass "1.1: split-window -c correctly set CWD to test directory"
     } else {
         Fail "1.1: CWD not set. Expected dir containing '$testDirName'. Got: $($cap.Substring(0,[Math]::Min(300,$cap.Length)).Trim())"

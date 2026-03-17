@@ -65,7 +65,7 @@ This installs `psmux`, `pmux`, and `tmux` binaries to your Cargo bin directory.
 ### Using Scoop
 
 ```powershell
-scoop bucket add psmux https://github.com/marlocarlo/scoop-psmux
+scoop bucket add psmux https://github.com/psmux/scoop-psmux
 scoop install psmux
 ```
 
@@ -77,12 +77,12 @@ choco install psmux
 
 ### From GitHub Releases
 
-Download the latest `.zip` from [GitHub Releases](https://github.com/marlocarlo/psmux/releases) and add to your PATH.
+Download the latest `.zip` from [GitHub Releases](https://github.com/psmux/psmux/releases) and add to your PATH.
 
 ### From Source
 
 ```powershell
-git clone https://github.com/marlocarlo/psmux.git
+git clone https://github.com/psmux/psmux.git
 cd psmux
 cargo build --release
 ```
@@ -162,16 +162,16 @@ No extra configuration needed. Full guide: **[docs/claude-code.md](docs/claude-c
 <table>
   <tr>
     <td align="center" width="50%">
-      <a href="https://github.com/marlocarlo/pstop">
-        <img src="https://raw.githubusercontent.com/marlocarlo/pstop/master/pstop-demo.gif" width="400" alt="pstop demo" /><br/>
+      <a href="https://github.com/psmux/pstop">
+        <img src="https://raw.githubusercontent.com/psmux/pstop/master/pstop-demo.gif" width="400" alt="pstop demo" /><br/>
         <b>pstop</b>
       </a><br/>
       <sub>htop for Windows — real-time system monitor with per-core CPU bars, tree view, 7 color schemes</sub><br/>
       <code>cargo install pstop</code>
     </td>
     <td align="center" width="50%">
-      <a href="https://github.com/marlocarlo/psnet">
-        <img src="https://raw.githubusercontent.com/marlocarlo/psnet/master/image.png" width="400" alt="psnet screenshot" /><br/>
+      <a href="https://github.com/psmux/psnet">
+        <img src="https://raw.githubusercontent.com/psmux/psnet/master/image.png" width="400" alt="psnet screenshot" /><br/>
         <b>psnet</b>
       </a><br/>
       <sub>Real-time TUI network monitor — live speed graphs, connections, traffic log, packet sniffer</sub><br/>
@@ -180,16 +180,16 @@ No extra configuration needed. Full guide: **[docs/claude-code.md](docs/claude-c
   </tr>
   <tr>
     <td align="center" width="50%">
-      <a href="https://github.com/marlocarlo/Tmux-Plugin-Panel">
-        <img src="https://raw.githubusercontent.com/marlocarlo/Tmux-Plugin-Panel/master/screenshot.png" width="400" alt="Tmux Plugin Panel screenshot" /><br/>
+      <a href="https://github.com/psmux/Tmux-Plugin-Panel">
+        <img src="https://raw.githubusercontent.com/psmux/Tmux-Plugin-Panel/master/screenshot.png" width="400" alt="Tmux Plugin Panel screenshot" /><br/>
         <b>Tmux Plugin Panel</b>
       </a><br/>
       <sub>TUI plugin & theme manager for tmux and psmux — browse, install, update from your terminal</sub><br/>
       <code>cargo install tmuxpanel</code>
     </td>
     <td align="center" width="50%">
-      <a href="https://github.com/marlocarlo/omp-manager">
-        <img src="https://raw.githubusercontent.com/marlocarlo/omp-manager/master/screenshot.png" width="400" alt="OMP Manager screenshot" /><br/>
+      <a href="https://github.com/psmux/omp-manager">
+        <img src="https://raw.githubusercontent.com/psmux/omp-manager/master/screenshot.png" width="400" alt="OMP Manager screenshot" /><br/>
         <b>OMP Manager</b>
       </a><br/>
       <sub>Oh My Posh setup wizard — browse 100+ themes, install fonts, configure shells automatically</sub><br/>
@@ -204,13 +204,13 @@ MIT
 
 ## Contributing
 
-Contributions welcome — bug reports, PRs, docs, and test scripts via [GitHub Issues](https://github.com/marlocarlo/psmux/issues).
+Contributions welcome — bug reports, PRs, docs, and test scripts via [GitHub Issues](https://github.com/psmux/psmux/issues).
 
 If psmux helps your Windows workflow, consider giving it a ⭐ on GitHub!
 
 ## Star History
 
-[![Star History Chart](https://api.star-history.com/image?repos=marlocarlo/psmux&type=date&legend=top-left)](https://www.star-history.com/?repos=marlocarlo%2Fpsmux&type=date&legend=top-left)
+[![Star History Chart](https://api.star-history.com/image?repos=psmux/psmux&type=date&legend=top-left)](https://www.star-history.com/?repos=psmux%2Fpsmux&type=date&legend=top-left)
 
 ---
 

@@ -37,7 +37,7 @@ use crossterm::cursor::{EnableBlinking, DisableBlinking};
 use crossterm::event::{EnableMouseCapture, DisableMouseCapture, EnableBracketedPaste, DisableBracketedPaste};
 
 use crate::platform::enable_virtual_terminal_processing;
-use crate::cli::{print_help, print_version, print_commands, extract_session_from_target};
+use crate::cli::{print_help, print_version, print_commands};
 use crate::session::{cleanup_stale_port_files, read_session_key, send_control,
     send_control_with_response, resolve_last_session_name, resolve_default_session_name,
     kill_remaining_server_processes};
@@ -94,17 +94,26 @@ fn run_main() -> io::Result<()> {
             // Store the full target for the server to parse
             env::set_var("PSMUX_TARGET_FULL", target);
             // Extract just the session name for port file lookup
-            let session = extract_session_from_target(target);
+            let parsed_target = crate::cli::parse_target(target);
+            let has_explicit_session = parsed_target.session.is_some();
+            let session = parsed_target.session.unwrap_or_else(|| "default".to_string());
             // Apply -L namespace prefix for port file lookup
             let port_file_base = if let Some(ref l) = l_socket_name {
                 format!("{}__{}", l, session)
             } else {
                 session.clone()
             };
-            env::set_var("PSMUX_TARGET_SESSION", &port_file_base);
+            // If the -t target includes an explicit session name, use it
+            // directly. Otherwise (e.g. -t %2, -t :1.0) fall through to
+            // the TMUX env var resolution below so we connect to the right
+            // server when invoked from inside a psmux pane.
+            if has_explicit_session {
+                env::set_var("PSMUX_TARGET_SESSION", &port_file_base);
+            }
         }
-    } else if env::var("PSMUX_TARGET_SESSION").is_err() {
-        // No -t flag: try to resolve session from TMUX env var (set inside psmux panes)
+    }
+    if env::var("PSMUX_TARGET_SESSION").is_err() {
+        // No explicit session from -t: try to resolve from TMUX env var (set inside psmux panes)
         // TMUX format: /tmp/psmux-<pid>/<socket_name>,<port>,<session_idx>
         if let Ok(tmux_val) = env::var("TMUX") {
             // Extract the port from the TMUX value
@@ -509,7 +518,55 @@ fn run_main() -> io::Result<()> {
                 if env::var("PSMUX_REMOTE_ATTACH").ok().as_deref() == Some("1") {
                     // Already set up for attach — skip server spawn
                 } else {
-                // Always spawn a background server first
+                // Fast path: try to claim a pre-spawned warm server.
+                // The warm server has config loaded and shell already running,
+                // so claiming it avoids the full cold-start latency.
+                // Only eligible when no custom command/dir is requested.
+                let claimed_warm = if initial_cmd.is_none() && raw_cmd_args.is_none() && start_dir.is_none() {
+                    let warm_base = if let Some(ref l) = l_socket_name {
+                        format!("{}____warm__", l)
+                    } else {
+                        "__warm__".to_string()
+                    };
+                    let warm_port_path = format!("{}\\.psmux\\{}.port", home, warm_base);
+                    if std::path::Path::new(&warm_port_path).exists() {
+                        if let Ok(warm_port_str) = std::fs::read_to_string(&warm_port_path) {
+                            if let Ok(warm_port) = warm_port_str.trim().parse::<u16>() {
+                                let warm_addr = format!("127.0.0.1:{}", warm_port);
+                                if std::net::TcpStream::connect_timeout(
+                                    &warm_addr.parse().unwrap(),
+                                    Duration::from_millis(100),
+                                ).is_ok() {
+                                    let warm_key = crate::session::read_session_key(&warm_base).unwrap_or_default();
+                                    if !warm_key.is_empty() {
+                                        match crate::session::send_auth_cmd_response(
+                                            &warm_addr, &warm_key,
+                                            format!("claim-session {}\n", name).as_bytes(),
+                                        ) {
+                                            Ok(resp) if resp.contains("OK") => {
+                                                if let Some(ref wn) = window_name {
+                                                    let new_key = crate::session::read_session_key(&port_file_base).unwrap_or_default();
+                                                    let _ = crate::session::send_auth_cmd(
+                                                        &warm_addr, &new_key,
+                                                        format!("rename-window {}\n", wn).as_bytes(),
+                                                    );
+                                                }
+                                                true
+                                            }
+                                            _ => false,
+                                        }
+                                    } else { false }
+                                } else {
+                                    let _ = std::fs::remove_file(&warm_port_path);
+                                    false
+                                }
+                            } else { false }
+                        } else { false }
+                    } else { false }
+                } else { false };
+
+                if !claimed_warm {
+                // Cold path: spawn a background server from scratch
                 let exe = std::env::current_exe().unwrap_or_else(|_| std::path::PathBuf::from("psmux"));
                 let mut server_args: Vec<String> = vec!["server".into(), "-s".into(), name.clone()];
                 // Pass -L socket name to server for namespace isolation
@@ -583,6 +640,7 @@ fn run_main() -> io::Result<()> {
                     cmd.stderr(std::process::Stdio::null());
                     let _child = cmd.spawn().map_err(|e| io::Error::new(io::ErrorKind::Other, format!("failed to spawn server: {e}")))?;
                 }
+                } // end if !claimed_warm (cold path)
                 } // end else (not PSMUX_REMOTE_ATTACH)
                 
                 // Wait for server to create port file (up to 5 seconds)
@@ -829,9 +887,11 @@ fn run_main() -> io::Result<()> {
                 if literal { cmd.push_str(" -l"); }
                 // Quote arguments that contain spaces to preserve them
                 for k in keys { 
-                    if k.contains(' ') || k.contains('\t') {
-                        // Escape any existing quotes and wrap in quotes
-                        let escaped = k.replace('\\', "\\\\").replace('"', "\\\"");
+                    if k.contains(' ') || k.contains('\t') || k.contains('"') {
+                        // Escape embedded double-quotes and wrap in quotes.
+                        // Do NOT escape backslashes: the server parser treats
+                        // them as literal (Windows path separator).
+                        let escaped = k.replace('"', "\\\"");
                         cmd.push_str(&format!(" \"{}\"", escaped));
                     } else {
                         cmd.push_str(&format!(" {}", k)); 
@@ -839,6 +899,22 @@ fn run_main() -> io::Result<()> {
                 }
                 cmd.push('\n');
                 send_control(cmd)?;
+                return Ok(());
+            }
+            // send-paste - Paste base64-encoded text to a pane
+            "send-paste" => {
+                let mut payload = String::new();
+                let mut i = 1;
+                while i < cmd_args.len() {
+                    match cmd_args[i].as_str() {
+                        "-t" => { i += 1; } // consume target (handled globally)
+                        _ => { payload = cmd_args[i].to_string(); }
+                    }
+                    i += 1;
+                }
+                if !payload.is_empty() {
+                    send_control(format!("send-paste {}\n", payload))?;
+                }
                 return Ok(());
             }
             // select-pane - Select the active pane
@@ -1646,6 +1722,10 @@ fn run_main() -> io::Result<()> {
                     let success = if format_mode {
                         // Treat condition as format string - non-empty and non-zero is true
                         !cond.is_empty() && cond != "0"
+                    } else if cond == "true" || cond == "1" {
+                        true
+                    } else if cond == "false" || cond == "0" {
+                        false
                     } else {
                         // Run shell command - suppress stdout/stderr so it doesn't leak to terminal
                         #[cfg(windows)]
@@ -2105,6 +2185,13 @@ fn run_main() -> io::Result<()> {
                 send_control("previous-layout\n".to_string())?;
                 return Ok(());
             }
+            // choose-tree / choose-window / choose-session — interactive TUI choosers.
+            // From the CLI just forward to the server so the attached client
+            // (if any) can display the chooser.  Return exit 0.
+            "choose-tree" | "choose-window" | "choose-session" => {
+                send_control(format!("{}\n", cmd))?;
+                return Ok(());
+            }
             // command-prompt - Open interactive command prompt
             "command-prompt" => {
                 let mut cmd = "command-prompt".to_string();
@@ -2148,14 +2235,18 @@ fn run_main() -> io::Result<()> {
             }
             // display-menu - Display a menu
             "display-menu" | "menu" => {
-                let joined: String = cmd_args.iter().map(|s| s.as_str()).collect::<Vec<&str>>().join(" ");
-                send_control(format!("{}\n", joined))?;
+                let parts: Vec<String> = cmd_args.iter().map(|s| {
+                    if s.contains(' ') || s.contains('"') { format!("\"{}\"" , s.replace('"', "\\\"")) } else { s.to_string() }
+                }).collect();
+                send_control(format!("{}\n", parts.join(" ")))?;
                 return Ok(());
             }
             // display-popup - Display a popup window
             "display-popup" | "popup" => {
-                let joined: String = cmd_args.iter().map(|s| s.as_str()).collect::<Vec<&str>>().join(" ");
-                send_control(format!("{}\n", joined))?;
+                let parts: Vec<String> = cmd_args.iter().map(|s| {
+                    if s.contains(' ') || s.contains('"') { format!("\"{}\"" , s.replace('"', "\\\"")) } else { s.to_string() }
+                }).collect();
+                send_control(format!("{}\n", parts.join(" ")))?;
                 return Ok(());
             }
             // server-info - Show server information
@@ -2172,8 +2263,10 @@ fn run_main() -> io::Result<()> {
             }
             // confirm-before - Ask for confirmation before running a command
             "confirm-before" | "confirm" => {
-                let joined: String = cmd_args.iter().map(|s| s.as_str()).collect::<Vec<&str>>().join(" ");
-                send_control(format!("{}\n", joined))?;
+                let parts: Vec<String> = cmd_args.iter().map(|s| {
+                    if s.contains(' ') || s.contains('"') { format!("\"{}\"", s.replace('"', "\\\"")) } else { s.to_string() }
+                }).collect();
+                send_control(format!("{}\n", parts.join(" ")))?;
                 return Ok(());
             }
             // refresh-client - Refresh the client display

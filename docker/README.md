@@ -61,7 +61,7 @@ ssh -i ~/.ssh/psmux_docker_key -p 2222 ContainerAdministrator@$ip
 ### 4. Build psmux
 
 ```powershell
-git clone https://github.com/marlocarlo/psmux.git
+git clone https://github.com/psmux/psmux.git
 cd psmux
 cargo install --path .
 psmux --version

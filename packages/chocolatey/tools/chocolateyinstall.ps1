@@ -12,7 +12,7 @@
 $ErrorActionPreference = 'Stop'
 
 $toolsDir = "$(Split-Path -Parent $MyInvocation.MyCommand.Definition)"
-$url64 = 'https://github.com/marlocarlo/psmux/releases/download/v__VERSION__/psmux-v__VERSION__-windows-x64.zip'
+$url64 = 'https://github.com/psmux/psmux/releases/download/v__VERSION__/psmux-v__VERSION__-windows-x64.zip'
 
 $packageArgs = @{
   packageName    = $env:ChocolateyPackageName

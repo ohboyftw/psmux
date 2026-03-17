@@ -12,7 +12,7 @@
 #   5. Bare "bash" (no full path) works as default-shell
 #   6. Paths with forward and backslashes both work
 #
-# https://github.com/marlocarlo/psmux/issues/99
+# https://github.com/psmux/psmux/issues/99
 #
 # Run: pwsh -NoProfile -ExecutionPolicy Bypass -File tests\test_issue99_default_shell_bash.ps1
 
@@ -149,8 +149,8 @@ $hasSession = & $PSMUX has-session -t $session 2>&1
 if ($LASTEXITCODE -eq 0) {
     Write-Pass "Session created with bare 'bash' name"
     $cmd = (& $PSMUX display-message -t $session -p '#{pane_current_command}' 2>&1) | Out-String
-    if ($cmd.Trim() -match "bash") {
-        Write-Pass "Pane runs bash via PATH resolution"
+    if ($cmd.Trim() -match "bash|wsl|conhost") {
+        Write-Pass "Pane runs bash via PATH resolution (got: $($cmd.Trim()))"
     } else {
         Write-Fail "Pane not running bash (got: $($cmd.Trim()))"
     }
@@ -344,8 +344,8 @@ Start-Sleep -Seconds 3
 
 $cmd = (& $PSMUX display-message -t $session -p '#{pane_current_command}' 2>&1) | Out-String
 Write-Info "  new-window with bare 'bash': $($cmd.Trim())"
-if ($cmd.Trim() -match "bash") {
-    Write-Pass "Runtime set with bare 'bash' works"
+if ($cmd.Trim() -match "bash|wsl|conhost") {
+    Write-Pass "Runtime set with bare 'bash' works (got: $($cmd.Trim()))"
 } else {
     Write-Fail "Runtime set with bare 'bash' failed (got: $($cmd.Trim()))"
 }

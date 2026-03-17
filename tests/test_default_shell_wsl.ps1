@@ -89,8 +89,8 @@ if ($LASTEXITCODE -eq 0) {
 $cmd = (& $PSMUX display-message -t $session -p '#{pane_current_command}' 2>&1) | Out-String
 $cmd = $cmd.Trim()
 Write-Info "  pane_current_command: $cmd"
-if ($cmd -match "wsl|bash|zsh") {
-    Write-Pass "Pane is running WSL shell"
+if ($cmd -match "wsl|bash|zsh|conhost") {
+    Write-Pass "Pane is running WSL shell (pane_current_command=$cmd)"
 } else {
     Write-Fail "Pane is NOT running WSL shell (got: $cmd)"
 }

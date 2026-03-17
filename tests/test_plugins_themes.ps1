@@ -157,10 +157,10 @@ Write-Host "SECTION 2: User @options (plugin infrastructure)"
 Write-Host ("=" * 60)
 
 Write-Test "set user @option (plugin declaration)"
-Psmux set-option -g "@plugin" "marlocarlo/psmux-catppuccin" -t plugtest | Out-Null
+Psmux set-option -g "@plugin" "psmux/psmux-catppuccin" -t plugtest | Out-Null
 $val = (Psmux show-options -g -v "@plugin" -t plugtest | Out-String).Trim()
 if ($val -match "psmux-catppuccin") { Write-Pass "@plugin set/get: $val" }
-else { Write-Fail "@plugin expected 'marlocarlo/psmux-catppuccin', got: $val" }
+else { Write-Fail "@plugin expected 'psmux/psmux-catppuccin', got: $val" }
 
 Write-Test "set user @option (custom variable)"
 Psmux set-option -g "@catppuccin-flavour" "mocha" -t plugtest | Out-Null

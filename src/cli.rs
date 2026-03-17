@@ -358,7 +358,7 @@ EXAMPLES:
 
 NOTE: psmux ships as 'psmux', 'pmux', and 'tmux' - use whichever you prefer!
 
-For more information: https://github.com/marlocarlo/psmux
+For more information: https://github.com/psmux/psmux
 "#, prog = prog, ver = VERSION);
 }
 

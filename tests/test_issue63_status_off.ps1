@@ -2,7 +2,7 @@
 # Tests that `set-option status off` is stored AND conveyed to the client
 # so the status bar is actually hidden during rendering.
 #
-# https://github.com/marlocarlo/psmux/issues/63
+# https://github.com/psmux/psmux/issues/63
 
 $ErrorActionPreference = "Continue"
 $script:TestsPassed = 0
