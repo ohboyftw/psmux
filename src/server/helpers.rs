@@ -264,4 +264,5 @@ pub(crate) const TMUX_COMMANDS: &[&str] = &[
     "unbind-key (unbind)",
     "unlink-window (unlinkw)",
     "wait-for (wait)",
+    "wait-pane (waitp)",
 ];

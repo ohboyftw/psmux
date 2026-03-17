@@ -501,6 +501,10 @@ pub struct AppState {
     /// Plugin .ps1 scripts queued during config loading for post-startup execution.
     /// These need the server to be running (TCP listener) before they can apply.
     pub pending_plugin_scripts: Vec<String>,
+    /// Queue of wait-pane waiters: (pane_id, exit_code_sender).
+    /// Checked during the reap cycle; when a pane exits, the exit code is sent
+    /// and the waiter is removed.
+    pub wait_pane_queue: Vec<(usize, mpsc::Sender<i32>)>,
 }
 
 impl AppState {
@@ -634,6 +638,7 @@ impl AppState {
             warm_pane: None,
             warm_pool_size: 1,
             pending_plugin_scripts: Vec::new(),
+            wait_pane_queue: Vec::new(),
         }
     }
 
@@ -880,6 +885,9 @@ pub enum CtrlReq {
     MenuSelect(usize),
     /// Navigate menu up/down (delta: -1 = up, +1 = down)
     MenuNavigate(i32),
+    /// Wait for a pane's child process to exit and return its exit code.
+    /// (pane_id, exit_code_sender)
+    WaitPane(usize, mpsc::Sender<i32>),
 }
 
 /// Global flag set by PTY reader threads when new output arrives.

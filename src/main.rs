@@ -48,7 +48,7 @@ use crate::server::run_server;
 use crate::session::{
     cleanup_stale_port_files, kill_remaining_server_processes, read_session_key,
     resolve_default_session_name, resolve_last_session_name, send_control,
-    send_control_with_response,
+    send_control_with_response, send_control_with_response_blocking,
 };
 use crate::ssh_input::{is_ssh_session, send_mouse_enable, InputSource};
 
@@ -2226,6 +2226,45 @@ fn run_main() -> io::Result<()> {
                 }
             }
             return Ok(());
+        }
+        // wait-pane - Wait for a pane's child process to exit
+        "wait-pane" | "waitp" => {
+            let mut target: Option<String> = None;
+            let mut timeout_secs: Option<u64> = None;
+            let mut i = 1;
+
+            while i < cmd_args.len() {
+                match cmd_args[i].as_str() {
+                    "-t" => {
+                        if let Some(v) = cmd_args.get(i + 1) {
+                            target = Some(v.to_string());
+                            i += 1;
+                        }
+                    }
+                    "--timeout" => {
+                        if let Some(v) = cmd_args.get(i + 1) {
+                            timeout_secs = v.parse::<u64>().ok();
+                            i += 1;
+                        }
+                    }
+                    _ => {}
+                }
+                i += 1;
+            }
+
+            if let Some(t) = target {
+                let mut cmd = format!("wait-pane -t {}", t);
+                if let Some(secs) = timeout_secs {
+                    cmd.push_str(&format!(" --timeout {}", secs));
+                }
+                cmd.push('\n');
+                let resp = send_control_with_response_blocking(cmd)?;
+                let code: i32 = resp.trim().parse().unwrap_or(1);
+                std::process::exit(code);
+            } else {
+                eprintln!("wait-pane: missing target (-t %N)");
+                std::process::exit(1);
+            }
         }
         // select-layout - Select a layout for the window
         "select-layout" | "selectl" => {

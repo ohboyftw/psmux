@@ -823,6 +823,50 @@ pub(crate) fn handle_connection(
                     }
                 }
             }
+            "wait-pane" | "waitp" => {
+                // Parse -t %N for target pane ID
+                let mut pane_id: Option<usize> = None;
+                let mut timeout_secs: Option<u64> = None;
+                let mut i = 0;
+                while i < args.len() {
+                    match args[i] {
+                        "-t" => {
+                            if let Some(target) = args.get(i + 1) {
+                                let target_str = target.trim_start_matches('%');
+                                pane_id = target_str.parse::<usize>().ok();
+                                i += 1;
+                            }
+                        }
+                        "--timeout" => {
+                            if let Some(val) = args.get(i + 1) {
+                                timeout_secs = val.parse::<u64>().ok();
+                                i += 1;
+                            }
+                        }
+                        _ => {}
+                    }
+                    i += 1;
+                }
+                if let Some(pid) = pane_id {
+                    let (rtx, rrx) = mpsc::channel::<i32>();
+                    let _ = tx.send(CtrlReq::WaitPane(pid, rtx));
+                    // Block until the pane exits or timeout
+                    let exit_code = if let Some(secs) = timeout_secs {
+                        rrx.recv_timeout(std::time::Duration::from_secs(secs))
+                            .unwrap_or(1) // timeout or recv error
+                    } else {
+                        rrx.recv().unwrap_or(1)
+                    };
+                    let _ = write!(write_stream, "{}", exit_code);
+                    let _ = write_stream.flush();
+                } else {
+                    let _ = write!(write_stream, "1");
+                    let _ = write_stream.flush();
+                }
+                if !persistent {
+                    break;
+                }
+            }
             "rename-session" | "rename" => {
                 if let Some(name) = args.iter().find(|a| !a.starts_with('-')) {
                     let _ = tx.send(CtrlReq::RenameSession((*name).to_string()));

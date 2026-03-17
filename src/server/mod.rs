@@ -218,6 +218,44 @@ fn all_panes_dead(app: &mut AppState) -> bool {
     app.windows.iter_mut().all(|w| node_all_dead(&mut w.root))
 }
 
+/// Check all wait-pane waiters and notify any whose pane has exited.
+/// Waiters for panes that no longer exist in the tree are also notified
+/// with exit code 0 (pane was already reaped).
+fn drain_wait_pane_queue(app: &mut AppState) {
+    app.wait_pane_queue.retain(|(pane_id, sender)| {
+        // Search for the pane across all windows
+        let mut found = false;
+        for win in app.windows.iter_mut() {
+            if let Some(path) = crate::tree::find_path_by_id(&win.root, *pane_id) {
+                found = true;
+                if let Some(p) = crate::tree::active_pane_mut(&mut win.root, &path) {
+                    if p.dead {
+                        let code = p
+                            .child
+                            .try_wait()
+                            .ok()
+                            .flatten()
+                            .map_or(0, |s| s.exit_code() as i32);
+                        let _ = sender.send(code);
+                        return false; // remove from queue
+                    }
+                    if let Ok(Some(status)) = p.child.try_wait() {
+                        let _ = sender.send(status.exit_code() as i32);
+                        return false; // remove from queue
+                    }
+                }
+                break;
+            }
+        }
+        if !found {
+            // Pane was already reaped — respond with exit code 0
+            let _ = sender.send(0);
+            return false;
+        }
+        true // keep waiting
+    });
+}
+
 /// Spawn a single warm server process with the given session name.
 /// Returns true if a new server was spawned, false if one already existed.
 fn spawn_one_warm_server(app: &AppState, warm_session_name: &str) -> bool {
@@ -2832,6 +2870,40 @@ pub fn run_server(
                         CtrlReq::HasSession(resp) => {
                             let _ = resp.send(true);
                         }
+                        CtrlReq::WaitPane(pane_id, resp) => {
+                            // Check if the pane exists and has already exited
+                            let mut found = false;
+                            let mut already_exited = false;
+                            let mut exit_code: i32 = 0;
+                            for win in app.windows.iter_mut() {
+                                if let Some(path) = crate::tree::find_path_by_id(&win.root, pane_id)
+                                {
+                                    found = true;
+                                    if let Some(p) =
+                                        crate::tree::active_pane_mut(&mut win.root, &path)
+                                    {
+                                        if p.dead {
+                                            already_exited = true;
+                                            // Try to get exit code from child
+                                            if let Ok(Some(status)) = p.child.try_wait() {
+                                                exit_code = status.exit_code() as i32;
+                                            }
+                                        } else if let Ok(Some(status)) = p.child.try_wait() {
+                                            already_exited = true;
+                                            exit_code = status.exit_code() as i32;
+                                        }
+                                    }
+                                    break;
+                                }
+                            }
+                            if !found || already_exited {
+                                // Pane not found or already dead: respond immediately
+                                let _ = resp.send(exit_code);
+                            } else {
+                                // Pane still alive: queue the waiter
+                                app.wait_pane_queue.push((pane_id, resp));
+                            }
+                        }
                         CtrlReq::RenameSession(name) => {
                             let home = env::var("USERPROFILE")
                                 .or_else(|_| env::var("HOME"))
@@ -4420,12 +4492,20 @@ pub fn run_server(
         // Check if all windows/panes have exited (throttled to every 250ms)
         if last_reap.elapsed() >= Duration::from_millis(100) {
             last_reap = Instant::now();
+            // Check wait-pane waiters before reaping (so we can capture exit codes)
+            if !app.wait_pane_queue.is_empty() {
+                drain_wait_pane_queue(&mut app);
+            }
             let (all_empty, any_pruned) = tree::reap_children(&mut app)?;
             if any_pruned {
                 // A pane exited naturally - resize remaining panes to fill the space
                 resize_all_panes(&mut app);
                 state_dirty = true;
                 meta_dirty = true;
+                // Re-check waiters after reap: panes may have been pruned
+                if !app.wait_pane_queue.is_empty() {
+                    drain_wait_pane_queue(&mut app);
+                }
             }
             // Warm (standby) servers must always shut down when their
             // panes are gone, regardless of exit-empty / remain-on-exit
