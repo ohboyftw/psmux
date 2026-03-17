@@ -378,6 +378,7 @@ pub(crate) fn handle_connection(
                 let json_mode = args.contains(&"--json");
                 let join_lines = args.contains(&"-J");
                 let escape_seqs = args.contains(&"-e");
+                let clean_mode = args.contains(&"--clean");
                 // Parse -S start and -E end (negative = scrollback offset, - = entire scrollback)
                 let s_arg = args.windows(2).find(|w| w[0] == "-S").map(|w| w[1]);
                 let e_arg = args.windows(2).find(|w| w[0] == "-E").map(|w| w[1]);
@@ -404,7 +405,9 @@ pub(crate) fn handle_connection(
                     }
                 } else {
                     let (rtx, rrx) = mpsc::channel::<String>();
-                    if escape_seqs {
+                    if clean_mode {
+                        let _ = tx.send(CtrlReq::CapturePaneClean(rtx));
+                    } else if escape_seqs {
                         let _ = tx.send(CtrlReq::CapturePaneStyled(rtx, start, end));
                     } else if s_arg.is_some() || e_arg.is_some() {
                         let _ = tx.send(CtrlReq::CapturePaneRange(rtx, start, end));

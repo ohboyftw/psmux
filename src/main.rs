@@ -1125,6 +1125,9 @@ fn run_main() -> io::Result<()> {
                     "-J" => {
                         cmd.push_str(" -J");
                     }
+                    "--clean" => {
+                        cmd.push_str(" --clean");
+                    }
                     "-b" => {
                         if let Some(buf) = cmd_args.get(i + 1) {
                             cmd.push_str(&format!(" -b {}", buf));
