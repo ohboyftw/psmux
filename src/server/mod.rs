@@ -148,7 +148,29 @@ fn serialize_overlay_json(app: &AppState) -> String {
 }
 
 fn should_spawn_warm_server(app: &AppState) -> bool {
-    app.session_name != "__warm__" && !app.destroy_unattached
+    !is_warm_server(app) && !app.destroy_unattached
+}
+
+/// Returns true when this server instance is a warm (standby) server.
+/// Warm servers are internal implementation details that should always
+/// clean up when their last pane exits, regardless of user config
+/// settings like `exit-empty` or `remain-on-exit`.
+fn is_warm_server(app: &AppState) -> bool {
+    crate::session::is_warm_session(&app.port_file_base())
+}
+
+/// Returns true when every pane across all windows has exited (is dead).
+/// This is needed for warm server cleanup when `remain-on-exit` is on:
+/// `remain-on-exit` keeps dead panes in the tree (preventing window
+/// removal), so we must explicitly check whether any pane is still alive.
+fn all_panes_dead(app: &mut AppState) -> bool {
+    fn node_all_dead(node: &mut Node) -> bool {
+        match node {
+            Node::Leaf(p) => p.dead || matches!(p.child.try_wait(), Ok(Some(_))),
+            Node::Split { children, .. } => children.iter_mut().all(node_all_dead),
+        }
+    }
+    app.windows.iter_mut().all(|w| node_all_dead(&mut w.root))
 }
 
 /// Spawn a standby "warm server" process that pre-loads config + shell.
@@ -2991,7 +3013,13 @@ pub fn run_server(session_name: String, socket_name: Option<String>, initial_com
                 state_dirty = true;
                 meta_dirty = true;
             }
-            if app.exit_empty && all_empty {
+            let warm = is_warm_server(&app);
+            let should_exit = if warm {
+                all_empty || all_panes_dead(&mut app)
+            } else {
+                app.exit_empty && all_empty
+            };
+            if should_exit {
                 let home = env::var("USERPROFILE").or_else(|_| env::var("HOME")).unwrap_or_default();
                 let regpath = format!("{}\\.psmux\\{}.port", home, app.port_file_base());
                 let keypath = format!("{}\\.psmux\\{}.key", home, app.port_file_base());
@@ -3032,5 +3060,24 @@ mod tests {
     fn warm_server_is_allowed_for_normal_sessions() {
         let app = AppState::new("demo".to_string());
         assert!(should_spawn_warm_server(&app));
+    }
+
+    #[test]
+    fn is_warm_server_detects_warm_session() {
+        let app = AppState::new("__warm__".to_string());
+        assert!(super::is_warm_server(&app));
+    }
+
+    #[test]
+    fn is_warm_server_detects_namespaced_warm_session() {
+        let mut app = AppState::new("__warm__".to_string());
+        app.socket_name = Some("myns".to_string());
+        assert!(super::is_warm_server(&app));
+    }
+
+    #[test]
+    fn is_warm_server_rejects_normal_session() {
+        let app = AppState::new("work".to_string());
+        assert!(!super::is_warm_server(&app));
     }
 }
