@@ -777,8 +777,11 @@ pub fn handle_key(app: &mut AppState, key: KeyEvent) -> io::Result<bool> {
                 KeyCode::Esc | KeyCode::Char('q') | KeyCode::Char(']') => {
                     exit_copy_mode(app);
                 }
-                // Ctrl+C exits copy mode (tmux parity, fixes #25)
+                // Ctrl+C yanks selection (if any) and exits copy mode
                 KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                    if app.copy_anchor.is_some() {
+                        yank_selection(app)?;
+                    }
                     exit_copy_mode(app);
                 }
                 KeyCode::Left | KeyCode::Char('h') => {
@@ -3342,6 +3345,9 @@ pub fn send_key_to_active(app: &mut AppState, k: &str) -> io::Result<()> {
                 };
             }
             "C-c" | "c-c" => {
+                if app.copy_anchor.is_some() {
+                    yank_selection(app)?;
+                }
                 exit_copy_mode(app);
             }
             "C-g" | "c-g" => {
