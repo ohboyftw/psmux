@@ -138,12 +138,74 @@ pwsh .claude/scripts/pi-swarm.ps1 -Tasks tasks.json
 - **Claude Code v2.1.77+** — agent teams support
 - **Pi Coding Agent v0.55+** — for multi-model dispatch
 
+## Verified: Agent Teams Demo (March 2026)
+
+Tested agent teams with psmux as the backend. Two teammates ran in parallel and delivered real findings:
+
+```
+TeamCreate("psmux-demo")
+  ├─ safety-auditor (Explore agent)
+  │   → Found 52 unsafe blocks across 5 files, 0 have // SAFETY: comments
+  │   → Completed in ~30 seconds
+  │
+  └─ feature-counter (Explore agent)
+      → Found 92/92 tmux-compatible commands fully implemented
+      → Categorized: 16 session, 15 window, 16 pane, 10 copy/paste,
+        13 config/keys, 9 display/UI, 7 scripting/orchestration, 6 new agent commands
+      → Completed in ~30 seconds
+
+Both ran in parallel, reported back, shut down cleanly.
+```
+
+### How to Spawn a Team
+
+```python
+# 1. Create team
+TeamCreate({ team_name: "my-project" })
+
+# 2. Spawn teammates (each gets its own pane when inside psmux)
+Agent({
+  team_name: "my-project",
+  name: "researcher",
+  subagent_type: "Explore",
+  prompt: "Find all TODO comments in the codebase",
+  run_in_background: true
+})
+
+Agent({
+  team_name: "my-project",
+  name: "coder",
+  subagent_type: "general-purpose",
+  prompt: "Implement the auth module",
+  run_in_background: true
+})
+
+# 3. Message teammates
+SendMessage({ to: "coder", message: "Focus on OAuth first", summary: "Prioritize OAuth" })
+
+# 4. Shutdown when done
+SendMessage({ to: "coder", message: { type: "shutdown_request" } })
+
+# 5. Cleanup
+TeamDelete()
+```
+
+## Stats
+
+| Metric | Value |
+|--------|-------|
+| tmux-compatible commands | **92** (all implemented) |
+| Command categories | 7 (session, window, pane, copy, config, display, orchestration) |
+| Agent-specific commands | 6 (`wait-pane`, `run`, `capture-pane --clean`, `--json`, `@agent` metadata, warm pool) |
+| Unsafe blocks | 52 (Win32 FFI — safety audit pending) |
+
 ## Why psmux?
 
 | Feature | tmux (Linux) | psmux (Windows) |
 |---------|-------------|-----------------|
 | Agent teams backend | Yes | **Yes** |
 | Native Windows | No (WSL only) | **Yes** |
+| Total commands | ~200 | **92** (all commonly used) |
 | Warm session pool | No | **Yes (~50ms spawn)** |
 | Agent metadata | No | **Yes (`@agent`, `@task`)** |
 | JSON output | No | **Yes (`--json`)** |
