@@ -840,6 +840,114 @@ pub fn capture_active_pane_text(app: &mut AppState) -> io::Result<Option<String>
     Ok(Some(text))
 }
 
+/// Capture the active pane's text with cleaning heuristics applied.
+///
+/// This strips shell prompts, command echoes, startup noise, and surrounding
+/// blank lines from the captured output, returning only the "meat" of the
+/// command's actual output.
+///
+/// Cleaning heuristics (in priority order):
+/// - Remove lines matching PowerShell prompt: `PS X:\...>`
+/// - Remove lines matching bash/zsh prompts: `$ `, `> `, `❯`
+/// - Remove lines containing common command invocations (`pi -p`, `claude -p`)
+/// - Remove ANSI assertion errors: `Assertion failed:.*UV_HANDLE`
+/// - Remove `Loaded N API key(s)` startup noise
+/// - Trim leading and trailing whitespace-only lines
+pub fn capture_active_pane_text_clean(app: &mut AppState) -> io::Result<Option<String>> {
+    // 1. Get regular capture text
+    let raw = match capture_active_pane_text(app)? {
+        Some(t) => t,
+        None => return Ok(None),
+    };
+
+    // 2. Split into lines and apply cleaning filters
+    let lines: Vec<&str> = raw.lines().collect();
+    let cleaned: Vec<&str> = lines
+        .iter()
+        .copied()
+        .filter(|line| !is_prompt_line(line))
+        .filter(|line| !is_command_echo(line))
+        .filter(|line| !is_noise_line(line))
+        .collect();
+
+    // 3. Trim leading blank lines
+    let start = cleaned
+        .iter()
+        .position(|l| !l.trim().is_empty())
+        .unwrap_or(cleaned.len());
+
+    // 4. Trim trailing blank lines
+    let end = cleaned
+        .iter()
+        .rposition(|l| !l.trim().is_empty())
+        .map(|i| i + 1)
+        .unwrap_or(start);
+
+    if start >= end {
+        return Ok(Some(String::new()));
+    }
+
+    // 5. Return just that slice
+    let mut result = cleaned[start..end].join("\n");
+    result.push('\n');
+    Ok(Some(result))
+}
+
+/// Returns true if the line looks like a shell prompt.
+fn is_prompt_line(line: &str) -> bool {
+    let trimmed = line.trim_start();
+    // PowerShell prompt: PS C:\Users\foo>
+    if trimmed.starts_with("PS ") && trimmed.len() > 4 {
+        // Check for drive letter pattern: PS X:\...>
+        let after_ps = &trimmed[3..];
+        if after_ps.len() >= 3 {
+            let bytes = after_ps.as_bytes();
+            if bytes[0].is_ascii_alphabetic() && bytes[1] == b':' && bytes[2] == b'\\' {
+                // Must contain '>' somewhere to be a prompt
+                if after_ps.contains('>') {
+                    return true;
+                }
+            }
+        }
+    }
+    // Bash/zsh prompt patterns
+    if trimmed.starts_with("$ ") || trimmed == "$" {
+        return true;
+    }
+    if trimmed.starts_with("> ") || trimmed == ">" {
+        return true;
+    }
+    // Starship / oh-my-posh prompt with ❯
+    if trimmed.starts_with('\u{276f}') || trimmed.starts_with("❯") {
+        return true;
+    }
+    false
+}
+
+/// Returns true if the line looks like a command echo (the typed command itself).
+fn is_command_echo(line: &str) -> bool {
+    let trimmed = line.trim();
+    // Common command invocations that appear as echoes
+    if trimmed.contains("pi -p") || trimmed.contains("claude -p") {
+        return true;
+    }
+    false
+}
+
+/// Returns true if the line is known noise / startup junk.
+fn is_noise_line(line: &str) -> bool {
+    let trimmed = line.trim();
+    // Node.js / libuv assertion failures
+    if trimmed.contains("Assertion failed:") && trimmed.contains("UV_HANDLE") {
+        return true;
+    }
+    // Pi / API key loading noise
+    if trimmed.starts_with("Loaded ") && trimmed.contains("API key") {
+        return true;
+    }
+    false
+}
+
 pub fn save_latest_buffer(app: &mut AppState, file: &str) -> io::Result<()> {
     if let Some(buf) = app.paste_buffers.first() {
         std::fs::write(file, buf)?;

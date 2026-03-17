@@ -787,6 +787,8 @@ pub enum CtrlReq {
     ListWindowsJson(mpsc::Sender<String>),
     /// JSON-structured output for `capture-pane --json`.
     CapturePaneJson(mpsc::Sender<String>),
+    /// Cleaned capture: strips shell prompts, command echoes, and noise.
+    CapturePaneClean(mpsc::Sender<String>),
     KillWindow,
     KillSession,
     HasSession(mpsc::Sender<bool>),

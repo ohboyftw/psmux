@@ -42,8 +42,8 @@ use crate::config::{
 };
 use crate::copy_mode::{
     capture_active_pane_range, capture_active_pane_styled, capture_active_pane_text,
-    current_prompt_pos, enter_copy_mode, exit_copy_mode, move_copy_cursor, scroll_copy_down,
-    scroll_copy_up, switch_with_copy_save, yank_selection,
+    capture_active_pane_text_clean, current_prompt_pos, enter_copy_mode, exit_copy_mode,
+    move_copy_cursor, scroll_copy_down, scroll_copy_up, switch_with_copy_save, yank_selection,
 };
 use crate::format::{
     expand_format, format_list_panes, format_list_windows, set_buffer_idx_override,
@@ -1200,6 +1200,13 @@ pub fn run_server(
                         }
                         CtrlReq::CapturePaneRange(resp, s, e) => {
                             if let Some(text) = capture_active_pane_range(&mut app, s, e)? {
+                                let _ = resp.send(text);
+                            } else {
+                                let _ = resp.send(String::new());
+                            }
+                        }
+                        CtrlReq::CapturePaneClean(resp) => {
+                            if let Some(text) = capture_active_pane_text_clean(&mut app)? {
                                 let _ = resp.send(text);
                             } else {
                                 let _ = resp.send(String::new());
