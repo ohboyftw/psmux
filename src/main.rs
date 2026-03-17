@@ -48,7 +48,7 @@ use crate::server::run_server;
 use crate::session::{
     cleanup_stale_port_files, kill_remaining_server_processes, read_session_key,
     resolve_default_session_name, resolve_last_session_name, send_control,
-    send_control_with_response,
+    send_control_with_response, send_control_with_response_timeout,
 };
 use crate::ssh_input::{is_ssh_session, send_mouse_enable, InputSource};
 
@@ -1757,8 +1757,139 @@ fn run_main() -> io::Result<()> {
             }
             return Ok(());
         }
+        // run — Client-side orchestration: spawn pane, run command, wait, capture, cleanup.
+        //
+        // Usage:
+        //   psmux run "cargo test" --capture --timeout 120
+        //   psmux run "npm install"          # fire-and-forget (no --capture)
+        //   psmux run "cmd" -d               # detached: print pane ID and exit
+        //
+        // This is purely client-side composition — no new server-side CtrlReq
+        // variants are needed. It orchestrates split-window, send-keys,
+        // wait-pane, capture-pane, and kill-pane via existing control messages.
+        "run" | "run-command" => {
+            // --- parse arguments ---------------------------------------------------
+            let mut user_cmd: Option<String> = None;
+            let mut capture = false;
+            let mut clean = false;
+            let mut detached = false;
+            let mut timeout_secs: Option<u64> = None;
+            {
+                let mut i = 1;
+                while i < cmd_args.len() {
+                    match cmd_args[i].as_str() {
+                        "--capture" => {
+                            capture = true;
+                        }
+                        "--clean" => {
+                            clean = true;
+                        }
+                        "--timeout" => {
+                            i += 1;
+                            if i < cmd_args.len() {
+                                timeout_secs = cmd_args[i].parse::<u64>().ok();
+                            }
+                        }
+                        "-d" => {
+                            detached = true;
+                        }
+                        "--" => {
+                            // Everything after -- is the command
+                            i += 1;
+                            let rest: Vec<String> =
+                                cmd_args[i..].iter().map(|s| s.to_string()).collect();
+                            if !rest.is_empty() {
+                                user_cmd = Some(rest.join(" "));
+                            }
+                            break;
+                        }
+                        s if !s.starts_with('-') && user_cmd.is_none() => {
+                            user_cmd = Some(s.to_string());
+                        }
+                        _ => {
+                            // Unknown flag — treat as positional if no command yet
+                            if user_cmd.is_none() {
+                                user_cmd = Some(cmd_args[i].to_string());
+                            }
+                        }
+                    }
+                    i += 1;
+                }
+            }
+
+            let user_cmd = match user_cmd {
+                Some(c) if !c.is_empty() => c,
+                _ => {
+                    eprintln!("psmux run: missing command argument");
+                    eprintln!(
+                        "Usage: psmux run \"command\" [--capture] [--clean] [--timeout N] [-d]"
+                    );
+                    std::process::exit(1);
+                }
+            };
+
+            // --- Step 1: split-window -d -h -P -F #{{pane_id}} to get pane ID ------
+            let split_resp =
+                send_control_with_response("split-window -d -h -P -F #{pane_id}\n".to_string())?;
+            let pane_id = split_resp.trim().to_string();
+            if pane_id.is_empty() || !pane_id.starts_with('%') {
+                eprintln!(
+                    "psmux run: failed to create pane (got: {})",
+                    split_resp.trim()
+                );
+                std::process::exit(1);
+            }
+
+            // --- Step 2: send-keys to execute the command in the new pane ----------
+            // Escape any embedded double-quotes in the user command
+            let escaped_cmd = user_cmd.replace('"', "\\\"");
+            send_control(format!(
+                "send-keys -t {} \"{}\" Enter\n",
+                pane_id, escaped_cmd
+            ))?;
+
+            // --- Step 3: if detached, print pane ID and exit -----------------------
+            if detached {
+                println!("{}", pane_id);
+                return Ok(());
+            }
+
+            // --- Step 4: wait-pane — block until the command finishes ---------------
+            let wait_cmd = if let Some(t) = timeout_secs {
+                format!("wait-pane -t {} --timeout {}\n", pane_id, t)
+            } else {
+                format!("wait-pane -t {}\n", pane_id)
+            };
+            // Use a generous read timeout: either the user's timeout + buffer, or
+            // no timeout (blocks until server closes the connection).
+            let read_timeout = timeout_secs.map(|t| Duration::from_secs(t + 10));
+            let wait_resp = send_control_with_response_timeout(wait_cmd, read_timeout)?;
+            let wait_exit_code: i32 = wait_resp
+                .trim()
+                .lines()
+                .last()
+                .and_then(|l| l.trim().parse::<i32>().ok())
+                .unwrap_or(0);
+
+            // --- Step 5: capture-pane (optional) -----------------------------------
+            if capture {
+                let mut cap_cmd = format!("capture-pane -t {} -p", pane_id);
+                if clean {
+                    cap_cmd.push_str(" --clean");
+                }
+                cap_cmd.push('\n');
+                let cap_resp = send_control_with_response(cap_cmd)?;
+                print!("{}", cap_resp);
+            }
+
+            // --- Step 6: kill-pane (cleanup) ----------------------------------------
+            let _ = send_control(format!("kill-pane -t {}\n", pane_id));
+
+            // --- Step 7: exit with wait-pane's exit code ----------------------------
+            std::process::exit(wait_exit_code);
+        }
         // run-shell - Run a shell command
-        "run-shell" | "run" => {
+        "run-shell" => {
             let mut cmd_to_run: Vec<String> = Vec::new();
             let mut background = false;
             let mut i = 1;

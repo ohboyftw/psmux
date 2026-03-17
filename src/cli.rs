@@ -134,9 +134,17 @@ DISPLAY COMMANDS:
     display-popup, popup    Display a popup window
     confirm-before, confirm Run command after y/n confirmation
     clock-mode              Display a big clock
-    run-shell, run          Run a shell command
+    run-shell               Run a shell command
     if-shell, if            Conditional command execution
     wait-for, wait          Wait for / signal a named channel
+
+ORCHESTRATION COMMANDS:
+    run, run-command        Run a command in a new pane, wait, and capture output
+        <command>           Command string to execute (required)
+        --capture           Capture and print pane output when done
+        --clean             Strip trailing blank lines from captured output
+        --timeout <N>       Timeout in seconds (default: no timeout)
+        -d                  Detached: spawn pane, print pane ID, exit immediately
 
 MISC:
     help                    Show this help message
@@ -433,7 +441,8 @@ pub fn print_commands() {
   resize-pane (resizep)     - Resize a pane
   respawn-pane              - Respawn a pane
   rotate-window (rotatew)   - Rotate panes in a window
-  run-shell (run)           - Run a shell command
+  run (run-command)         - Run a command in a pane, wait, and capture output
+  run-shell                 - Run a shell command
   save-buffer (saveb)       - Save buffer to file
   select-layout (selectl)   - Apply a layout preset
   select-pane (selectp)     - Select a pane

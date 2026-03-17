@@ -1,0 +1,9 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(ls -d D:/Home/claudeSkills/repo/*/SKILL.md 2>/dev/null | head -40)",
+      "WebFetch(domain:github.com)",
+      "mcp__plugin_serena_serena__read_memory"
+    ]
+  }
+}

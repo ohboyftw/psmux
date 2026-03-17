@@ -248,6 +248,70 @@ pub fn send_control_with_response(line: String) -> io::Result<String> {
     Ok(result)
 }
 
+/// Send a control message and wait for the full response with a custom timeout.
+///
+/// This is like `send_control_with_response` but allows specifying a longer
+/// read timeout, which is needed for blocking commands like `wait-pane` that
+/// may take many seconds (or minutes) to complete.
+///
+/// Pass `None` for `timeout` to block indefinitely (no read timeout).
+pub fn send_control_with_response_timeout(
+    line: String,
+    timeout: Option<Duration>,
+) -> io::Result<String> {
+    let home = env::var("USERPROFILE")
+        .or_else(|_| env::var("HOME"))
+        .unwrap_or_default();
+    let mut target = env::var("PSMUX_TARGET_SESSION")
+        .ok()
+        .unwrap_or_else(|| "default".to_string());
+    // Never target a warm (standby) session — resolve to a real session instead
+    if is_warm_session(&target) {
+        target = resolve_last_session_name().unwrap_or_else(|| "default".to_string());
+    }
+    let full_target = env::var("PSMUX_TARGET_FULL").ok();
+    let path = format!("{}\\.psmux\\{}.port", home, target);
+    let port = std::fs::read_to_string(&path)
+        .ok()
+        .and_then(|s| s.trim().parse::<u16>().ok())
+        .ok_or_else(|| io::Error::other(format!("no server running on session '{}'", target)))?;
+    let session_key = read_session_key(&target).unwrap_or_default();
+    let addr = format!("127.0.0.1:{}", port);
+    let mut stream = std::net::TcpStream::connect(&addr)?;
+    let _ = stream.set_nodelay(true);
+    let _ = stream.set_read_timeout(timeout);
+    let _ = writeln!(stream, "AUTH {}", session_key);
+    if let Some(ref ft) = full_target {
+        let _ = writeln!(stream, "TARGET {}", ft);
+    }
+    let _ = write!(stream, "{}", line);
+    let _ = stream.flush();
+    let mut buf = Vec::new();
+    let mut temp = [0u8; 4096];
+    loop {
+        match std::io::Read::read(&mut stream, &mut temp) {
+            Ok(0) => break,
+            Ok(n) => buf.extend_from_slice(&temp[..n]),
+            Err(e)
+                if e.kind() == io::ErrorKind::WouldBlock || e.kind() == io::ErrorKind::TimedOut =>
+            {
+                break
+            }
+            Err(_) => break,
+        }
+    }
+    let result = String::from_utf8_lossy(&buf).to_string();
+    // Strip the "OK\n" AUTH response prefix if present
+    let result = if let Some(rest) = result.strip_prefix("OK\n") {
+        rest.to_string()
+    } else if let Some(rest) = result.strip_prefix("OK\r\n") {
+        rest.to_string()
+    } else {
+        result
+    };
+    Ok(result)
+}
+
 /// Send a control message to a specific port with authentication
 pub fn send_control_to_port(port: u16, msg: &str, session_key: &str) -> io::Result<()> {
     let addr = format!("127.0.0.1:{}", port);
