@@ -2392,7 +2392,7 @@ fn run_main() -> io::Result<()> {
                     cmd.push_str(&format!(" --timeout {}", secs));
                 }
                 cmd.push('\n');
-                let resp = send_control_with_response_blocking(cmd)?;
+                let resp = send_control_with_response_timeout(cmd, None)?;
                 let code: i32 = resp.trim().parse().unwrap_or(1);
                 std::process::exit(code);
             } else {
