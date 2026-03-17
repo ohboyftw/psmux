@@ -830,12 +830,19 @@ pub fn resize_pane_vertical(app: &mut AppState, amount: i16) {
             if *kind == LayoutKind::Vertical {
                 let idx = win.active_path[depth];
                 if idx < sizes.len() {
-                    let new_size = (sizes[idx] as i16 + amount).max(1) as u16;
-                    let diff = new_size as i16 - sizes[idx] as i16;
-                    sizes[idx] = new_size;
                     if idx + 1 < sizes.len() {
+                        // Default: adjust the border below/right of the active pane
+                        let new_size = (sizes[idx] as i16 + amount).max(1) as u16;
+                        let diff = new_size as i16 - sizes[idx] as i16;
+                        sizes[idx] = new_size;
                         sizes[idx + 1] = (sizes[idx + 1] as i16 - diff).max(1) as u16;
                     } else if idx > 0 {
+                        // Fallback: no border below/right, use the border above/left.
+                        // Negate the amount so the pane still grows/shrinks in the
+                        // direction the user requested (#81).
+                        let new_size = (sizes[idx] as i16 - amount).max(1) as u16;
+                        let diff = new_size as i16 - sizes[idx] as i16;
+                        sizes[idx] = new_size;
                         sizes[idx - 1] = (sizes[idx - 1] as i16 - diff).max(1) as u16;
                     }
                 }
@@ -848,19 +855,26 @@ pub fn resize_pane_vertical(app: &mut AppState, amount: i16) {
 pub fn resize_pane_horizontal(app: &mut AppState, amount: i16) {
     let win = &mut app.windows[app.active_idx];
     if win.active_path.is_empty() { return; }
-    
+
     for depth in (0..win.active_path.len()).rev() {
         let parent_path = win.active_path[..depth].to_vec();
         if let Some(Node::Split { kind, sizes, .. }) = get_split_mut(&mut win.root, &parent_path) {
             if *kind == LayoutKind::Horizontal {
                 let idx = win.active_path[depth];
                 if idx < sizes.len() {
-                    let new_size = (sizes[idx] as i16 + amount).max(1) as u16;
-                    let diff = new_size as i16 - sizes[idx] as i16;
-                    sizes[idx] = new_size;
                     if idx + 1 < sizes.len() {
+                        // Default: adjust the border to the right of the active pane
+                        let new_size = (sizes[idx] as i16 + amount).max(1) as u16;
+                        let diff = new_size as i16 - sizes[idx] as i16;
+                        sizes[idx] = new_size;
                         sizes[idx + 1] = (sizes[idx + 1] as i16 - diff).max(1) as u16;
                     } else if idx > 0 {
+                        // Fallback: no border to the right, use the border to the left.
+                        // Negate the amount so the pane still grows/shrinks in the
+                        // direction the user requested (#81).
+                        let new_size = (sizes[idx] as i16 - amount).max(1) as u16;
+                        let diff = new_size as i16 - sizes[idx] as i16;
+                        sizes[idx] = new_size;
                         sizes[idx - 1] = (sizes[idx - 1] as i16 - diff).max(1) as u16;
                     }
                 }
