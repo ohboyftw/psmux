@@ -1,34 +1,42 @@
-use std::io::{self, Write, BufRead as _};
+use std::env;
+use std::io::{self, BufRead as _, Write};
+use std::net::TcpListener;
 use std::sync::mpsc;
 use std::thread;
 use std::time::{Duration, Instant};
-use std::net::TcpListener;
-use std::env;
 
-use crossterm::event::{self, Event, KeyEventKind};
-use portable_pty::{PtySize, native_pty_system};
-use ratatui::prelude::*;
-use ratatui::widgets::*;
-use ratatui::backend::CrosstermBackend;
-use ratatui::Terminal;
-use ratatui::style::{Style, Modifier};
 use chrono::Local;
+use crossterm::event::{self, Event, KeyEventKind};
+use portable_pty::{native_pty_system, PtySize};
+use ratatui::backend::CrosstermBackend;
+use ratatui::prelude::*;
+use ratatui::style::{Modifier, Style};
+use ratatui::widgets::*;
+use ratatui::Terminal;
 
-use crate::types::{AppState, CtrlReq, LayoutKind, Mode};
-use crate::tree::{active_pane_mut, compute_rects, resize_all_panes, kill_all_children,
-    find_window_index_by_id, focus_pane_by_id, focus_pane_by_index, reap_children};
-use crate::pane::{create_window, split_active_with_command, kill_active_pane, kill_pane_by_id};
-use crate::input::{handle_key, handle_mouse, send_text_to_active, send_key_to_active, send_paste_to_active};
-use crate::rendering::{render_window, parse_status, centered_rect};
-use crate::style::{parse_tmux_style, parse_inline_styles, spans_visual_width};
-use crate::config::load_config;
 use crate::cli::parse_target;
-use crate::copy_mode::{enter_copy_mode, move_copy_cursor, current_prompt_pos, yank_selection,
-    capture_active_pane_text, capture_active_pane_range, capture_active_pane_styled};
+use crate::config::load_config;
+use crate::copy_mode::{
+    capture_active_pane_range, capture_active_pane_styled, capture_active_pane_text,
+    current_prompt_pos, enter_copy_mode, move_copy_cursor, yank_selection,
+};
+use crate::input::{
+    handle_key, handle_mouse, send_key_to_active, send_paste_to_active, send_text_to_active,
+};
 use crate::layout::dump_layout_json;
-use crate::window_ops::{toggle_zoom, remote_mouse_down, remote_mouse_drag, remote_mouse_up,
-    remote_mouse_button, remote_mouse_motion, remote_scroll_up, remote_scroll_down};
-use crate::util::{list_windows_json, list_tree_json};
+use crate::pane::{create_window, kill_active_pane, kill_pane_by_id, split_active_with_command};
+use crate::rendering::{centered_rect, parse_status, render_window};
+use crate::style::{parse_inline_styles, parse_tmux_style, spans_visual_width};
+use crate::tree::{
+    active_pane_mut, compute_rects, find_window_index_by_id, focus_pane_by_id, focus_pane_by_index,
+    kill_all_children, reap_children, resize_all_panes,
+};
+use crate::types::{AppState, CtrlReq, LayoutKind, Mode};
+use crate::util::{list_tree_json, list_windows_json};
+use crate::window_ops::{
+    remote_mouse_button, remote_mouse_down, remote_mouse_drag, remote_mouse_motion,
+    remote_mouse_up, remote_scroll_down, remote_scroll_up, toggle_zoom,
+};
 
 // ── Bracket Paste Detector ───────────────────────────────────────────────────
 //
@@ -48,14 +56,18 @@ mod bracket_paste_detect {
     use crossterm::event::{KeyCode, KeyEvent};
     use std::time::Instant;
 
-    const OPEN:  &[u8] = b"\x1b[200~";
+    const OPEN: &[u8] = b"\x1b[200~";
     const CLOSE: &[u8] = b"\x1b[201~";
 
     pub enum State {
         /// Normal operation; watching for start of \e[200~.
         Idle,
         /// Matching characters of the open sequence at index `idx`.
-        MatchOpen { idx: usize, pending: Vec<KeyEvent>, started: Instant },
+        MatchOpen {
+            idx: usize,
+            pending: Vec<KeyEvent>,
+            started: Instant,
+        },
         /// Accumulating paste content between open and close sequences.
         Pasting { buf: String },
         /// Inside paste, matching characters of the close sequence.
@@ -83,7 +95,9 @@ mod bracket_paste_detect {
     }
 
     impl State {
-        pub fn new() -> Self { State::Idle }
+        pub fn new() -> Self {
+            State::Idle
+        }
     }
 
     /// Check if the bracket paste detector has buffered an ESC that
@@ -94,7 +108,8 @@ mod bracket_paste_detect {
     pub fn flush_timeout(state: &mut State) -> TimeoutAction {
         // Check if we're in MatchOpen and the timeout expired WITHOUT
         // moving the state (avoids borrow issues).
-        let expired = matches!(state, State::MatchOpen { started, .. } if started.elapsed().as_millis() >= 5);
+        let expired =
+            matches!(state, State::MatchOpen { started, .. } if started.elapsed().as_millis() >= 5);
         if expired {
             let old = std::mem::replace(state, State::Idle);
             if let State::MatchOpen { pending, .. } = old {
@@ -131,7 +146,9 @@ mod bracket_paste_detect {
                 }
                 Action::Forward(key)
             }
-            State::MatchOpen { idx, mut pending, .. } => {
+            State::MatchOpen {
+                idx, mut pending, ..
+            } => {
                 if let Some(b) = key_byte(&key) {
                     if b == OPEN[idx] {
                         pending.push(key);
@@ -141,7 +158,11 @@ mod bracket_paste_detect {
                             *state = State::Pasting { buf: String::new() };
                             return Action::Consumed;
                         }
-                        *state = State::MatchOpen { idx: next, pending, started: Instant::now() };
+                        *state = State::MatchOpen {
+                            idx: next,
+                            pending,
+                            started: Instant::now(),
+                        };
                         return Action::Consumed;
                     }
                 }
@@ -160,9 +181,9 @@ mod bracket_paste_detect {
                 // Regular paste content.
                 match key.code {
                     KeyCode::Char(c) => buf.push(c),
-                    KeyCode::Enter   => buf.push('\r'),
-                    KeyCode::Tab     => buf.push('\t'),
-                    KeyCode::Esc     => buf.push('\x1b'),
+                    KeyCode::Enter => buf.push('\r'),
+                    KeyCode::Tab => buf.push('\t'),
+                    KeyCode::Esc => buf.push('\x1b'),
                     _ => {} // ignore non-text keys during paste
                 }
                 *state = State::Pasting { buf };
@@ -182,12 +203,12 @@ mod bracket_paste_detect {
                     }
                 }
                 // Close match failed — flush partial close chars into paste buf.
-                for i in 0..idx {
-                    buf.push(CLOSE[i] as char);
+                for item in CLOSE.iter().take(idx) {
+                    buf.push(*item as char);
                 }
                 // Re-check current key: it might start a new close sequence.
                 *state = State::Pasting { buf };
-                return feed(state, key);
+                feed(state, key)
             }
         }
     }
@@ -195,7 +216,7 @@ mod bracket_paste_detect {
     #[cfg(test)]
     mod tests {
         use super::*;
-        use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, KeyEventKind, KeyEventState};
+        use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyEventState, KeyModifiers};
 
         fn mk(code: KeyCode) -> KeyEvent {
             KeyEvent {
@@ -207,12 +228,18 @@ mod bracket_paste_detect {
         }
 
         fn feed_str(state: &mut State, s: &str) -> Vec<Action> {
-            s.chars().map(|c| {
-                let key = if c == '\x1b' { mk(KeyCode::Esc) }
-                          else if c == '\r' { mk(KeyCode::Enter) }
-                          else { mk(KeyCode::Char(c)) };
-                feed(state, key)
-            }).collect()
+            s.chars()
+                .map(|c| {
+                    let key = if c == '\x1b' {
+                        mk(KeyCode::Esc)
+                    } else if c == '\r' {
+                        mk(KeyCode::Enter)
+                    } else {
+                        mk(KeyCode::Char(c))
+                    };
+                    feed(state, key)
+                })
+                .collect()
         }
 
         #[test]
@@ -225,7 +252,7 @@ mod bracket_paste_detect {
                 Action::Paste(text) => assert_eq!(text, "hello"),
                 _ => panic!("expected Paste, got something else"),
             }
-            for a in &actions[..actions.len()-1] {
+            for a in &actions[..actions.len() - 1] {
                 assert!(matches!(a, Action::Consumed));
             }
         }
@@ -336,10 +363,14 @@ mod bracket_paste_detect {
 pub fn run(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> io::Result<()> {
     let pty_system = native_pty_system();
 
-    let mut app = AppState::new(
-        env::var("PSMUX_SESSION_NAME").unwrap_or_else(|_| "default".to_string())
-    );
-    app.last_window_area = Rect { x: 0, y: 0, width: 0, height: 0 };
+    let mut app =
+        AppState::new(env::var("PSMUX_SESSION_NAME").unwrap_or_else(|_| "default".to_string()));
+    app.last_window_area = Rect {
+        x: 0,
+        y: 0,
+        width: 0,
+        height: 0,
+    };
     app.attached_clients = 1;
 
     load_config(&mut app);
@@ -351,24 +382,25 @@ pub fn run(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> io::Result<
     let listener = TcpListener::bind(("127.0.0.1", 0))?;
     let port = listener.local_addr()?.port();
     app.control_port = Some(port);
-    let home = env::var("USERPROFILE").or_else(|_| env::var("HOME")).unwrap_or_default();
+    let home = env::var("USERPROFILE")
+        .or_else(|_| env::var("HOME"))
+        .unwrap_or_default();
     let dir = format!("{}\\.psmux", home);
     let _ = std::fs::create_dir_all(&dir);
     let regpath = format!("{}\\{}.port", dir, app.port_file_base());
     let _ = std::fs::write(&regpath, port.to_string());
     thread::spawn(move || {
-        for conn in listener.incoming() {
-            if let Ok(stream) = conn {
-                let tx = tx.clone();
-                // Handle each connection in its own thread so rapid-fire
-                // commands (e.g. 200x new-window) don't queue behind each
-                // other on the accept loop.
-                thread::spawn(move || {
+        for stream in listener.incoming().flatten() {
+            let tx = tx.clone();
+            // Handle each connection in its own thread so rapid-fire
+            // commands (e.g. 200x new-window) don't queue behind each
+            // other on the accept loop.
+            thread::spawn(move || {
                 let mut stream = stream;
                 let mut line = String::new();
                 let mut r = io::BufReader::new(stream.try_clone().unwrap());
                 let _ = r.read_line(&mut line);
-                
+
                 // Check for optional TARGET line (for session:window.pane addressing)
                 let mut global_target_win: Option<usize> = None;
                 let mut global_target_pane: Option<usize> = None;
@@ -383,7 +415,7 @@ pub fn run(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> io::Result<
                     line.clear();
                     let _ = r.read_line(&mut line);
                 }
-                
+
                 let mut parts = line.split_whitespace();
                 let cmd = parts.next().unwrap_or("");
                 // parse optional target specifier
@@ -396,26 +428,40 @@ pub fn run(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> io::Result<
                 let mut i = 0;
                 while i < args.len() {
                     if args[i] == "-t" {
-                        if let Some(v) = args.get(i+1) {
+                        if let Some(v) = args.get(i + 1) {
                             // Parse using parse_target for consistent handling
                             let pt = parse_target(v);
-                            if pt.window.is_some() { target_win = pt.window; }
-                            if pt.pane.is_some() { 
+                            if pt.window.is_some() {
+                                target_win = pt.window;
+                            }
+                            if pt.pane.is_some() {
                                 target_pane = pt.pane;
                                 pane_is_id = pt.pane_is_id;
                             }
                         }
-                        i += 2; continue;
+                        i += 2;
+                        continue;
                     } else if args[i] == "-S" {
-                        if let Some(v) = args.get(i+1) { if let Ok(n) = v.parse::<i32>() { start_line = Some(n); } }
-                        i += 2; continue;
+                        if let Some(v) = args.get(i + 1) {
+                            if let Ok(n) = v.parse::<i32>() {
+                                start_line = Some(n);
+                            }
+                        }
+                        i += 2;
+                        continue;
                     } else if args[i] == "-E" {
-                        if let Some(v) = args.get(i+1) { if let Ok(n) = v.parse::<i32>() { end_line = Some(n); } }
-                        i += 2; continue;
+                        if let Some(v) = args.get(i + 1) {
+                            if let Ok(n) = v.parse::<i32>() {
+                                end_line = Some(n);
+                            }
+                        }
+                        i += 2;
+                        continue;
                     }
                     i += 1;
                 }
-                let is_focus_cmd = matches!(cmd, "select-window" | "selectw" | "select-pane" | "selectp");
+                let is_focus_cmd =
+                    matches!(cmd, "select-window" | "selectw" | "select-pane" | "selectp");
                 if let Some(wid) = target_win {
                     if is_focus_cmd {
                         let _ = tx.send(CtrlReq::FocusWindow(wid));
@@ -436,36 +482,47 @@ pub fn run(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> io::Result<
                             } else {
                                 let _ = tx.send(CtrlReq::FocusPaneByIndex(pid));
                             }
+                        } else if pane_is_id {
+                            let _ = tx.send(CtrlReq::FocusPaneTemp(pid));
                         } else {
-                            if pane_is_id {
-                                let _ = tx.send(CtrlReq::FocusPaneTemp(pid));
-                            } else {
-                                let _ = tx.send(CtrlReq::FocusPaneByIndexTemp(pid));
-                            }
+                            let _ = tx.send(CtrlReq::FocusPaneByIndexTemp(pid));
                         }
                     }
                 }
                 match cmd {
                     "new-window" => {
-                        let name: Option<String> = args.windows(2).find(|w| w[0] == "-n").map(|w| w[1].trim_matches('"').to_string());
-                        let cmd_str: Option<String> = args.iter()
-                            .find(|a| !a.starts_with('-') && args.windows(2).all(|w| !(w[0] == "-n" && w[1] == **a)))
+                        let name: Option<String> = args
+                            .windows(2)
+                            .find(|w| w[0] == "-n")
+                            .map(|w| w[1].trim_matches('"').to_string());
+                        let cmd_str: Option<String> = args
+                            .iter()
+                            .find(|a| {
+                                !a.starts_with('-')
+                                    && args.windows(2).all(|w| !(w[0] == "-n" && w[1] == **a))
+                            })
                             .map(|s| s.trim_matches('"').to_string());
                         let _ = tx.send(CtrlReq::NewWindow(cmd_str, name, false, None));
                         // Write immediate acknowledgment so the client's read()
                         // returns promptly instead of waiting for stream close.
-                        let _ = write!(stream, "OK\n");
+                        let _ = writeln!(stream, "OK");
                         let _ = stream.flush();
                     }
                     "split-window" => {
-                        let kind = if args.iter().any(|a| *a == "-h") { LayoutKind::Horizontal } else { LayoutKind::Vertical };
+                        let kind = if args.contains(&"-h") {
+                            LayoutKind::Horizontal
+                        } else {
+                            LayoutKind::Vertical
+                        };
                         // Parse optional command - find first non-flag argument after flags
-                        let cmd_str: Option<String> = args.iter()
+                        let cmd_str: Option<String> = args
+                            .iter()
                             .find(|a| !a.starts_with('-'))
                             .map(|s| s.trim_matches('"').to_string());
                         let (rtx, _rrx) = mpsc::channel::<String>();
-                        let _ = tx.send(CtrlReq::SplitWindow(kind, cmd_str, false, None, None, rtx));
-                        let _ = write!(stream, "OK\n");
+                        let _ =
+                            tx.send(CtrlReq::SplitWindow(kind, cmd_str, false, None, None, rtx));
+                        let _ = writeln!(stream, "OK");
                         let _ = stream.flush();
                     }
                     "kill-pane" => {
@@ -474,11 +531,11 @@ pub fn run(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> io::Result<
                         } else {
                             let _ = tx.send(CtrlReq::KillPane);
                         }
-                        let _ = write!(stream, "OK\n");
+                        let _ = writeln!(stream, "OK");
                         let _ = stream.flush();
                     }
                     "capture-pane" => {
-                        let escape_seqs = args.iter().any(|a| *a == "-e");
+                        let escape_seqs = args.contains(&"-e");
                         let (rtx, rrx) = mpsc::channel::<String>();
                         if escape_seqs {
                             let _ = tx.send(CtrlReq::CapturePaneStyled(rtx, start_line, end_line));
@@ -487,19 +544,29 @@ pub fn run(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> io::Result<
                         } else {
                             let _ = tx.send(CtrlReq::CapturePane(rtx));
                         }
-                        if let Ok(text) = rrx.recv() { let _ = write!(stream, "{}", text); }
+                        if let Ok(text) = rrx.recv() {
+                            let _ = write!(stream, "{}", text);
+                        }
                     }
-                    "client-attach" => { let _ = tx.send(CtrlReq::ClientAttach(0)); let _ = write!(stream, "ok\n"); }
-                    "client-detach" => { let _ = tx.send(CtrlReq::ClientDetach(0)); let _ = write!(stream, "ok\n"); }
+                    "client-attach" => {
+                        let _ = tx.send(CtrlReq::ClientAttach(0));
+                        let _ = writeln!(stream, "ok");
+                    }
+                    "client-detach" => {
+                        let _ = tx.send(CtrlReq::ClientDetach(0));
+                        let _ = writeln!(stream, "ok");
+                    }
                     "session-info" => {
                         let (rtx, rrx) = mpsc::channel::<String>();
                         let _ = tx.send(CtrlReq::SessionInfo(rtx));
-                        if let Ok(line) = rrx.recv() { let _ = write!(stream, "{}", line); let _ = stream.flush(); }
+                        if let Ok(line) = rrx.recv() {
+                            let _ = write!(stream, "{}", line);
+                            let _ = stream.flush();
+                        }
                     }
                     _ => {}
                 }
-                }); // end per-connection thread
-            }
+            }); // end per-connection thread
         }
     });
 
@@ -538,14 +605,14 @@ pub fn run(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> io::Result<
             app.last_window_area = content_chunk;
             render_window(f, &mut app, content_chunk);
 
-            let _mode_str = match app.mode { 
-                Mode::Passthrough => "", 
-                Mode::Prefix { .. } => "PREFIX", 
-                Mode::CommandPrompt { .. } => ":", 
-                Mode::WindowChooser { .. } => "W", 
-                Mode::RenamePrompt { .. } => "REN", 
+            let _mode_str = match app.mode {
+                Mode::Passthrough => "",
+                Mode::Prefix { .. } => "PREFIX",
+                Mode::CommandPrompt { .. } => ":",
+                Mode::WindowChooser { .. } => "W",
+                Mode::RenamePrompt { .. } => "REN",
                 Mode::RenameSessionPrompt { .. } => "REN-S",
-                Mode::CopyMode => "CPY", 
+                Mode::CopyMode => "CPY",
                 Mode::CopySearch { .. } => "SEARCH",
                 Mode::PaneChooser { .. } => "PANE",
                 Mode::MenuMode { .. } => "MENU",
@@ -558,11 +625,11 @@ pub fn run(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> io::Result<
 
             // Parse status-style to get the base status bar style (tmux default: bg=green,fg=black)
             let base_status_style = parse_tmux_style(&app.status_style);
-            
+
             // Expand status-left using the format engine for full format var support
             let expanded_left = crate::format::expand_format(&app.status_left, &app);
             let status_spans = parse_status(&expanded_left, &app, &time_str);
-            
+
             // Expand status-right using the format engine
             let expanded_right = crate::format::expand_format(&app.status_right, &app);
             let mut right_spans = parse_status(&expanded_right, &app, &time_str);
@@ -573,12 +640,17 @@ pub fn run(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> io::Result<
             } else {
                 parse_tmux_style(&app.status_left_style)
             };
-            let mut combined: Vec<Span<'static>> = status_spans.into_iter().map(|s| {
-                // Apply left style as base, but let inline #[...] overrides win
-                if s.style == Style::default() {
-                    Span::styled(s.content.into_owned(), left_style)
-                } else { s }
-            }).collect();
+            let mut combined: Vec<Span<'static>> = status_spans
+                .into_iter()
+                .map(|s| {
+                    // Apply left style as base, but let inline #[...] overrides win
+                    if s.style == Style::default() {
+                        Span::styled(s.content.into_owned(), left_style)
+                    } else {
+                        s
+                    }
+                })
+                .collect();
             combined.push(Span::styled(" ".to_string(), base_status_style));
 
             // Track x position for tab click detection
@@ -633,7 +705,7 @@ pub fn run(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> io::Result<
                     &app.window_status_format
                 };
                 let label = crate::format::expand_format_for_window(fmt, &app, i);
-                
+
                 // Choose style based on window state
                 let win = &app.windows[i];
                 let fallback_style = if i == app.active_idx {
@@ -705,19 +777,40 @@ pub fn run(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> io::Result<
                 for (i, entry) in tree.iter().enumerate() {
                     let marker = if i == selected { ">" } else { " " };
                     if entry.is_session_header {
-                        let tag = if entry.is_current_session { " (attached)" } else { "" };
-                        lines.push(Line::from(format!("{} {} {}{}",
-                            marker,
-                            if entry.is_current_session { "▼" } else { "▶" },
-                            entry.session_name,
-                            tag,
-                        )).style(Style::default().fg(Color::Yellow).add_modifier(ratatui::style::Modifier::BOLD)));
+                        let tag = if entry.is_current_session {
+                            " (attached)"
+                        } else {
+                            ""
+                        };
+                        lines.push(
+                            Line::from(format!(
+                                "{} {} {}{}",
+                                marker,
+                                if entry.is_current_session {
+                                    "▼"
+                                } else {
+                                    "▶"
+                                },
+                                entry.session_name,
+                                tag,
+                            ))
+                            .style(
+                                Style::default()
+                                    .fg(Color::Yellow)
+                                    .add_modifier(ratatui::style::Modifier::BOLD),
+                            ),
+                        );
                     } else {
                         let active_mark = if entry.is_active_window { "*" } else { " " };
                         let wi = entry.window_index.unwrap_or(0);
-                        lines.push(Line::from(format!("{}   {}: {}{} ({} panes) [{}]",
-                            marker, wi, entry.window_name, active_mark,
-                            entry.window_panes, entry.window_size,
+                        lines.push(Line::from(format!(
+                            "{}   {}: {}{} ({} panes) [{}]",
+                            marker,
+                            wi,
+                            entry.window_name,
+                            active_mark,
+                            entry.window_panes,
+                            entry.window_size,
                         )));
                     }
                 }
@@ -725,7 +818,8 @@ pub fn run(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> io::Result<
                 let height = (lines.len() as u16 + 2)
                     .min(20)
                     .min(area.height.saturating_sub(2));
-                let overlay = Paragraph::new(Text::from(lines)).block(Block::default().borders(Borders::ALL).title("choose-tree"));
+                let overlay = Paragraph::new(Text::from(lines))
+                    .block(Block::default().borders(Borders::ALL).title("choose-tree"));
                 let oa = centered_rect(70, height, area);
                 f.render_widget(Clear, oa);
                 f.render_widget(overlay, oa);
@@ -738,26 +832,48 @@ pub fn run(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> io::Result<
                 } else {
                     for (i, buf) in app.paste_buffers.iter().enumerate() {
                         let marker = if i == selected { ">" } else { " " };
-                        let preview: String = buf.chars().take(40).map(|c| if c == '\n' { '↵' } else { c }).collect();
-                        lines.push(Line::from(format!("{} {:>2}: {:>5} bytes  {}", marker, i, buf.len(), preview)));
+                        let preview: String = buf
+                            .chars()
+                            .take(40)
+                            .map(|c| if c == '\n' { '↵' } else { c })
+                            .collect();
+                        lines.push(Line::from(format!(
+                            "{} {:>2}: {:>5} bytes  {}",
+                            marker,
+                            i,
+                            buf.len(),
+                            preview
+                        )));
                     }
                 }
                 let height = (lines.len() as u16 + 2).min(15);
-                let overlay = Paragraph::new(Text::from(lines)).block(Block::default().borders(Borders::ALL).title("choose-buffer (enter=paste, d=delete, esc=close)"));
+                let overlay = Paragraph::new(Text::from(lines)).block(
+                    Block::default()
+                        .borders(Borders::ALL)
+                        .title("choose-buffer (enter=paste, d=delete, esc=close)"),
+                );
                 let oa = centered_rect(70, height, area);
                 f.render_widget(Clear, oa);
                 f.render_widget(overlay, oa);
             }
 
             if let Mode::RenamePrompt { input } = &app.mode {
-                let overlay = Paragraph::new(format!("rename: {}", input)).block(Block::default().borders(Borders::ALL).title("rename window"));
+                let overlay = Paragraph::new(format!("rename: {}", input)).block(
+                    Block::default()
+                        .borders(Borders::ALL)
+                        .title("rename window"),
+                );
                 let oa = centered_rect(60, 3, area);
                 f.render_widget(Clear, oa);
                 f.render_widget(overlay, oa);
             }
 
             if let Mode::RenameSessionPrompt { input } = &app.mode {
-                let overlay = Paragraph::new(format!("rename: {}", input)).block(Block::default().borders(Borders::ALL).title("rename session"));
+                let overlay = Paragraph::new(format!("rename: {}", input)).block(
+                    Block::default()
+                        .borders(Borders::ALL)
+                        .title("rename session"),
+                );
                 let oa = centered_rect(60, 3, area);
                 f.render_widget(Clear, oa);
                 f.render_widget(overlay, oa);
@@ -768,16 +884,31 @@ pub fn run(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> io::Result<
                 let mut rects: Vec<(Vec<usize>, Rect)> = Vec::new();
                 compute_rects(&win.root, app.last_window_area, &mut rects);
                 for (i, (_, r)) in rects.iter().enumerate() {
-                    if i >= 10 { break; }
+                    if i >= 10 {
+                        break;
+                    }
                     let disp = (i + app.pane_base_index) % 10;
                     let bw = 7u16;
                     let bh = 3u16;
                     let bx = r.x + r.width.saturating_sub(bw) / 2;
                     let by = r.y + r.height.saturating_sub(bh) / 2;
-                    let b = Rect { x: bx, y: by, width: bw, height: bh };
-                    let block = Block::default().borders(Borders::ALL).style(Style::default().bg(Color::Yellow).fg(Color::Black));
+                    let b = Rect {
+                        x: bx,
+                        y: by,
+                        width: bw,
+                        height: bh,
+                    };
+                    let block = Block::default()
+                        .borders(Borders::ALL)
+                        .style(Style::default().bg(Color::Yellow).fg(Color::Black));
                     let inner = block.inner(b);
-                    let line = Line::from(Span::styled(format!(" {} ", disp), Style::default().fg(Color::Black).bg(Color::Yellow).add_modifier(Modifier::BOLD)));
+                    let line = Line::from(Span::styled(
+                        format!(" {} ", disp),
+                        Style::default()
+                            .fg(Color::Black)
+                            .bg(Color::Yellow)
+                            .add_modifier(Modifier::BOLD),
+                    ));
                     let para = Paragraph::new(line).alignment(Alignment::Center);
                     f.render_widget(Clear, b);
                     f.render_widget(block, b);
@@ -789,23 +920,47 @@ pub fn run(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> io::Result<
             if let Mode::MenuMode { menu } = &app.mode {
                 let item_count = menu.items.len();
                 let height = (item_count as u16 + 2).min(20);
-                let width = menu.items.iter().map(|i| i.name.len()).max().unwrap_or(10).max(menu.title.len()) as u16 + 8;
-                
+                let width = menu
+                    .items
+                    .iter()
+                    .map(|i| i.name.len())
+                    .max()
+                    .unwrap_or(10)
+                    .max(menu.title.len()) as u16
+                    + 8;
+
                 // Calculate position based on x/y or center
                 let menu_area = if let (Some(x), Some(y)) = (menu.x, menu.y) {
-                    let x = if x < 0 { (area.width as i16 + x).max(0) as u16 } else { x as u16 };
-                    let y = if y < 0 { (area.height as i16 + y).max(0) as u16 } else { y as u16 };
-                    Rect { x: x.min(area.width.saturating_sub(width)), y: y.min(area.height.saturating_sub(height)), width, height }
+                    let x = if x < 0 {
+                        (area.width as i16 + x).max(0) as u16
+                    } else {
+                        x as u16
+                    };
+                    let y = if y < 0 {
+                        (area.height as i16 + y).max(0) as u16
+                    } else {
+                        y as u16
+                    };
+                    Rect {
+                        x: x.min(area.width.saturating_sub(width)),
+                        y: y.min(area.height.saturating_sub(height)),
+                        width,
+                        height,
+                    }
                 } else {
                     centered_rect((width * 100 / area.width.max(1)).max(30), height, area)
                 };
-                
-                let title = if menu.title.is_empty() { "Menu" } else { &menu.title };
+
+                let title = if menu.title.is_empty() {
+                    "Menu"
+                } else {
+                    &menu.title
+                };
                 let block = Block::default()
                     .borders(Borders::ALL)
                     .border_style(Style::default().fg(Color::Cyan))
                     .title(title);
-                
+
                 let mut lines: Vec<Line> = Vec::new();
                 for (i, item) in menu.items.iter().enumerate() {
                     if item.is_separator {
@@ -820,18 +975,26 @@ pub fn run(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> io::Result<
                         };
                         lines.push(Line::from(Span::styled(
                             format!("{} {} {}", marker, item.name, key_str),
-                            style
+                            style,
                         )));
                     }
                 }
-                
+
                 let para = Paragraph::new(Text::from(lines)).block(block);
                 f.render_widget(Clear, menu_area);
                 f.render_widget(para, menu_area);
             }
 
             // Render Popup mode
-            if let Mode::PopupMode { command, output, width, height, ref popup_pty, .. } = &app.mode {
+            if let Mode::PopupMode {
+                command,
+                output,
+                width,
+                height,
+                ref popup_pty,
+                ..
+            } = &app.mode
+            {
                 let w = (*width).min(area.width.saturating_sub(4));
                 let h = (*height).min(area.height.saturating_sub(4));
                 let popup_area = Rect {
@@ -840,13 +1003,13 @@ pub fn run(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> io::Result<
                     width: w,
                     height: h,
                 };
-                
+
                 let title = if command.is_empty() { "Popup" } else { command };
                 let block = Block::default()
                     .borders(Borders::ALL)
                     .border_style(Style::default().fg(Color::Yellow))
                     .title(title);
-                
+
                 // If we have a PTY, render its VT output
                 let content = if let Some(pty) = popup_pty {
                     if let Ok(parser) = pty.term.lock() {
@@ -864,28 +1027,55 @@ pub fn run(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> io::Result<
                                     // Map vt100 colors to ratatui colors
                                     match cell.fgcolor() {
                                         vt100::Color::Default => {}
-                                        vt100::Color::Idx(n) => { style = style.fg(Color::Indexed(n)); }
-                                        vt100::Color::Rgb(r, g, b) => { style = style.fg(Color::Rgb(r, g, b)); }
+                                        vt100::Color::Idx(n) => {
+                                            style = style.fg(Color::Indexed(n));
+                                        }
+                                        vt100::Color::Rgb(r, g, b) => {
+                                            style = style.fg(Color::Rgb(r, g, b));
+                                        }
                                     }
                                     match cell.bgcolor() {
                                         vt100::Color::Default => {}
-                                        vt100::Color::Idx(n) => { style = style.bg(Color::Indexed(n)); }
-                                        vt100::Color::Rgb(r, g, b) => { style = style.bg(Color::Rgb(r, g, b)); }
+                                        vt100::Color::Idx(n) => {
+                                            style = style.bg(Color::Indexed(n));
+                                        }
+                                        vt100::Color::Rgb(r, g, b) => {
+                                            style = style.bg(Color::Rgb(r, g, b));
+                                        }
                                     }
-                                    if cell.bold() { style = style.add_modifier(Modifier::BOLD); }
-                                    if cell.italic() { style = style.add_modifier(Modifier::ITALIC); }
-                                    if cell.underline() { style = style.add_modifier(Modifier::UNDERLINED); }
-                                    if cell.inverse() { style = style.add_modifier(Modifier::REVERSED); }
-                                    if cell.blink() { style = style.add_modifier(Modifier::SLOW_BLINK); }
-                                    if cell.hidden() { style = style.add_modifier(Modifier::HIDDEN); }
+                                    if cell.bold() {
+                                        style = style.add_modifier(Modifier::BOLD);
+                                    }
+                                    if cell.italic() {
+                                        style = style.add_modifier(Modifier::ITALIC);
+                                    }
+                                    if cell.underline() {
+                                        style = style.add_modifier(Modifier::UNDERLINED);
+                                    }
+                                    if cell.inverse() {
+                                        style = style.add_modifier(Modifier::REVERSED);
+                                    }
+                                    if cell.blink() {
+                                        style = style.add_modifier(Modifier::SLOW_BLINK);
+                                    }
+                                    if cell.hidden() {
+                                        style = style.add_modifier(Modifier::HIDDEN);
+                                    }
                                     let ch = cell.contents();
                                     if style != current_style {
                                         if !current_text.is_empty() {
-                                            spans.push(Span::styled(std::mem::take(&mut current_text), current_style));
+                                            spans.push(Span::styled(
+                                                std::mem::take(&mut current_text),
+                                                current_style,
+                                            ));
                                         }
                                         current_style = style;
                                     }
-                                    if ch.is_empty() { current_text.push(' '); } else { current_text.push_str(&ch); }
+                                    if ch.is_empty() {
+                                        current_text.push(' ');
+                                    } else {
+                                        current_text.push_str(ch);
+                                    }
                                 } else {
                                     current_text.push(' ');
                                 }
@@ -902,10 +1092,9 @@ pub fn run(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> io::Result<
                 } else {
                     Text::from(output.as_str())
                 };
-                
-                let para = Paragraph::new(content)
-                    .block(block);
-                
+
+                let para = Paragraph::new(content).block(block);
+
                 f.render_widget(Clear, popup_area);
                 f.render_widget(para, popup_area);
             }
@@ -913,16 +1102,17 @@ pub fn run(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> io::Result<
             // Render Confirm mode
             if let Mode::ConfirmMode { prompt, input, .. } = &app.mode {
                 let width = (prompt.len() as u16 + 10).min(80);
-                let confirm_area = centered_rect((width * 100 / area.width.max(1)).max(40), 3, area);
-                
+                let confirm_area =
+                    centered_rect((width * 100 / area.width.max(1)).max(40), 3, area);
+
                 let block = Block::default()
                     .borders(Borders::ALL)
                     .border_style(Style::default().fg(Color::Red))
                     .title("Confirm");
-                
+
                 let text = format!("{} {}", prompt, input);
                 let para = Paragraph::new(text).block(block);
-                
+
                 f.render_widget(Clear, confirm_area);
                 f.render_widget(para, confirm_area);
             }
@@ -930,7 +1120,7 @@ pub fn run(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> io::Result<
             // Render Copy-mode search prompt
             if let Mode::CopySearch { input, forward } = &app.mode {
                 let dir = if *forward { "/" } else { "?" };
-                let width = (input.len() as u16 + 10).min(80).max(30);
+                let width = (input.len() as u16 + 10).clamp(30, 80);
                 let search_area = Rect {
                     x: area.x,
                     y: area.y + area.height.saturating_sub(2),
@@ -938,8 +1128,8 @@ pub fn run(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> io::Result<
                     height: 1,
                 };
                 let text = format!("{}{}", dir, input);
-                let para = Paragraph::new(text)
-                    .style(Style::default().fg(Color::Yellow).bg(Color::Black));
+                let para =
+                    Paragraph::new(text).style(Style::default().fg(Color::Yellow).bg(Color::Black));
                 f.render_widget(para, search_area);
             }
         })?;
@@ -993,7 +1183,9 @@ pub fn run(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> io::Result<
                     if !parser.screen().hide_cursor() {
                         let (cr, cc) = parser.screen().cursor_position();
                         if let Some(inner) = crate::rendering::compute_active_rect_pub(
-                            &win.root, &win.active_path, app.last_window_area,
+                            &win.root,
+                            &win.active_path,
+                            app.last_window_area,
                         ) {
                             let cx = inner.x + cc.min(inner.width.saturating_sub(1));
                             let cy = inner.y + cr.min(inner.height.saturating_sub(1));
@@ -1005,23 +1197,28 @@ pub fn run(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> io::Result<
         }
 
         if let Mode::PaneChooser { opened_at } = &app.mode {
-            if opened_at.elapsed() > Duration::from_millis(app.display_panes_time_ms) { app.mode = Mode::Passthrough; }
+            if opened_at.elapsed() > Duration::from_millis(app.display_panes_time_ms) {
+                app.mode = Mode::Passthrough;
+            }
         }
 
         // Use a shorter poll timeout when PTY data is pending to keep rendering
         // responsive. When there are no pending control requests and no PTY
         // output, use the full 20ms timeout to reduce CPU usage.
-        let has_pty_data = crate::types::PTY_DATA_READY.swap(false, std::sync::atomic::Ordering::AcqRel);
+        let has_pty_data =
+            crate::types::PTY_DATA_READY.swap(false, std::sync::atomic::Ordering::AcqRel);
         // Use fast polling when bracket paste detector has buffered an ESC
         // so the timeout flush fires promptly (within ~1-2ms).
         #[cfg(windows)]
         let bp_pending = matches!(bp_state, bracket_paste_detect::State::MatchOpen { .. });
         #[cfg(not(windows))]
         let bp_pending = false;
-        let poll_ms = if bp_pending { 1 } else if has_pty_data { 1 } else { 20 };
+        let poll_ms = if bp_pending || has_pty_data { 1 } else { 20 };
         if event::poll(Duration::from_millis(poll_ms))? {
             match event::read()? {
-                Event::Key(key) if key.kind == KeyEventKind::Press || key.kind == KeyEventKind::Repeat => {
+                Event::Key(key)
+                    if key.kind == KeyEventKind::Press || key.kind == KeyEventKind::Repeat =>
+                {
                     // On Windows, crossterm does not emit Event::Paste — bracket
                     // paste sequences arrive as individual Key events.  Feed each
                     // key through the detector; when a complete paste is found,
@@ -1032,21 +1229,31 @@ pub fn run(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> io::Result<
                     {
                         match bracket_paste_detect::feed(&mut bp_state, key) {
                             bracket_paste_detect::Action::Forward(k) => {
-                                if handle_key(&mut app, k)? { quit = true; }
+                                if handle_key(&mut app, k)? {
+                                    quit = true;
+                                }
                             }
                             bracket_paste_detect::Action::Replay(pending, current) => {
                                 for pk in pending {
-                                    if handle_key(&mut app, pk)? { quit = true; break; }
+                                    if handle_key(&mut app, pk)? {
+                                        quit = true;
+                                        break;
+                                    }
                                 }
-                                if !quit {
-                                    if handle_key(&mut app, current)? { quit = true; }
+                                if !quit && handle_key(&mut app, current)? {
+                                    quit = true;
                                 }
                             }
                             bracket_paste_detect::Action::Consumed => {}
                             bracket_paste_detect::Action::Paste(text) => {
-                                crate::debug_log::input_log("paste", &format!(
-                                    "bracket_paste_detect: captured paste len={} preview={:?}",
-                                    text.len(), &text.chars().take(100).collect::<String>()));
+                                crate::debug_log::input_log(
+                                    "paste",
+                                    &format!(
+                                        "bracket_paste_detect: captured paste len={} preview={:?}",
+                                        text.len(),
+                                        &text.chars().take(100).collect::<String>()
+                                    ),
+                                );
                                 send_paste_to_active(&mut app, &text)?;
                             }
                         }
@@ -1068,7 +1275,12 @@ pub fn run(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> io::Result<
                     if last_resize.elapsed() > Duration::from_millis(50) {
                         let win = &mut app.windows[app.active_idx];
                         if let Some(pane) = active_pane_mut(&mut win.root, &win.active_path) {
-                            let _ = pane.master.resize(PtySize { rows: rows as u16, cols: cols as u16, pixel_width: 0, pixel_height: 0 });
+                            let _ = pane.master.resize(PtySize {
+                                rows,
+                                cols,
+                                pixel_width: 0,
+                                pixel_height: 0,
+                            });
                             if let Ok(mut parser) = pane.term.lock() {
                                 parser.screen_mut().set_size(rows, cols);
                             }
@@ -1077,7 +1289,14 @@ pub fn run(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> io::Result<
                     }
                 }
                 Event::Paste(text) => {
-                    crate::debug_log::input_log("paste", &format!("Event::Paste received, len={} text={:?}", text.len(), &text.chars().take(200).collect::<String>()));
+                    crate::debug_log::input_log(
+                        "paste",
+                        &format!(
+                            "Event::Paste received, len={} text={:?}",
+                            text.len(),
+                            &text.chars().take(200).collect::<String>()
+                        ),
+                    );
                     send_paste_to_active(&mut app, &text)?;
                 }
                 _ => {}
@@ -1093,7 +1312,10 @@ pub fn run(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> io::Result<
             match bracket_paste_detect::flush_timeout(&mut bp_state) {
                 bracket_paste_detect::TimeoutAction::Replay(pending) => {
                     for pk in pending {
-                        if handle_key(&mut app, pk)? { quit = true; break; }
+                        if handle_key(&mut app, pk)? {
+                            quit = true;
+                            break;
+                        }
                     }
                 }
                 bracket_paste_detect::TimeoutAction::None => {}
@@ -1101,97 +1323,244 @@ pub fn run(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> io::Result<
         }
 
         loop {
-            let req = if let Some(rx) = app.control_rx.as_ref() { rx.try_recv().ok() } else { None };
-            let Some(req) = req else { break; };
+            let req = if let Some(rx) = app.control_rx.as_ref() {
+                rx.try_recv().ok()
+            } else {
+                None
+            };
+            let Some(req) = req else {
+                break;
+            };
             match req {
                 CtrlReq::NewWindow(cmd, name, _detached, start_dir) => {
                     create_window(&*pty_system, &mut app, cmd.as_deref(), start_dir.as_deref())?;
-                    if let Some(n) = name { app.windows.last_mut().map(|w| w.name = n); }
+                    if let Some(n) = name {
+                        if let Some(w) = app.windows.last_mut() {
+                            w.name = n;
+                        }
+                    }
                     resize_all_panes(&mut app);
                 }
-                CtrlReq::SplitWindow(k, cmd, _detached, start_dir, _size_pct, resp) => { let _ = resp.send(if let Err(e) = split_active_with_command(&mut app, k, cmd.as_deref(), Some(&*pty_system), start_dir.as_deref()) { format!("{e}") } else { String::new() }); resize_all_panes(&mut app); }
-                CtrlReq::KillPane => { let _ = kill_active_pane(&mut app); resize_all_panes(&mut app); }
-                CtrlReq::KillPaneById(pid) => { let _ = kill_pane_by_id(&mut app, pid); resize_all_panes(&mut app); }
+                CtrlReq::SplitWindow(k, cmd, _detached, start_dir, _size_pct, resp) => {
+                    let _ = resp.send(
+                        if let Err(e) = split_active_with_command(
+                            &mut app,
+                            k,
+                            cmd.as_deref(),
+                            Some(&*pty_system),
+                            start_dir.as_deref(),
+                        ) {
+                            format!("{e}")
+                        } else {
+                            String::new()
+                        },
+                    );
+                    resize_all_panes(&mut app);
+                }
+                CtrlReq::KillPane => {
+                    let _ = kill_active_pane(&mut app);
+                    resize_all_panes(&mut app);
+                }
+                CtrlReq::KillPaneById(pid) => {
+                    let _ = kill_pane_by_id(&mut app, pid);
+                    resize_all_panes(&mut app);
+                }
                 CtrlReq::CapturePane(resp) => {
-                    if let Some(text) = capture_active_pane_text(&mut app)? { let _ = resp.send(text); } else { let _ = resp.send(String::new()); }
+                    if let Some(text) = capture_active_pane_text(&mut app)? {
+                        let _ = resp.send(text);
+                    } else {
+                        let _ = resp.send(String::new());
+                    }
                 }
                 CtrlReq::CapturePaneStyled(resp, s, e) => {
-                    if let Some(text) = capture_active_pane_styled(&mut app, s, e)? { let _ = resp.send(text); } else { let _ = resp.send(String::new()); }
+                    if let Some(text) = capture_active_pane_styled(&mut app, s, e)? {
+                        let _ = resp.send(text);
+                    } else {
+                        let _ = resp.send(String::new());
+                    }
                 }
                 CtrlReq::CapturePaneRange(resp, s, e) => {
-                    if let Some(text) = capture_active_pane_range(&mut app, s, e)? { let _ = resp.send(text); } else { let _ = resp.send(String::new()); }
+                    if let Some(text) = capture_active_pane_range(&mut app, s, e)? {
+                        let _ = resp.send(text);
+                    } else {
+                        let _ = resp.send(String::new());
+                    }
                 }
-                CtrlReq::FocusWindow(wid) => { if let Some(idx) = find_window_index_by_id(&app, wid) { app.active_idx = idx; } }
-                CtrlReq::FocusWindowTemp(wid) => { if let Some(idx) = find_window_index_by_id(&app, wid) { app.active_idx = idx; } }
-                CtrlReq::FocusPane(pid) => { focus_pane_by_id(&mut app, pid); }
-                CtrlReq::FocusPaneByIndex(idx) => { focus_pane_by_index(&mut app, idx); }
-                CtrlReq::FocusPaneTemp(pid) => { focus_pane_by_id(&mut app, pid); }
-                CtrlReq::FocusPaneByIndexTemp(idx) => { focus_pane_by_index(&mut app, idx); }
+                CtrlReq::FocusWindow(wid) => {
+                    if let Some(idx) = find_window_index_by_id(&app, wid) {
+                        app.active_idx = idx;
+                    }
+                }
+                CtrlReq::FocusWindowTemp(wid) => {
+                    if let Some(idx) = find_window_index_by_id(&app, wid) {
+                        app.active_idx = idx;
+                    }
+                }
+                CtrlReq::FocusPane(pid) => {
+                    focus_pane_by_id(&mut app, pid);
+                }
+                CtrlReq::FocusPaneByIndex(idx) => {
+                    focus_pane_by_index(&mut app, idx);
+                }
+                CtrlReq::FocusPaneTemp(pid) => {
+                    focus_pane_by_id(&mut app, pid);
+                }
+                CtrlReq::FocusPaneByIndexTemp(idx) => {
+                    focus_pane_by_index(&mut app, idx);
+                }
                 CtrlReq::SessionInfo(resp) => {
-                    let attached = if app.attached_clients > 0 { "(attached)" } else { "(detached)" };
+                    let attached = if app.attached_clients > 0 {
+                        "(attached)"
+                    } else {
+                        "(detached)"
+                    };
                     let windows = app.windows.len();
-                    let (w,h) = {
+                    let (w, h) = {
                         let win = &mut app.windows[app.active_idx];
-                        let mut size = (0,0);
-                        if let Some(p) = active_pane_mut(&mut win.root, &win.active_path) { size = (p.last_cols as i32, p.last_rows as i32); }
+                        let mut size = (0, 0);
+                        if let Some(p) = active_pane_mut(&mut win.root, &win.active_path) {
+                            size = (p.last_cols as i32, p.last_rows as i32);
+                        }
                         size
                     };
                     let created = app.created_at.format("%a %b %e %H:%M:%S %Y");
-                    let line = format!("{}: {} windows (created {}) [{}x{}] {}\n", app.session_name, windows, created, w, h, attached);
+                    let line = format!(
+                        "{}: {} windows (created {}) [{}x{}] {}\n",
+                        app.session_name, windows, created, w, h, attached
+                    );
                     let _ = resp.send(line);
                 }
-                CtrlReq::ClientAttach(_cid) => { app.attached_clients = app.attached_clients.saturating_add(1); }
-                CtrlReq::ClientDetach(_cid) => { app.attached_clients = app.attached_clients.saturating_sub(1); }
+                CtrlReq::ClientAttach(_cid) => {
+                    app.attached_clients = app.attached_clients.saturating_add(1);
+                }
+                CtrlReq::ClientDetach(_cid) => {
+                    app.attached_clients = app.attached_clients.saturating_sub(1);
+                }
                 CtrlReq::DumpLayout(resp) => {
                     let json = dump_layout_json(&mut app)?;
                     let _ = resp.send(json);
                 }
-                CtrlReq::SendText(s) => { send_text_to_active(&mut app, &s)?; }
-                CtrlReq::SendKey(k) => { send_key_to_active(&mut app, &k)?; }
-                CtrlReq::SendPaste(s) => { send_paste_to_active(&mut app, &s)?; }
-                CtrlReq::ZoomPane => { toggle_zoom(&mut app); }
-                CtrlReq::CopyEnter => { enter_copy_mode(&mut app); }
-                CtrlReq::CopyMove(dx, dy) => { move_copy_cursor(&mut app, dx, dy); }
-                CtrlReq::CopyAnchor => { if let Some((r,c)) = current_prompt_pos(&mut app) { app.copy_anchor = Some((r,c)); app.copy_pos = Some((r,c)); } }
-                CtrlReq::CopyYank => { let _ = yank_selection(&mut app); app.mode = Mode::Passthrough; }
+                CtrlReq::SendText(s) => {
+                    send_text_to_active(&mut app, &s)?;
+                }
+                CtrlReq::SendKey(k) => {
+                    send_key_to_active(&mut app, &k)?;
+                }
+                CtrlReq::SendPaste(s) => {
+                    send_paste_to_active(&mut app, &s)?;
+                }
+                CtrlReq::ZoomPane => {
+                    toggle_zoom(&mut app);
+                }
+                CtrlReq::CopyEnter => {
+                    enter_copy_mode(&mut app);
+                }
+                CtrlReq::CopyMove(dx, dy) => {
+                    move_copy_cursor(&mut app, dx, dy);
+                }
+                CtrlReq::CopyAnchor => {
+                    if let Some((r, c)) = current_prompt_pos(&mut app) {
+                        app.copy_anchor = Some((r, c));
+                        app.copy_pos = Some((r, c));
+                    }
+                }
+                CtrlReq::CopyYank => {
+                    let _ = yank_selection(&mut app);
+                    app.mode = Mode::Passthrough;
+                }
                 CtrlReq::CopyRectToggle => {
                     app.copy_selection_mode = match app.copy_selection_mode {
                         crate::types::SelectionMode::Rect => crate::types::SelectionMode::Char,
                         _ => crate::types::SelectionMode::Rect,
                     };
                 }
-                CtrlReq::ClientSize(_cid, w, h) => { 
-                    app.last_window_area = Rect { x: 0, y: 0, width: w, height: h }; 
+                CtrlReq::ClientSize(_cid, w, h) => {
+                    app.last_window_area = Rect {
+                        x: 0,
+                        y: 0,
+                        width: w,
+                        height: h,
+                    };
                     resize_all_panes(&mut app);
                 }
-                CtrlReq::FocusPaneCmd(pid) => { focus_pane_by_id(&mut app, pid); }
-                CtrlReq::FocusWindowCmd(wid) => { if let Some(idx) = find_window_index_by_id(&app, wid) { app.active_idx = idx; } }
-                CtrlReq::MouseDown(x,y) => { remote_mouse_down(&mut app, x, y); }
-                CtrlReq::MouseDownRight(x,y) => { remote_mouse_button(&mut app, x, y, 2, true); }
-                CtrlReq::MouseDownMiddle(x,y) => { remote_mouse_button(&mut app, x, y, 1, true); }
-                CtrlReq::MouseDrag(x,y) => { remote_mouse_drag(&mut app, x, y); }
-                CtrlReq::MouseUp(x,y) => { remote_mouse_up(&mut app, x, y); }
-                CtrlReq::MouseUpRight(x,y) => { remote_mouse_button(&mut app, x, y, 2, false); }
-                CtrlReq::MouseUpMiddle(x,y) => { remote_mouse_button(&mut app, x, y, 1, false); }
-                CtrlReq::MouseMove(x,y) => { remote_mouse_motion(&mut app, x, y); }
-                CtrlReq::ScrollUp(x, y) => { remote_scroll_up(&mut app, x, y); }
-                CtrlReq::ScrollDown(x, y) => { remote_scroll_down(&mut app, x, y); }
-                CtrlReq::NextWindow => { if !app.windows.is_empty() { app.active_idx = (app.active_idx + 1) % app.windows.len(); } }
-                CtrlReq::PrevWindow => { if !app.windows.is_empty() { app.active_idx = (app.active_idx + app.windows.len() - 1) % app.windows.len(); } }
-                CtrlReq::RenameWindow(name) => { let win = &mut app.windows[app.active_idx]; win.name = name; }
-                CtrlReq::ListWindows(resp) => { let json = list_windows_json(&app)?; let _ = resp.send(json); }
-                CtrlReq::ListTree(resp) => { let json = list_tree_json(&app)?; let _ = resp.send(json); }
-                CtrlReq::ToggleSync => { app.sync_input = !app.sync_input; }
+                CtrlReq::FocusPaneCmd(pid) => {
+                    focus_pane_by_id(&mut app, pid);
+                }
+                CtrlReq::FocusWindowCmd(wid) => {
+                    if let Some(idx) = find_window_index_by_id(&app, wid) {
+                        app.active_idx = idx;
+                    }
+                }
+                CtrlReq::MouseDown(x, y) => {
+                    remote_mouse_down(&mut app, x, y);
+                }
+                CtrlReq::MouseDownRight(x, y) => {
+                    remote_mouse_button(&mut app, x, y, 2, true);
+                }
+                CtrlReq::MouseDownMiddle(x, y) => {
+                    remote_mouse_button(&mut app, x, y, 1, true);
+                }
+                CtrlReq::MouseDrag(x, y) => {
+                    remote_mouse_drag(&mut app, x, y);
+                }
+                CtrlReq::MouseUp(x, y) => {
+                    remote_mouse_up(&mut app, x, y);
+                }
+                CtrlReq::MouseUpRight(x, y) => {
+                    remote_mouse_button(&mut app, x, y, 2, false);
+                }
+                CtrlReq::MouseUpMiddle(x, y) => {
+                    remote_mouse_button(&mut app, x, y, 1, false);
+                }
+                CtrlReq::MouseMove(x, y) => {
+                    remote_mouse_motion(&mut app, x, y);
+                }
+                CtrlReq::ScrollUp(x, y) => {
+                    remote_scroll_up(&mut app, x, y);
+                }
+                CtrlReq::ScrollDown(x, y) => {
+                    remote_scroll_down(&mut app, x, y);
+                }
+                CtrlReq::NextWindow => {
+                    if !app.windows.is_empty() {
+                        app.active_idx = (app.active_idx + 1) % app.windows.len();
+                    }
+                }
+                CtrlReq::PrevWindow => {
+                    if !app.windows.is_empty() {
+                        app.active_idx =
+                            (app.active_idx + app.windows.len() - 1) % app.windows.len();
+                    }
+                }
+                CtrlReq::RenameWindow(name) => {
+                    let win = &mut app.windows[app.active_idx];
+                    win.name = name;
+                }
+                CtrlReq::ListWindows(resp) => {
+                    let json = list_windows_json(&app)?;
+                    let _ = resp.send(json);
+                }
+                CtrlReq::ListTree(resp) => {
+                    let json = list_tree_json(&app)?;
+                    let _ = resp.send(json);
+                }
+                CtrlReq::ToggleSync => {
+                    app.sync_input = !app.sync_input;
+                }
                 CtrlReq::SetPaneTitle(title) => {
                     let win = &mut app.windows[app.active_idx];
-                    if let Some(p) = active_pane_mut(&mut win.root, &win.active_path) { p.title = title; }
+                    if let Some(p) = active_pane_mut(&mut win.root, &win.active_path) {
+                        p.title = title;
+                    }
                 }
                 CtrlReq::KillServer | CtrlReq::KillSession => {
                     // Kill all child processes and exit
                     for win in app.windows.iter_mut() {
                         kill_all_children(&mut win.root);
                     }
-                    let home = env::var("USERPROFILE").or_else(|_| env::var("HOME")).unwrap_or_default();
+                    let home = env::var("USERPROFILE")
+                        .or_else(|_| env::var("HOME"))
+                        .unwrap_or_default();
                     let regpath = format!("{}/.psmux/{}.port", home, app.port_file_base());
                     let keypath = format!("{}/.psmux/{}.key", home, app.port_file_base());
                     let _ = std::fs::remove_file(&regpath);
@@ -1217,7 +1586,9 @@ pub fn run(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> io::Result<
             }
         }
 
-        if quit { break; }
+        if quit {
+            break;
+        }
     }
     // teardown: kill all pane children
     for win in app.windows.iter_mut() {

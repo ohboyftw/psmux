@@ -1,13 +1,13 @@
-use std::env;
-use std::cell::RefCell;
 use crossterm::event::{KeyCode, KeyModifiers};
+use std::cell::RefCell;
+use std::env;
 
-use crate::types::{AppState, Action, Bind};
 use crate::commands::parse_command_to_action;
+use crate::types::{Action, AppState, Bind};
 
 // Track the current config file being parsed (for #{current_file}, #{d:current_file})
 thread_local! {
-    static CURRENT_CONFIG_FILE: RefCell<String> = RefCell::new(String::new());
+    static CURRENT_CONFIG_FILE: RefCell<String> = const { RefCell::new(String::new()) };
 }
 
 /// Get the current config file path being parsed.
@@ -24,7 +24,9 @@ pub fn load_config(app: &mut AppState) {
     // If -f flag was used, load that specific config file instead of default search
     if let Ok(config_file) = env::var("PSMUX_CONFIG_FILE") {
         let expanded = if config_file.starts_with('~') {
-            let home = env::var("USERPROFILE").or_else(|_| env::var("HOME")).unwrap_or_default();
+            let home = env::var("USERPROFILE")
+                .or_else(|_| env::var("HOME"))
+                .unwrap_or_default();
             config_file.replacen('~', &home, 1)
         } else {
             config_file
@@ -37,7 +39,9 @@ pub fn load_config(app: &mut AppState) {
         return;
     }
 
-    let home = env::var("USERPROFILE").or_else(|_| env::var("HOME")).unwrap_or_default();
+    let home = env::var("USERPROFILE")
+        .or_else(|_| env::var("HOME"))
+        .unwrap_or_default();
     let paths = vec![
         format!("{}\\.psmux.conf", home),
         format!("{}\\.psmuxrc", home),
@@ -68,8 +72,8 @@ pub fn parse_config_content(app: &mut AppState, content: &str) {
     // - active: whether the current block should execute lines
     // - satisfied: whether any branch of the current if/elif/else has matched
     struct IfState {
-        active: bool,    // are we executing lines in this block?
-        satisfied: bool, // has any branch of this if/elif/else already matched?
+        active: bool,        // are we executing lines in this block?
+        satisfied: bool,     // has any branch of this if/elif/else already matched?
         parent_active: bool, // was the parent context active?
     }
 
@@ -83,14 +87,12 @@ pub fn parse_config_content(app: &mut AppState, content: &str) {
         if trimmed.ends_with('\\') {
             continuation.push_str(trimmed.trim_end_matches('\\'));
             continuation.push(' ');
+        } else if !continuation.is_empty() {
+            continuation.push_str(trimmed);
+            lines.push(continuation.clone());
+            continuation.clear();
         } else {
-            if !continuation.is_empty() {
-                continuation.push_str(trimmed);
-                lines.push(continuation.clone());
-                continuation.clear();
-            } else {
-                lines.push(trimmed.to_string());
-            }
+            lines.push(trimmed.to_string());
         }
     }
     if !continuation.is_empty() {
@@ -101,7 +103,9 @@ pub fn parse_config_content(app: &mut AppState, content: &str) {
         let l = line.trim();
 
         // Skip empty lines and comments (but comments start with # not %)
-        if l.is_empty() { continue; }
+        if l.is_empty() {
+            continue;
+        }
 
         // Handle %-directives before checking for # comments
         if l.starts_with('%') {
@@ -132,7 +136,9 @@ pub fn parse_config_content(app: &mut AppState, content: &str) {
                         let expanded = crate::format::expand_format(condition, app);
                         let result = is_truthy_config(&expanded);
                         state.active = result;
-                        if result { state.satisfied = true; }
+                        if result {
+                            state.satisfied = true;
+                        }
                     } else {
                         state.active = false;
                     }
@@ -153,12 +159,15 @@ pub fn parse_config_content(app: &mut AppState, content: &str) {
                 continue;
             }
 
-            if l.starts_with("%hidden ") {
+            if let Some(hidden_rest) = l.strip_prefix("%hidden ") {
                 // %hidden NAME=VALUE — define a hidden config variable
-                let rest = l[8..].trim();
+                let rest = hidden_rest.trim();
                 if let Some(eq_pos) = rest.find('=') {
                     let name = rest[..eq_pos].trim();
-                    let value = rest[eq_pos + 1..].trim().trim_matches('"').trim_matches('\'');
+                    let value = rest[eq_pos + 1..]
+                        .trim()
+                        .trim_matches('"')
+                        .trim_matches('\'');
                     // Only process if active
                     let active = if_stack.last().map(|s| s.active).unwrap_or(true);
                     if active {
@@ -174,7 +183,9 @@ pub fn parse_config_content(app: &mut AppState, content: &str) {
 
         // Regular line — only process if all enclosing %if blocks are active
         let active = if_stack.last().map(|s| s.active).unwrap_or(true);
-        if !active { continue; }
+        if !active {
+            continue;
+        }
 
         // Expand $NAME / ${NAME} references from %hidden variables.
         // tmux's %hidden directive defines server-level variables that are
@@ -253,47 +264,44 @@ fn is_truthy_config(s: &str) -> bool {
 
 pub fn parse_config_line(app: &mut AppState, line: &str) {
     let l = line.trim();
-    if l.is_empty() || l.starts_with('#') { return; }
-    
+    if l.is_empty() || l.starts_with('#') {
+        return;
+    }
+
     let l = if l.ends_with('\\') {
         l.trim_end_matches('\\').trim()
     } else {
         l
     };
-    
+
     if l.starts_with("set-option ") || l.starts_with("set ") {
         parse_set_option(app, l);
-    }
-    else if l.starts_with("setw ") || l.starts_with("set-window-option ") {
+    } else if l.starts_with("setw ") || l.starts_with("set-window-option ") {
         // setw maps to the same option parser (tmux window options overlap)
         parse_set_option(app, l);
-    }
-    else if l.starts_with("bind-key ") || l.starts_with("bind ") {
+    } else if l.starts_with("bind-key ") || l.starts_with("bind ") {
         parse_bind_key(app, l);
-    }
-    else if l.starts_with("unbind-key ") || l.starts_with("unbind ") {
+    } else if l.starts_with("unbind-key ") || l.starts_with("unbind ") {
         parse_unbind_key(app, l);
-    }
-    else if l.starts_with("source-file ") || l.starts_with("source ") {
+    } else if l.starts_with("source-file ") || l.starts_with("source ") {
         let parts: Vec<&str> = l.splitn(2, ' ').collect();
         if parts.len() > 1 {
             source_file(app, parts[1].trim());
         }
-    }
-    else if l.starts_with("run-shell ") || l.starts_with("run ") {
+    } else if l.starts_with("run-shell ") || l.starts_with("run ") {
         parse_run_shell(app, l);
-    }
-    else if l.starts_with("if-shell ") || l.starts_with("if ") {
+    } else if l.starts_with("if-shell ") || l.starts_with("if ") {
         parse_if_shell(app, l);
-    }
-    else if l.starts_with("set-hook ") {
+    } else if l.starts_with("set-hook ") {
         // Parse set-hook: set-hook [-g] hook-name command
         let parts: Vec<&str> = l.split_whitespace().collect();
         let mut i = 1;
-        while i < parts.len() && parts[i].starts_with('-') { i += 1; }
+        while i < parts.len() && parts[i].starts_with('-') {
+            i += 1;
+        }
         if i + 1 < parts.len() {
             let hook = parts[i].to_string();
-            let cmd = parts[i+1..].join(" ");
+            let cmd = parts[i + 1..].join(" ");
             // Strip matching outer quotes (single or double) that wrap the command
             let cmd = {
                 let trimmed = cmd.trim();
@@ -302,7 +310,7 @@ pub fn parse_config_line(app: &mut AppState, line: &str) {
                     let first = bytes[0];
                     let last = bytes[bytes.len() - 1];
                     if (first == b'\'' && last == b'\'') || (first == b'"' && last == b'"') {
-                        trimmed[1..trimmed.len()-1].to_string()
+                        trimmed[1..trimmed.len() - 1].to_string()
                     } else {
                         cmd
                     }
@@ -310,15 +318,16 @@ pub fn parse_config_line(app: &mut AppState, line: &str) {
                     cmd
                 }
             };
-            app.hooks.entry(hook).or_insert_with(Vec::new).push(cmd);
+            app.hooks.entry(hook).or_default().push(cmd);
         }
-    }
-    else if l.starts_with("set-environment ") || l.starts_with("setenv ") {
+    } else if l.starts_with("set-environment ") || l.starts_with("setenv ") {
         let parts: Vec<&str> = l.split_whitespace().collect();
         let mut i = 1;
-        while i < parts.len() && parts[i].starts_with('-') { i += 1; }
+        while i < parts.len() && parts[i].starts_with('-') {
+            i += 1;
+        }
         if i + 1 < parts.len() {
-            let val = parts[i+1..].join(" ");
+            let val = parts[i + 1..].join(" ");
             app.environment.insert(parts[i].to_string(), val.clone());
             // Also set on the server process so child panes inherit via env block
             std::env::set_var(parts[i], &val);
@@ -328,33 +337,49 @@ pub fn parse_config_line(app: &mut AppState, line: &str) {
 
 fn parse_set_option(app: &mut AppState, line: &str) {
     let parts: Vec<&str> = line.split_whitespace().collect();
-    if parts.len() < 2 { return; }
-    
+    if parts.len() < 2 {
+        return;
+    }
+
     let mut i = 1;
     let mut is_global = false;
-    let mut format_expand = false;  // -F: expand format strings in value
-    let mut only_if_unset = false;  // -o: only set if not already set
-    let mut append_mode = false;    // -a: append to current value
-    let mut unset_mode = false;     // -u: unset (reset to default)
-    
+    let mut format_expand = false; // -F: expand format strings in value
+    let mut only_if_unset = false; // -o: only set if not already set
+    let mut append_mode = false; // -a: append to current value
+    let mut unset_mode = false; // -u: unset (reset to default)
+
     while i < parts.len() {
         let p = parts[i];
         if p.starts_with('-') {
-            if p.contains('g') { is_global = true; }
-            if p.contains('F') { format_expand = true; }
-            if p.contains('o') { only_if_unset = true; }
-            if p.contains('a') { append_mode = true; }
-            if p.contains('u') { unset_mode = true; }
+            if p.contains('g') {
+                is_global = true;
+            }
+            if p.contains('F') {
+                format_expand = true;
+            }
+            if p.contains('o') {
+                only_if_unset = true;
+            }
+            if p.contains('a') {
+                append_mode = true;
+            }
+            if p.contains('u') {
+                unset_mode = true;
+            }
             // -q (quiet): no-op — we don't produce errors for unknown options
             // -w: window option — treat same as global for our single-server model
             i += 1;
-            if p.contains('t') && i < parts.len() { i += 1; }
+            if p.contains('t') && i < parts.len() {
+                i += 1;
+            }
         } else {
             break;
         }
     }
-    
-    if i >= parts.len() { return; }
+
+    if i >= parts.len() {
+        return;
+    }
 
     // Extract key and value
     let key = parts[i];
@@ -374,15 +399,17 @@ fn parse_set_option(app: &mut AppState, line: &str) {
     if only_if_unset {
         let current = crate::format::lookup_option_pub(key, app);
         if let Some(ref v) = current {
-            if !v.is_empty() { return; }
+            if !v.is_empty() {
+                return;
+            }
         }
     }
 
     // Expand format strings in the value if -F flag is set
     let value = if format_expand && !raw_value.is_empty() {
         let stripped = raw_value.trim_matches('"').trim_matches('\'');
-        let expanded = crate::format::expand_format(stripped, app);
-        expanded
+
+        crate::format::expand_format(stripped, app)
     } else {
         raw_value
     };
@@ -401,16 +428,16 @@ fn parse_set_option(app: &mut AppState, line: &str) {
 
 pub fn parse_option_value(app: &mut AppState, rest: &str, _is_global: bool) {
     let parts: Vec<&str> = rest.splitn(2, ' ').collect();
-    if parts.is_empty() { return; }
-    
+    if parts.is_empty() {
+        return;
+    }
+
     let key = parts[0].trim();
     let value = if parts.len() > 1 {
         let v = parts[1].trim();
         // Only strip quotes when the entire value is wrapped in matching
         // quotes.  Preserves values like `"path with spaces" --login`.
-        if (v.starts_with('"') && v.ends_with('"'))
-            || (v.starts_with('\'') && v.ends_with('\''))
-        {
+        if (v.starts_with('"') && v.ends_with('"')) || (v.starts_with('\'') && v.ends_with('\'')) {
             &v[1..v.len() - 1]
         } else {
             v
@@ -418,7 +445,7 @@ pub fn parse_option_value(app: &mut AppState, rest: &str, _is_global: bool) {
     } else {
         ""
     };
-    
+
     match key {
         "status-left" => app.status_left = value.to_string(),
         "status-right" => app.status_right = value.to_string(),
@@ -444,7 +471,14 @@ pub fn parse_option_value(app: &mut AppState, rest: &str, _is_global: bool) {
             app.prediction_dimming = !matches!(value, "off" | "false" | "0");
         }
         "cursor-style" => env::set_var("PSMUX_CURSOR_STYLE", value),
-        "cursor-blink" => env::set_var("PSMUX_CURSOR_BLINK", if matches!(value, "on"|"true"|"1") { "1" } else { "0" }),
+        "cursor-blink" => env::set_var(
+            "PSMUX_CURSOR_BLINK",
+            if matches!(value, "on" | "true" | "1") {
+                "1"
+            } else {
+                "0"
+            },
+        ),
         "status" => {
             if let Ok(n) = value.parse::<usize>() {
                 if n >= 2 {
@@ -468,9 +502,13 @@ pub fn parse_option_value(app: &mut AppState, rest: &str, _is_global: bool) {
             app.status_position = value.to_string();
         }
         "status-interval" => {
-            if let Ok(n) = value.parse::<u64>() { app.status_interval = n; }
+            if let Ok(n) = value.parse::<u64>() {
+                app.status_interval = n;
+            }
         }
-        "status-justify" => { app.status_justify = value.to_string(); }
+        "status-justify" => {
+            app.status_justify = value.to_string();
+        }
         "base-index" => {
             if let Ok(idx) = value.parse::<usize>() {
                 app.window_base_index = idx;
@@ -535,61 +573,139 @@ pub fn parse_option_value(app: &mut AppState, rest: &str, _is_global: bool) {
         "set-titles-string" => {
             app.set_titles_string = value.to_string();
         }
-        "status-keys" => { app.environment.insert(key.to_string(), value.to_string()); }
-        "pane-border-style" => { app.pane_border_style = value.to_string(); }
-        "pane-active-border-style" => { app.pane_active_border_style = value.to_string(); }
-        "window-status-format" => { app.window_status_format = value.to_string(); }
-        "window-status-current-format" => { app.window_status_current_format = value.to_string(); }
-        "window-status-separator" => { app.window_status_separator = value.to_string(); }
+        "status-keys" => {
+            app.environment.insert(key.to_string(), value.to_string());
+        }
+        "pane-border-style" => {
+            app.pane_border_style = value.to_string();
+        }
+        "pane-active-border-style" => {
+            app.pane_active_border_style = value.to_string();
+        }
+        "window-status-format" => {
+            app.window_status_format = value.to_string();
+        }
+        "window-status-current-format" => {
+            app.window_status_current_format = value.to_string();
+        }
+        "window-status-separator" => {
+            app.window_status_separator = value.to_string();
+        }
         "automatic-rename" => {
             app.automatic_rename = matches!(value, "on" | "true" | "1");
         }
         "synchronize-panes" => {
             app.sync_input = matches!(value, "on" | "true" | "1");
         }
-        "allow-rename" => { app.environment.insert(key.to_string(), value.to_string()); }
-        "terminal-overrides" => { app.environment.insert(key.to_string(), value.to_string()); }
-        "default-terminal" => { app.environment.insert(key.to_string(), value.to_string()); }
-        "update-environment" => { app.environment.insert(key.to_string(), value.to_string()); }
-        "bell-action" => { app.bell_action = value.to_string(); }
-        "visual-bell" => { app.visual_bell = matches!(value, "on" | "true" | "1"); }
-        "activity-action" => { app.environment.insert(key.to_string(), value.to_string()); }
-        "silence-action" => { app.environment.insert(key.to_string(), value.to_string()); }
-        "monitor-silence" => {
-            if let Ok(n) = value.parse::<u64>() { app.monitor_silence = n; }
+        "allow-rename" => {
+            app.environment.insert(key.to_string(), value.to_string());
         }
-        "message-style" => { app.message_style = value.to_string(); }
-        "message-command-style" => { app.message_command_style = value.to_string(); }
-        "mode-style" => { app.mode_style = value.to_string(); }
-        "window-status-style" => { app.window_status_style = value.to_string(); }
-        "window-status-current-style" => { app.window_status_current_style = value.to_string(); }
-        "window-status-activity-style" => { app.window_status_activity_style = value.to_string(); }
-        "window-status-bell-style" => { app.window_status_bell_style = value.to_string(); }
-        "window-status-last-style" => { app.window_status_last_style = value.to_string(); }
-        "status-left-style" => { app.status_left_style = value.to_string(); }
-        "status-right-style" => { app.status_right_style = value.to_string(); }
-        "clock-mode-colour" | "clock-mode-style" => { app.environment.insert(key.to_string(), value.to_string()); }
-        "pane-border-format" | "pane-border-status" => { app.environment.insert(key.to_string(), value.to_string()); }
-        "popup-style" | "popup-border-style" | "popup-border-lines" => { app.environment.insert(key.to_string(), value.to_string()); }
-        "window-style" | "window-active-style" => { app.environment.insert(key.to_string(), value.to_string()); }
-        "wrap-search" => { app.environment.insert(key.to_string(), value.to_string()); }
-        "lock-after-time" | "lock-command" => { app.environment.insert(key.to_string(), value.to_string()); }
+        "terminal-overrides" => {
+            app.environment.insert(key.to_string(), value.to_string());
+        }
+        "default-terminal" => {
+            app.environment.insert(key.to_string(), value.to_string());
+        }
+        "update-environment" => {
+            app.environment.insert(key.to_string(), value.to_string());
+        }
+        "bell-action" => {
+            app.bell_action = value.to_string();
+        }
+        "visual-bell" => {
+            app.visual_bell = matches!(value, "on" | "true" | "1");
+        }
+        "activity-action" => {
+            app.environment.insert(key.to_string(), value.to_string());
+        }
+        "silence-action" => {
+            app.environment.insert(key.to_string(), value.to_string());
+        }
+        "monitor-silence" => {
+            if let Ok(n) = value.parse::<u64>() {
+                app.monitor_silence = n;
+            }
+        }
+        "message-style" => {
+            app.message_style = value.to_string();
+        }
+        "message-command-style" => {
+            app.message_command_style = value.to_string();
+        }
+        "mode-style" => {
+            app.mode_style = value.to_string();
+        }
+        "window-status-style" => {
+            app.window_status_style = value.to_string();
+        }
+        "window-status-current-style" => {
+            app.window_status_current_style = value.to_string();
+        }
+        "window-status-activity-style" => {
+            app.window_status_activity_style = value.to_string();
+        }
+        "window-status-bell-style" => {
+            app.window_status_bell_style = value.to_string();
+        }
+        "window-status-last-style" => {
+            app.window_status_last_style = value.to_string();
+        }
+        "status-left-style" => {
+            app.status_left_style = value.to_string();
+        }
+        "status-right-style" => {
+            app.status_right_style = value.to_string();
+        }
+        "clock-mode-colour" | "clock-mode-style" => {
+            app.environment.insert(key.to_string(), value.to_string());
+        }
+        "pane-border-format" | "pane-border-status" => {
+            app.environment.insert(key.to_string(), value.to_string());
+        }
+        "popup-style" | "popup-border-style" | "popup-border-lines" => {
+            app.environment.insert(key.to_string(), value.to_string());
+        }
+        "window-style" | "window-active-style" => {
+            app.environment.insert(key.to_string(), value.to_string());
+        }
+        "wrap-search" => {
+            app.environment.insert(key.to_string(), value.to_string());
+        }
+        "lock-after-time" | "lock-command" => {
+            app.environment.insert(key.to_string(), value.to_string());
+        }
         "main-pane-width" => {
-            if let Ok(n) = value.parse::<u16>() { app.main_pane_width = n; }
+            if let Ok(n) = value.parse::<u16>() {
+                app.main_pane_width = n;
+            }
         }
         "main-pane-height" => {
-            if let Ok(n) = value.parse::<u16>() { app.main_pane_height = n; }
+            if let Ok(n) = value.parse::<u16>() {
+                app.main_pane_height = n;
+            }
         }
         "status-left-length" => {
-            if let Ok(n) = value.parse::<usize>() { app.status_left_length = n; }
+            if let Ok(n) = value.parse::<usize>() {
+                app.status_left_length = n;
+            }
         }
         "status-right-length" => {
-            if let Ok(n) = value.parse::<usize>() { app.status_right_length = n; }
+            if let Ok(n) = value.parse::<usize>() {
+                app.status_right_length = n;
+            }
         }
-        "window-size" => { app.window_size = value.to_string(); }
-        "allow-passthrough" => { app.allow_passthrough = value.to_string(); }
-        "copy-command" => { app.copy_command = value.to_string(); }
-        "set-clipboard" => { app.set_clipboard = value.to_string(); }
+        "window-size" => {
+            app.window_size = value.to_string();
+        }
+        "allow-passthrough" => {
+            app.allow_passthrough = value.to_string();
+        }
+        "copy-command" => {
+            app.copy_command = value.to_string();
+        }
+        "set-clipboard" => {
+            app.set_clipboard = value.to_string();
+        }
         "env-shim" => {
             app.env_shim = matches!(value, "on" | "true" | "1");
         }
@@ -602,14 +718,14 @@ pub fn parse_option_value(app: &mut AppState, rest: &str, _is_global: bool) {
         "command-alias" => {
             if let Some(pos) = value.find('=') {
                 let alias = value[..pos].trim().to_string();
-                let expansion = value[pos+1..].trim().to_string();
+                let expansion = value[pos + 1..].trim().to_string();
                 app.command_aliases.insert(alias, expansion);
             }
         }
         _ => {
             // Handle status-format[N] patterns
             if key.starts_with("status-format[") && key.ends_with(']') {
-                if let Ok(idx) = key["status-format[".len()..key.len()-1].parse::<usize>() {
+                if let Ok(idx) = key["status-format[".len()..key.len() - 1].parse::<usize>() {
                     while app.status_format.len() <= idx {
                         app.status_format.push(String::new());
                     }
@@ -636,12 +752,21 @@ pub fn parse_option_value(app: &mut AppState, rest: &str, _is_global: bool) {
             if key == "@plugin" && !value.is_empty() {
                 let plugin_name = value.rsplit('/').next().unwrap_or(value);
                 if plugin_name != "ppm" {
-                    let home = env::var("USERPROFILE").or_else(|_| env::var("HOME")).unwrap_or_default();
+                    let home = env::var("USERPROFILE")
+                        .or_else(|_| env::var("HOME"))
+                        .unwrap_or_default();
                     let candidates = [
-                        format!("{}\\.psmux\\plugins\\{}\\plugin.conf", home, value.replace('/', "\\")),
+                        format!(
+                            "{}\\.psmux\\plugins\\{}\\plugin.conf",
+                            home,
+                            value.replace('/', "\\")
+                        ),
                         format!("{}\\.psmux\\plugins\\{}\\plugin.conf", home, plugin_name),
                         // Common layout: plugins installed under psmux-plugins/ subdirectory
-                        format!("{}\\.psmux\\plugins\\psmux-plugins\\{}\\plugin.conf", home, plugin_name),
+                        format!(
+                            "{}\\.psmux\\plugins\\psmux-plugins\\{}\\plugin.conf",
+                            home, plugin_name
+                        ),
                     ];
                     let mut found = false;
                     for conf in &candidates {
@@ -659,9 +784,20 @@ pub fn parse_option_value(app: &mut AppState, rest: &str, _is_global: bool) {
                     // If no plugin.conf, try .ps1 entry scripts
                     if !found {
                         let ps1_candidates = [
-                            format!("{}\\.psmux\\plugins\\{}\\{}.ps1", home, value.replace('/', "\\"), plugin_name),
-                            format!("{}\\.psmux\\plugins\\{}\\{}.ps1", home, plugin_name, plugin_name),
-                            format!("{}\\.psmux\\plugins\\psmux-plugins\\{}\\{}.ps1", home, plugin_name, plugin_name),
+                            format!(
+                                "{}\\.psmux\\plugins\\{}\\{}.ps1",
+                                home,
+                                value.replace('/', "\\"),
+                                plugin_name
+                            ),
+                            format!(
+                                "{}\\.psmux\\plugins\\{}\\{}.ps1",
+                                home, plugin_name, plugin_name
+                            ),
+                            format!(
+                                "{}\\.psmux\\plugins\\psmux-plugins\\{}\\{}.ps1",
+                                home, plugin_name, plugin_name
+                            ),
                         ];
                         for ps1 in &ps1_candidates {
                             if std::path::Path::new(ps1).exists() {
@@ -698,7 +834,7 @@ fn split_chained_commands(command: &str) -> Vec<String> {
     let mut commands: Vec<String> = Vec::new();
     let mut current = String::new();
     let tokens: Vec<&str> = command.split_whitespace().collect();
-    
+
     for token in &tokens {
         if *token == "\\;" || *token == ";" {
             let trimmed = current.trim().to_string();
@@ -707,7 +843,9 @@ fn split_chained_commands(command: &str) -> Vec<String> {
             }
             current.clear();
         } else {
-            if !current.is_empty() { current.push(' '); }
+            if !current.is_empty() {
+                current.push(' ');
+            }
             current.push_str(token);
         }
     }
@@ -720,39 +858,51 @@ fn split_chained_commands(command: &str) -> Vec<String> {
 
 pub fn parse_bind_key(app: &mut AppState, line: &str) {
     let parts: Vec<&str> = line.split_whitespace().collect();
-    if parts.len() < 3 { return; }
-    
+    if parts.len() < 3 {
+        return;
+    }
+
     let mut i = 1;
     let mut _key_table = "prefix".to_string();
     let mut _repeatable = false;
-    
+
     while i < parts.len() {
         let p = parts[i];
         // A flag must start with '-' AND be longer than 1 char (e.g. "-r", "-n", "-T").
         // A bare "-" is a valid key name, not a flag.
         if p.starts_with('-') && p.len() > 1 {
-            if p.contains('r') { _repeatable = true; }
-            if p.contains('n') { _key_table = "root".to_string(); }
+            if p.contains('r') {
+                _repeatable = true;
+            }
+            if p.contains('n') {
+                _key_table = "root".to_string();
+            }
             if p.contains('T') {
                 i += 1;
-                if i < parts.len() { _key_table = parts[i].to_string(); }
+                if i < parts.len() {
+                    _key_table = parts[i].to_string();
+                }
             }
             i += 1;
         } else {
             break;
         }
     }
-    
-    if i >= parts.len() { return; }
+
+    if i >= parts.len() {
+        return;
+    }
     let key_str = parts[i];
     i += 1;
-    
-    if i >= parts.len() { return; }
+
+    if i >= parts.len() {
+        return;
+    }
     let command = parts[i..].join(" ");
-    
+
     // Split on `\;` or `;` to support command chaining (like tmux `bind x split-window \; select-pane -D`)
     let sub_commands: Vec<String> = split_chained_commands(&command);
-    
+
     if let Some(key) = parse_key_name(key_str) {
         let key = normalize_key_for_binding(key);
         let action = if sub_commands.len() > 1 {
@@ -765,33 +915,43 @@ pub fn parse_bind_key(app: &mut AppState, line: &str) {
         };
         let table = app.key_tables.entry(_key_table).or_default();
         table.retain(|b| b.key != key);
-        table.push(Bind { key, action, repeat: _repeatable });
+        table.push(Bind {
+            key,
+            action,
+            repeat: _repeatable,
+        });
     }
 }
 
 pub fn parse_unbind_key(app: &mut AppState, line: &str) {
     let parts: Vec<&str> = line.split_whitespace().collect();
-    if parts.len() < 2 { return; }
-    
+    if parts.len() < 2 {
+        return;
+    }
+
     let mut i = 1;
     let mut unbind_all = false;
-    
+
     while i < parts.len() {
         let p = parts[i];
         if p.starts_with('-') {
-            if p.contains('a') { unbind_all = true; }
-            if p.contains('T') { i += 1; }
+            if p.contains('a') {
+                unbind_all = true;
+            }
+            if p.contains('T') {
+                i += 1;
+            }
             i += 1;
         } else {
             break;
         }
     }
-    
+
     if unbind_all {
         app.key_tables.clear();
         return;
     }
-    
+
     if i < parts.len() {
         if let Some(key) = parse_key_name(parts[i]) {
             let key = normalize_key_for_binding(key);
@@ -854,8 +1014,9 @@ pub fn parse_key_name(name: &str) -> Option<(KeyCode, KeyModifiers)> {
     // Strip surrounding quotes (single or double) — plugins often quote special chars
     // e.g., bind-key '|' split-window -h
     let name = if (name.starts_with('\'') && name.ends_with('\'') && name.len() >= 2)
-        || (name.starts_with('"') && name.ends_with('"') && name.len() >= 2) {
-        &name[1..name.len()-1]
+        || (name.starts_with('"') && name.ends_with('"') && name.len() >= 2)
+    {
+        &name[1..name.len() - 1]
     } else {
         name
     };
@@ -865,11 +1026,21 @@ pub fn parse_key_name(name: &str) -> Option<(KeyCode, KeyModifiers)> {
     let mut rest = name;
     let mut mods = KeyModifiers::NONE;
     loop {
-        if rest.starts_with("C-") { mods |= KeyModifiers::CONTROL; rest = &rest[2..]; }
-        else if rest.starts_with("M-") { mods |= KeyModifiers::ALT; rest = &rest[2..]; }
-        else if rest.starts_with("S-") { mods |= KeyModifiers::SHIFT; rest = &rest[2..]; }
-        else if rest.starts_with("^") && rest.len() > 1 { mods |= KeyModifiers::CONTROL; rest = &rest[1..]; }
-        else { break; }
+        if rest.starts_with("C-") {
+            mods |= KeyModifiers::CONTROL;
+            rest = &rest[2..];
+        } else if rest.starts_with("M-") {
+            mods |= KeyModifiers::ALT;
+            rest = &rest[2..];
+        } else if rest.starts_with("S-") {
+            mods |= KeyModifiers::SHIFT;
+            rest = &rest[2..];
+        } else if rest.starts_with("^") && rest.len() > 1 {
+            mods |= KeyModifiers::CONTROL;
+            rest = &rest[1..];
+        } else {
+            break;
+        }
     }
 
     if mods != KeyModifiers::NONE {
@@ -883,14 +1054,17 @@ pub fn parse_key_name(name: &str) -> Option<(KeyCode, KeyModifiers)> {
         if rest.len() == 1 {
             if let Some(c) = rest.chars().next() {
                 if mods.contains(KeyModifiers::SHIFT) {
-                    return Some((KeyCode::Char(c.to_ascii_uppercase()), mods.difference(KeyModifiers::SHIFT)));
+                    return Some((
+                        KeyCode::Char(c.to_ascii_uppercase()),
+                        mods.difference(KeyModifiers::SHIFT),
+                    ));
                 }
                 return Some((KeyCode::Char(c.to_ascii_lowercase()), mods));
             }
         }
         // Unrecognized key after modifiers — fall through
     }
-    
+
     match name.to_uppercase().as_str() {
         "ENTER" => return Some((KeyCode::Enter, KeyModifiers::NONE)),
         "TAB" => return Some((KeyCode::Tab, KeyModifiers::NONE)),
@@ -922,13 +1096,13 @@ pub fn parse_key_name(name: &str) -> Option<(KeyCode, KeyModifiers)> {
         "F12" => return Some((KeyCode::F(12), KeyModifiers::NONE)),
         _ => {}
     }
-    
+
     if name.len() == 1 {
         if let Some(c) = name.chars().next() {
             return Some((KeyCode::Char(c), KeyModifiers::NONE));
         }
     }
-    
+
     None
 }
 
@@ -949,14 +1123,16 @@ pub fn source_file(app: &mut AppState, path: &str) {
     };
 
     let expanded_path = if expanded_path.starts_with('~') {
-        let home = env::var("USERPROFILE").or_else(|_| env::var("HOME")).unwrap_or_default();
+        let home = env::var("USERPROFILE")
+            .or_else(|_| env::var("HOME"))
+            .unwrap_or_default();
         expanded_path.replacen('~', &home, 1)
     } else {
         expanded_path
     };
 
     // Normalize path separators for Windows
-    let expanded_path = expanded_path.replace('/', &std::path::MAIN_SEPARATOR.to_string());
+    let expanded_path = expanded_path.replace('/', std::path::MAIN_SEPARATOR_STR);
 
     // Save and restore current_config_file around the nested parse
     let prev_file = current_config_file();
@@ -974,7 +1150,7 @@ pub fn parse_key_string(key: &str) -> Option<(KeyCode, KeyModifiers)> {
     let key = key.trim();
     let mut mods = KeyModifiers::empty();
     let mut key_part = key;
-    
+
     while key_part.len() > 2 {
         if key_part.starts_with("C-") || key_part.starts_with("c-") {
             mods |= KeyModifiers::CONTROL;
@@ -989,7 +1165,7 @@ pub fn parse_key_string(key: &str) -> Option<(KeyCode, KeyModifiers)> {
             break;
         }
     }
-    
+
     let keycode = match key_part.to_lowercase().as_str() {
         "a" => KeyCode::Char('a'),
         "b" => KeyCode::Char('b'),
@@ -1073,7 +1249,7 @@ pub fn parse_key_string(key: &str) -> Option<(KeyCode, KeyModifiers)> {
             }
         }
     };
-    
+
     Some((keycode, mods))
 }
 
@@ -1081,7 +1257,7 @@ pub fn parse_key_string(key: &str) -> Option<(KeyCode, KeyModifiers)> {
 pub fn format_key_binding(key: &(KeyCode, KeyModifiers)) -> String {
     let (keycode, mods) = key;
     let mut result = String::new();
-    
+
     if mods.contains(KeyModifiers::CONTROL) {
         result.push_str("C-");
     }
@@ -1091,7 +1267,7 @@ pub fn format_key_binding(key: &(KeyCode, KeyModifiers)) -> String {
     if mods.contains(KeyModifiers::SHIFT) {
         result.push_str("S-");
     }
-    
+
     let key_str = match keycode {
         KeyCode::Char(' ') => "Space".to_string(),
         KeyCode::Char(c) => c.to_string(),
@@ -1113,7 +1289,7 @@ pub fn format_key_binding(key: &(KeyCode, KeyModifiers)) -> String {
         KeyCode::F(n) => format!("F{}", n),
         _ => "?".to_string(),
     };
-    
+
     result.push_str(&key_str);
     result
 }
@@ -1125,19 +1301,29 @@ pub fn format_key_binding(key: &(KeyCode, KeyModifiers)) -> String {
 fn parse_run_shell(app: &mut AppState, line: &str) {
     // Use quote-aware parser to properly handle nested quotes and escapes
     let args = crate::commands::parse_command_line(line);
-    if args.len() < 2 { return; }
+    if args.len() < 2 {
+        return;
+    }
     let mut cmd_parts: Vec<&str> = Vec::new();
     for arg in &args[1..] {
-        if arg == "-b" { /* background flag — always spawn anyway */ }
-        else { cmd_parts.push(arg); }
+        if arg == "-b" { /* background flag — always spawn anyway */
+        } else {
+            cmd_parts.push(arg);
+        }
     }
     let shell_cmd = cmd_parts.join(" ");
-    if shell_cmd.is_empty() { return; }
+    if shell_cmd.is_empty() {
+        return;
+    }
 
     // Expand ~ to home directory in the command
     let shell_cmd = if shell_cmd.contains('~') {
-        let home = std::env::var("USERPROFILE").or_else(|_| std::env::var("HOME")).unwrap_or_default();
-        shell_cmd.replace("~/", &format!("{}/", home)).replace("~\\", &format!("{}\\", home))
+        let home = std::env::var("USERPROFILE")
+            .or_else(|_| std::env::var("HOME"))
+            .unwrap_or_default();
+        shell_cmd
+            .replace("~/", &format!("{}/", home))
+            .replace("~\\", &format!("{}\\", home))
     } else {
         shell_cmd
     };
@@ -1207,7 +1393,9 @@ fn parse_ps1_plugin_script(app: &mut AppState, content: &str) -> bool {
 
     for line in content.lines() {
         let l = line.trim();
-        if l.is_empty() || l.starts_with('#') { continue; }
+        if l.is_empty() || l.starts_with('#') {
+            continue;
+        }
 
         // Match patterns like: & $PSMUX set -g ... 2>&1 | Out-Null
         // Also: & $PSMUX bind-key ... 2>&1 | Out-Null
@@ -1238,20 +1426,31 @@ fn parse_ps1_plugin_script(app: &mut AppState, content: &str) -> bool {
         if cmd.contains('$') {
             // Check if it's a PS variable reference (not env var pattern)
             let has_var = cmd.split('$').skip(1).any(|part| {
-                let first_word: String = part.chars().take_while(|c| c.is_alphanumeric() || *c == '_').collect();
-                !first_word.is_empty() && first_word != "PSMUX" && first_word != "TMUX"
-                    && first_word != "env" && first_word != "null"
+                let first_word: String = part
+                    .chars()
+                    .take_while(|c| c.is_alphanumeric() || *c == '_')
+                    .collect();
+                !first_word.is_empty()
+                    && first_word != "PSMUX"
+                    && first_word != "TMUX"
+                    && first_word != "env"
+                    && first_word != "null"
             });
-            if has_var { has_ps_vars = true; }
+            if has_var {
+                has_ps_vars = true;
+            }
         }
 
-        if cmd.starts_with("set ") || cmd.starts_with("set-option ")
-            || cmd.starts_with("bind-key ") || cmd.starts_with("bind ")
-            || cmd.starts_with("setw ") || cmd.starts_with("set-window-option ") {
-            if !has_ps_vars {
-                parse_config_line(app, cmd);
-                applied_any = true;
-            }
+        if (cmd.starts_with("set ")
+            || cmd.starts_with("set-option ")
+            || cmd.starts_with("bind-key ")
+            || cmd.starts_with("bind ")
+            || cmd.starts_with("setw ")
+            || cmd.starts_with("set-window-option "))
+            && !has_ps_vars
+        {
+            parse_config_line(app, cmd);
+            applied_any = true;
         }
     }
 
@@ -1270,7 +1469,8 @@ fn parse_tmux_entry_script(app: &mut AppState, path: &std::path::Path) {
     };
 
     // Determine the directory of the .tmux file for $PLUGIN_DIR / ${PLUGIN_DIR}
-    let plugin_dir = path.parent()
+    let plugin_dir = path
+        .parent()
         .map(|p| p.to_string_lossy().to_string())
         .unwrap_or_default();
 
@@ -1282,12 +1482,19 @@ fn parse_tmux_entry_script(app: &mut AppState, path: &std::path::Path) {
     for line in content.lines() {
         let l = line.trim();
         // Skip empty lines, comments, shebang
-        if l.is_empty() || l.starts_with('#') { continue; }
+        if l.is_empty() || l.starts_with('#') {
+            continue;
+        }
 
         // Track explicit PLUGIN_DIR assignment (best-effort)
         if l.starts_with("PLUGIN_DIR=") || l.starts_with("export PLUGIN_DIR=") {
             // If it's a simple literal path, use it
-            let val = l.splitn(2, '=').nth(1).unwrap_or("").trim_matches('"').trim_matches('\'');
+            let val = l
+                .split_once('=')
+                .map(|x| x.1)
+                .unwrap_or("")
+                .trim_matches('"')
+                .trim_matches('\'');
             if !val.contains('$') && !val.contains('`') && !val.is_empty() {
                 script_plugin_dir = val.to_string();
             }
@@ -1296,16 +1503,24 @@ fn parse_tmux_entry_script(app: &mut AppState, path: &std::path::Path) {
         }
 
         // Skip other bash-isms (variable assignments, if/fi, for, etc.)
-        if l.contains("BASH_SOURCE") || l.starts_with("cd ") || l.starts_with("export ")
-            || l.starts_with("if ") || l == "fi" || l.starts_with("for ")
-            || l.starts_with("done") || l.starts_with("then") || l.starts_with("else")
-            || l.starts_with("local ") || l.starts_with("readonly ") {
+        if l.contains("BASH_SOURCE")
+            || l.starts_with("cd ")
+            || l.starts_with("export ")
+            || l.starts_with("if ")
+            || l == "fi"
+            || l.starts_with("for ")
+            || l.starts_with("done")
+            || l.starts_with("then")
+            || l.starts_with("else")
+            || l.starts_with("local ")
+            || l.starts_with("readonly ")
+        {
             continue;
         }
 
         // Extract tmux commands: look for lines starting with `tmux `
-        let tmux_cmd = if l.starts_with("tmux ") {
-            &l[5..]
+        let tmux_cmd = if let Some(rest) = l.strip_prefix("tmux ") {
+            rest
         } else if l.starts_with("\"$TMUX_PROGRAM\" ") || l.starts_with("$TMUX_PROGRAM ") {
             // Some plugins use $TMUX_PROGRAM variable
             let start = l.find(' ').unwrap_or(l.len());
@@ -1323,25 +1538,9 @@ fn parse_tmux_entry_script(app: &mut AppState, path: &std::path::Path) {
 
         // Now parse the tmux subcommand as a psmux config line
         let expanded = expanded.trim();
-        if expanded.starts_with("source-file ") || expanded.starts_with("source ") {
-            parse_config_line(app, expanded);
-        } else if expanded.starts_with("set-option ") || expanded.starts_with("set ")
-            || expanded.starts_with("set -g ") {
-            parse_config_line(app, expanded);
-        } else if expanded.starts_with("setw ") || expanded.starts_with("set-window-option ") {
-            parse_config_line(app, expanded);
-        } else if expanded.starts_with("run-shell ") || expanded.starts_with("run ") {
-            parse_config_line(app, expanded);
-        } else if expanded.starts_with("bind-key ") || expanded.starts_with("bind ") {
-            parse_config_line(app, expanded);
-        } else if expanded.starts_with("if-shell ") || expanded.starts_with("if ") {
-            parse_config_line(app, expanded);
-        } else if expanded.starts_with("set-hook ") {
-            parse_config_line(app, expanded);
-        } else {
-            // Try to parse it anyway — it might be a valid config directive
-            parse_config_line(app, expanded);
-        }
+        // All recognized tmux subcommands (and unrecognized ones) are forwarded
+        // to parse_config_line, which handles dispatch internally.
+        parse_config_line(app, expanded);
     }
 
     // Fallback: if we didn't find any tmux commands in the script, try to
@@ -1376,7 +1575,9 @@ fn parse_tmux_entry_script(app: &mut AppState, path: &std::path::Path) {
 /// appropriate branch command as a config line.
 fn parse_if_shell(app: &mut AppState, line: &str) {
     let parts: Vec<&str> = line.split_whitespace().collect();
-    if parts.len() < 3 { return; }
+    if parts.len() < 3 {
+        return;
+    }
 
     let mut format_mode = false;
     let mut _background = false;
@@ -1384,16 +1585,25 @@ fn parse_if_shell(app: &mut AppState, line: &str) {
     let mut i = 1;
     while i < parts.len() {
         match parts[i] {
-            "-b" => { _background = true; }
-            "-F" => { format_mode = true; }
-            "-bF" | "-Fb" => { _background = true; format_mode = true; }
-            "-t" => { i += 1; } // skip target
+            "-b" => {
+                _background = true;
+            }
+            "-F" => {
+                format_mode = true;
+            }
+            "-bF" | "-Fb" => {
+                _background = true;
+                format_mode = true;
+            }
+            "-t" => {
+                i += 1;
+            } // skip target
             s => {
                 // Handle quoted strings that might span multiple parts
                 if s.starts_with('"') || s.starts_with('\'') {
                     let quote = s.chars().next().unwrap();
                     if s.ends_with(quote) && s.len() > 1 {
-                        positional.push(s[1..s.len()-1].to_string());
+                        positional.push(s[1..s.len() - 1].to_string());
                     } else {
                         let mut buf = s[1..].to_string();
                         i += 1;
@@ -1416,7 +1626,9 @@ fn parse_if_shell(app: &mut AppState, line: &str) {
         i += 1;
     }
 
-    if positional.len() < 2 { return; }
+    if positional.len() < 2 {
+        return;
+    }
     let condition = &positional[0];
     let true_cmd = &positional[1];
     let false_cmd = positional.get(2);
@@ -1432,15 +1644,24 @@ fn parse_if_shell(app: &mut AppState, line: &str) {
         {
             std::process::Command::new("pwsh")
                 .args(["-NoProfile", "-Command", condition])
-                .status().map(|s| s.success())
+                .status()
+                .map(|s| s.success())
                 .unwrap_or_else(|_| {
                     std::process::Command::new("cmd")
                         .args(["/c", condition])
-                        .status().map(|s| s.success()).unwrap_or(false)
+                        .status()
+                        .map(|s| s.success())
+                        .unwrap_or(false)
                 })
         }
         #[cfg(not(windows))]
-        { std::process::Command::new("sh").args(["-c", condition]).status().map(|s| s.success()).unwrap_or(false) }
+        {
+            std::process::Command::new("sh")
+                .args(["-c", condition])
+                .status()
+                .map(|s| s.success())
+                .unwrap_or(false)
+        }
     };
 
     let cmd_to_run = if success { Some(true_cmd) } else { false_cmd };

@@ -11,7 +11,8 @@ pub fn get_program_name() -> String {
 
 pub fn print_help() {
     let prog = get_program_name();
-    println!(r#"{prog} v{ver} - Terminal multiplexer for Windows (tmux alternative)
+    println!(
+        r#"{prog} v{ver} - Terminal multiplexer for Windows (tmux alternative)
 
 USAGE:
     {prog} [COMMAND] [OPTIONS]
@@ -359,7 +360,10 @@ EXAMPLES:
 NOTE: psmux ships as 'psmux', 'pmux', and 'tmux' - use whichever you prefer!
 
 For more information: https://github.com/psmux/psmux
-"#, prog = prog, ver = VERSION);
+"#,
+        prog = prog,
+        ver = VERSION
+    );
 }
 
 pub fn print_version() {
@@ -376,7 +380,8 @@ pub fn print_version() {
 }
 
 pub fn print_commands() {
-    println!(r#"Available commands:
+    println!(
+        r#"Available commands:
   attach-session (attach)   - Attach to a session
   bind-key (bind)           - Bind a key to a command
   break-pane                - Break a pane into a new window
@@ -454,30 +459,35 @@ pub fn print_commands() {
   unlink-window (unlinkw)   - Unlink a window
   wait-for (wait)           - Wait for a signal
   zoom-pane (zoom)          - Toggle pane zoom
-"#);
+"#
+    );
 }
 
 /// Parse a tmux-style target specification
 pub fn parse_target(target: &str) -> ParsedTarget {
     let mut result = ParsedTarget::default();
-    
-    if target.starts_with('%') {
-        if let Ok(pid) = target[1..].parse::<usize>() {
+
+    if let Some(rest) = target.strip_prefix('%') {
+        if let Ok(pid) = rest.parse::<usize>() {
             result.pane = Some(pid);
             result.pane_is_id = true;
         }
         return result;
     }
-    if target.starts_with('@') {
-        if let Ok(wid) = target[1..].parse::<usize>() {
+    if let Some(rest) = target.strip_prefix('@') {
+        if let Ok(wid) = rest.parse::<usize>() {
             result.window = Some(wid);
             result.window_is_id = true;
         }
         return result;
     }
-    
+
     let (session_part, window_pane_part) = if let Some(colon_pos) = target.find(':') {
-        let session = if colon_pos == 0 { None } else { Some(target[..colon_pos].to_string()) };
+        let session = if colon_pos == 0 {
+            None
+        } else {
+            Some(target[..colon_pos].to_string())
+        };
         (session, Some(&target[colon_pos + 1..]))
     } else if target.starts_with('.') {
         (None, Some(target))
@@ -498,17 +508,17 @@ pub fn parse_target(target: &str) -> ParsedTarget {
         // Window/pane specifiers require explicit syntax like ":0" or ".1"
         (Some(target.to_string()), None)
     };
-    
+
     result.session = session_part;
-    
+
     if let Some(wp) = window_pane_part {
-        if wp.starts_with('%') {
-            if let Ok(pid) = wp[1..].parse::<usize>() {
+        if let Some(rest) = wp.strip_prefix('%') {
+            if let Ok(pid) = rest.parse::<usize>() {
                 result.pane = Some(pid);
                 result.pane_is_id = true;
             }
-        } else if wp.starts_with('@') {
-            if let Ok(wid) = wp[1..].parse::<usize>() {
+        } else if let Some(rest) = wp.strip_prefix('@') {
+            if let Ok(wid) = rest.parse::<usize>() {
                 result.window = Some(wid);
                 result.window_is_id = true;
             }
@@ -521,13 +531,11 @@ pub fn parse_target(target: &str) -> ParsedTarget {
             if let Ok(p) = wp[dot_pos + 1..].parse::<usize>() {
                 result.pane = Some(p);
             }
-        } else {
-            if let Ok(w) = wp.parse::<usize>() {
-                result.window = Some(w);
-            }
+        } else if let Ok(w) = wp.parse::<usize>() {
+            result.window = Some(w);
         }
     }
-    
+
     result
 }
 

@@ -1,21 +1,30 @@
 use std::io;
 use std::time::Instant;
 
-use crate::types::{AppState, Mode, Action, FocusDir, LayoutKind, MenuItem, Menu, PopupPty, Node};
+use crate::copy_mode::{
+    capture_active_pane, enter_copy_mode, paste_latest, save_latest_buffer, switch_with_copy_save,
+};
+use crate::pane::{create_window, kill_active_pane, split_active};
+use crate::session::{list_all_sessions_tree, send_control_to_port};
 use crate::tree::{compute_rects, kill_all_children};
-use crate::pane::{create_window, split_active, kill_active_pane};
-use crate::copy_mode::{enter_copy_mode, switch_with_copy_save, paste_latest,
-    capture_active_pane, save_latest_buffer};
-use crate::session::{send_control_to_port, list_all_sessions_tree};
+use crate::types::{Action, AppState, FocusDir, LayoutKind, Menu, MenuItem, Mode, Node, PopupPty};
 use crate::window_ops::toggle_zoom;
 
 /// Build the choose-tree data for the WindowChooser mode.
 pub fn build_choose_tree(app: &AppState) -> Vec<crate::session::TreeEntry> {
-    let current_windows: Vec<(String, usize, String, bool)> = app.windows.iter().enumerate().map(|(i, w)| {
-        let panes = crate::tree::count_panes(&w.root);
-        let size = format!("{}x{}", app.last_window_area.width, app.last_window_area.height);
-        (w.name.clone(), panes, size, i == app.active_idx)
-    }).collect();
+    let current_windows: Vec<(String, usize, String, bool)> = app
+        .windows
+        .iter()
+        .enumerate()
+        .map(|(i, w)| {
+            let panes = crate::tree::count_panes(&w.root);
+            let size = format!(
+                "{}x{}",
+                app.last_window_area.width, app.last_window_area.height
+            );
+            (w.name.clone(), panes, size, i == app.active_idx)
+        })
+        .collect();
     list_all_sessions_tree(&app.session_name, &current_windows)
 }
 
@@ -29,19 +38,27 @@ fn parse_window_target(target: &str) -> Option<usize> {
 /// Parse a command string to an Action
 pub fn parse_command_to_action(cmd: &str) -> Option<Action> {
     let parts: Vec<&str> = cmd.split_whitespace().collect();
-    if parts.is_empty() { return None; }
-    
+    if parts.is_empty() {
+        return None;
+    }
+
     match parts[0] {
         "display-panes" | "displayp" => Some(Action::DisplayPanes),
         "new-window" | "neww" => Some(Action::NewWindow),
         "split-window" | "splitw" => {
             // If extra flags like -c, -d, -p, -F, or a shell command are present,
             // store as Command to preserve the full argument string.
-            let has_extra = parts.iter().any(|p| matches!(*p, "-c" | "-d" | "-p" | "-l" | "-F" | "-P" | "-b" | "-f" | "-I" | "-Z" | "-e"))
-                || parts.iter().any(|p| !p.starts_with('-') && *p != "split-window" && *p != "splitw");
+            let has_extra = parts.iter().any(|p| {
+                matches!(
+                    *p,
+                    "-c" | "-d" | "-p" | "-l" | "-F" | "-P" | "-b" | "-f" | "-I" | "-Z" | "-e"
+                )
+            }) || parts
+                .iter()
+                .any(|p| !p.starts_with('-') && *p != "split-window" && *p != "splitw");
             if has_extra {
                 Some(Action::Command(cmd.to_string()))
-            } else if parts.iter().any(|p| *p == "-h") {
+            } else if parts.contains(&"-h") {
                 Some(Action::SplitHorizontal)
             } else {
                 Some(Action::SplitVertical)
@@ -55,16 +72,16 @@ pub fn parse_command_to_action(cmd: &str) -> Option<Action> {
         "detach-client" | "detach" => Some(Action::Detach),
         "rename-window" | "renamew" => Some(Action::RenameWindow),
         "choose-window" | "choose-tree" | "choose-session" => Some(Action::WindowChooser),
-        "resize-pane" | "resizep" if parts.iter().any(|p| *p == "-Z") => Some(Action::ZoomPane),
+        "resize-pane" | "resizep" if parts.contains(&"-Z") => Some(Action::ZoomPane),
         "zoom-pane" => Some(Action::ZoomPane),
         "select-pane" | "selectp" => {
-            if parts.iter().any(|p| *p == "-U") {
+            if parts.contains(&"-U") {
                 Some(Action::MoveFocus(FocusDir::Up))
-            } else if parts.iter().any(|p| *p == "-D") {
+            } else if parts.contains(&"-D") {
                 Some(Action::MoveFocus(FocusDir::Down))
-            } else if parts.iter().any(|p| *p == "-L") {
+            } else if parts.contains(&"-L") {
                 Some(Action::MoveFocus(FocusDir::Left))
-            } else if parts.iter().any(|p| *p == "-R") {
+            } else if parts.contains(&"-R") {
                 Some(Action::MoveFocus(FocusDir::Right))
             } else {
                 Some(Action::Command(cmd.to_string()))
@@ -82,7 +99,9 @@ pub fn parse_command_to_action(cmd: &str) -> Option<Action> {
         "select-window" | "selectw" => Some(Action::Command(cmd.to_string())),
         "toggle-sync" => Some(Action::Command("toggle-sync".to_string())),
         "send-keys" => Some(Action::Command(cmd.to_string())),
-        "set-option" | "set" | "setw" | "set-window-option" => Some(Action::Command(cmd.to_string())),
+        "set-option" | "set" | "setw" | "set-window-option" => {
+            Some(Action::Command(cmd.to_string()))
+        }
         "source-file" | "source" => Some(Action::Command(cmd.to_string())),
         "select-layout" | "selectl" => Some(Action::Command(cmd.to_string())),
         "next-layout" => Some(Action::Command("next-layout".to_string())),
@@ -107,7 +126,7 @@ pub fn parse_command_to_action(cmd: &str) -> Option<Action> {
                 Some(Action::Command(cmd.to_string()))
             }
         }
-        _ => Some(Action::Command(cmd.to_string()))
+        _ => Some(Action::Command(cmd.to_string())),
     }
 }
 
@@ -202,12 +221,12 @@ pub fn parse_menu_definition(def: &str, x: Option<i16>, y: Option<i16>) -> Menu 
         x,
         y,
     };
-    
+
     let parts: Vec<&str> = def.split_whitespace().collect();
     if parts.is_empty() {
         return menu;
     }
-    
+
     let mut i = 0;
     while i < parts.len() {
         if parts[i] == "-T" {
@@ -217,7 +236,7 @@ pub fn parse_menu_definition(def: &str, x: Option<i16>, y: Option<i16>) -> Menu 
                 continue;
             }
         }
-        
+
         if let Some(name) = parts.get(i) {
             let name = name.trim_matches('"').to_string();
             if name.is_empty() || name == "-" {
@@ -229,8 +248,13 @@ pub fn parse_menu_definition(def: &str, x: Option<i16>, y: Option<i16>) -> Menu 
                 });
                 i += 1;
             } else {
-                let key = parts.get(i + 1).map(|k| k.trim_matches('"').chars().next()).flatten();
-                let command = parts.get(i + 2).map(|c| c.trim_matches('"').to_string()).unwrap_or_default();
+                let key = parts
+                    .get(i + 1)
+                    .and_then(|k| k.trim_matches('"').chars().next());
+                let command = parts
+                    .get(i + 2)
+                    .map(|c| c.trim_matches('"').to_string())
+                    .unwrap_or_default();
                 menu.items.push(MenuItem {
                     name,
                     key,
@@ -243,7 +267,7 @@ pub fn parse_menu_definition(def: &str, x: Option<i16>, y: Option<i16>) -> Menu 
             break;
         }
     }
-    
+
     if menu.items.is_empty() && !def.is_empty() {
         menu.title = "Menu".to_string();
         menu.items.push(MenuItem {
@@ -253,7 +277,7 @@ pub fn parse_menu_definition(def: &str, x: Option<i16>, y: Option<i16>) -> Menu 
             is_separator: false,
         });
     }
-    
+
     menu
 }
 
@@ -275,15 +299,21 @@ pub fn execute_action(app: &mut AppState, action: &Action) -> io::Result<bool> {
             compute_rects(&win.root, app.last_window_area, &mut rects);
             app.display_map.clear();
             for (i, (path, _)) in rects.into_iter().enumerate() {
-                if i >= 10 { break; }
+                if i >= 10 {
+                    break;
+                }
                 let digit = (i + app.pane_base_index) % 10;
                 app.display_map.push((digit, path));
             }
-            app.mode = Mode::PaneChooser { opened_at: Instant::now() };
+            app.mode = Mode::PaneChooser {
+                opened_at: Instant::now(),
+            };
         }
         Action::MoveFocus(dir) => {
             let d = *dir;
-            switch_with_copy_save(app, |app| { crate::input::move_focus(app, d); });
+            switch_with_copy_save(app, |app| {
+                crate::input::move_focus(app, d);
+            });
         }
         Action::NewWindow => {
             let pty_system = portable_pty::native_pty_system();
@@ -324,11 +354,16 @@ pub fn execute_action(app: &mut AppState, action: &Action) -> io::Result<bool> {
             return Ok(true);
         }
         Action::RenameWindow => {
-            app.mode = Mode::RenamePrompt { input: String::new() };
+            app.mode = Mode::RenamePrompt {
+                input: String::new(),
+            };
         }
         Action::WindowChooser => {
             let tree = build_choose_tree(app);
-            let selected = tree.iter().position(|e| e.is_current_session && e.is_active_window && !e.is_session_header).unwrap_or(0);
+            let selected = tree
+                .iter()
+                .position(|e| e.is_current_session && e.is_active_window && !e.is_session_header)
+                .unwrap_or(0);
             app.mode = Mode::WindowChooser { selected, tree };
         }
         Action::ZoomPane => {
@@ -350,24 +385,43 @@ pub fn execute_action(app: &mut AppState, action: &Action) -> io::Result<bool> {
 }
 
 pub fn execute_command_prompt(app: &mut AppState) -> io::Result<()> {
-    let cmdline = match &app.mode { Mode::CommandPrompt { input, .. } => input.clone(), _ => String::new() };
+    let cmdline = match &app.mode {
+        Mode::CommandPrompt { input, .. } => input.clone(),
+        _ => String::new(),
+    };
     app.mode = Mode::Passthrough;
     let parts: Vec<&str> = cmdline.split_whitespace().collect();
-    if parts.is_empty() { return Ok(()); }
+    if parts.is_empty() {
+        return Ok(());
+    }
     match parts[0] {
         "new-window" => {
             let pty_system = portable_pty::native_pty_system();
             create_window(&*pty_system, app, None, None)?;
         }
         "split-window" => {
-            let kind = if parts.iter().any(|p| *p == "-h") { LayoutKind::Horizontal } else { LayoutKind::Vertical };
+            let kind = if parts.contains(&"-h") {
+                LayoutKind::Horizontal
+            } else {
+                LayoutKind::Vertical
+            };
             split_active(app, kind)?;
         }
-        "kill-pane" => { kill_active_pane(app)?; }
-        "capture-pane" => { capture_active_pane(app)?; }
-        "save-buffer" => { if let Some(file) = parts.get(1) { save_latest_buffer(app, file)?; } }
-        "list-sessions" => { println!("default"); }
-        "attach-session" => { }
+        "kill-pane" => {
+            kill_active_pane(app)?;
+        }
+        "capture-pane" => {
+            capture_active_pane(app)?;
+        }
+        "save-buffer" => {
+            if let Some(file) = parts.get(1) {
+                save_latest_buffer(app, file)?;
+            }
+        }
+        "list-sessions" => {
+            println!("default");
+        }
+        "attach-session" => {}
         "next-window" => {
             app.last_window_idx = app.active_idx;
             app.active_idx = (app.active_idx + 1) % app.windows.len();
@@ -377,7 +431,11 @@ pub fn execute_command_prompt(app: &mut AppState) -> io::Result<()> {
             app.active_idx = (app.active_idx + app.windows.len() - 1) % app.windows.len();
         }
         "select-window" => {
-            if let Some(tidx) = parts.iter().position(|p| *p == "-t").and_then(|i| parts.get(i+1)) {
+            if let Some(tidx) = parts
+                .iter()
+                .position(|p| *p == "-t")
+                .and_then(|i| parts.get(i + 1))
+            {
                 if let Some(n) = parse_window_target(tidx) {
                     if n >= app.window_base_index {
                         let internal_idx = n - app.window_base_index;
@@ -404,8 +462,10 @@ pub fn execute_command_prompt(app: &mut AppState) -> io::Result<()> {
 /// Execute a command string (used by menus, hooks, confirm dialogs, etc.)
 pub fn execute_command_string(app: &mut AppState, cmd: &str) -> io::Result<()> {
     let parts: Vec<&str> = cmd.split_whitespace().collect();
-    if parts.is_empty() { return Ok(()); }
-    
+    if parts.is_empty() {
+        return Ok(());
+    }
+
     match parts[0] {
         "new-window" | "neww" => {
             if let Some(port) = app.control_port {
@@ -449,9 +509,7 @@ pub fn execute_command_string(app: &mut AppState, cmd: &str) -> io::Result<()> {
         "last-window" | "last" => {
             if app.last_window_idx < app.windows.len() {
                 switch_with_copy_save(app, |app| {
-                    let tmp = app.active_idx;
-                    app.active_idx = app.last_window_idx;
-                    app.last_window_idx = tmp;
+                    std::mem::swap(&mut app.active_idx, &mut app.last_window_idx);
                 });
             }
         }
@@ -474,7 +532,7 @@ pub fn execute_command_string(app: &mut AppState, cmd: &str) -> io::Result<()> {
         }
         "select-pane" | "selectp" => {
             // Save/restore copy mode across pane switches (tmux parity #43)
-            let is_last = parts.iter().any(|p| *p == "-l");
+            let is_last = parts.contains(&"-l");
             if is_last {
                 switch_with_copy_save(app, |app| {
                     let win = &mut app.windows[app.active_idx];
@@ -486,11 +544,17 @@ pub fn execute_command_string(app: &mut AppState, cmd: &str) -> io::Result<()> {
                 });
                 return Ok(());
             }
-            let dir = if parts.iter().any(|p| *p == "-U") { FocusDir::Up }
-                else if parts.iter().any(|p| *p == "-D") { FocusDir::Down }
-                else if parts.iter().any(|p| *p == "-L") { FocusDir::Left }
-                else if parts.iter().any(|p| *p == "-R") { FocusDir::Right }
-                else { return Ok(()); };
+            let dir = if parts.contains(&"-U") {
+                FocusDir::Up
+            } else if parts.contains(&"-D") {
+                FocusDir::Down
+            } else if parts.contains(&"-L") {
+                FocusDir::Left
+            } else if parts.contains(&"-R") {
+                FocusDir::Right
+            } else {
+                return Ok(());
+            };
             // Zoom-aware directional navigation (tmux parity):
             // If zoomed, check if there's a *direct* neighbor (no wrapping).
             // If yes: cancel zoom and navigate to it.
@@ -501,7 +565,11 @@ pub fn execute_command_string(app: &mut AppState, cmd: &str) -> io::Result<()> {
                 if let Some(ref s) = saved {
                     let win = &mut app.windows[app.active_idx];
                     for (p, sz) in s.iter() {
-                        if let Some(Node::Split { sizes, .. }) = crate::tree::get_split_mut(&mut win.root, p) { *sizes = sz.clone(); }
+                        if let Some(Node::Split { sizes, .. }) =
+                            crate::tree::get_split_mut(&mut win.root, p)
+                        {
+                            *sizes = sz.clone();
+                        }
                     }
                 }
                 crate::tree::resize_all_panes(app);
@@ -512,8 +580,11 @@ pub fn execute_command_string(app: &mut AppState, cmd: &str) -> io::Result<()> {
                 let active_idx = rects.iter().position(|(path, _)| *path == win.active_path);
                 let has_neighbor = if let Some(ai) = active_idx {
                     let (_, arect) = &rects[ai];
-                    crate::input::find_best_pane_in_direction(&rects, ai, arect, dir, &[], &[]).is_some()
-                } else { false };
+                    crate::input::find_best_pane_in_direction(&rects, ai, arect, dir, &[], &[])
+                        .is_some()
+                } else {
+                    false
+                };
                 if has_neighbor {
                     // Cancel zoom (already unzoomed) and navigate
                     switch_with_copy_save(app, |app| {
@@ -526,7 +597,11 @@ pub fn execute_command_string(app: &mut AppState, cmd: &str) -> io::Result<()> {
                     if let Some(s) = saved {
                         let win = &mut app.windows[app.active_idx];
                         for (p, sz) in s.iter() {
-                            if let Some(Node::Split { sizes, .. }) = crate::tree::get_split_mut(&mut win.root, p) { *sizes = sz.clone(); }
+                            if let Some(Node::Split { sizes, .. }) =
+                                crate::tree::get_split_mut(&mut win.root, p)
+                            {
+                                *sizes = sz.clone();
+                            }
                         }
                         app.zoom_saved = Some(s);
                     }
@@ -563,7 +638,9 @@ pub fn execute_command_string(app: &mut AppState, cmd: &str) -> io::Result<()> {
             enter_copy_mode(app);
         }
         "display-panes" | "displayp" => {
-            app.mode = Mode::PaneChooser { opened_at: Instant::now() };
+            app.mode = Mode::PaneChooser {
+                opened_at: Instant::now(),
+            };
         }
         "confirm-before" | "confirm" => {
             let rest = parts[1..].join(" ");
@@ -584,52 +661,86 @@ pub fn execute_command_string(app: &mut AppState, cmd: &str) -> io::Result<()> {
             // Parse -w width, -h height, -E close-on-exit flags
             let mut width: u16 = 80;
             let mut height: u16 = 24;
-            let close_on_exit = parts.iter().any(|p| *p == "-E");
+            let close_on_exit = parts.contains(&"-E");
             if let Some(pos) = parts.iter().position(|p| *p == "-w") {
-                if let Some(v) = parts.get(pos + 1) { width = v.parse().unwrap_or(80); }
+                if let Some(v) = parts.get(pos + 1) {
+                    width = v.parse().unwrap_or(80);
+                }
             }
             if let Some(pos) = parts.iter().position(|p| *p == "-h") {
-                if let Some(v) = parts.get(pos + 1) { height = v.parse().unwrap_or(24); }
+                if let Some(v) = parts.get(pos + 1) {
+                    height = v.parse().unwrap_or(24);
+                }
             }
             // Collect command (non-flag args)
-            let cmd_parts: Vec<&str> = parts[1..].iter()
+            let cmd_parts: Vec<&str> = parts[1..]
+                .iter()
                 .filter(|a| !a.starts_with('-'))
                 .copied()
                 .collect();
             // Skip width/height values
             let rest = cmd_parts.join(" ");
-            
+
             // Try PTY-based popup for interactive commands
             let pty_result = if !rest.is_empty() {
-                Some(portable_pty::native_pty_system())
-                    .and_then(|pty_sys| {
-                        let pty_size = portable_pty::PtySize { rows: height.saturating_sub(2), cols: width.saturating_sub(2), pixel_width: 0, pixel_height: 0 };
-                        let pair = pty_sys.openpty(pty_size).ok()?;
-                        let mut cmd_builder = portable_pty::CommandBuilder::new(if cfg!(windows) { "pwsh" } else { "sh" });
-                        if let Ok(dir) = std::env::current_dir() { cmd_builder.cwd(dir); }
-                        if cfg!(windows) { cmd_builder.args(["-NoProfile", "-Command", &rest]); } else { cmd_builder.args(["-c", &rest]); }
-                        let child = pair.slave.spawn_command(cmd_builder).ok()?;
-                        // Close the slave handle immediately – required for ConPTY.
-                        drop(pair.slave);
-                        let term = std::sync::Arc::new(std::sync::Mutex::new(vt100::Parser::new(pty_size.rows, pty_size.cols, 0)));
-                        let term_reader = term.clone();
-                        if let Ok(mut reader) = pair.master.try_clone_reader() {
-                            std::thread::spawn(move || {
-                                let mut buf = [0u8; 8192];
-                                loop {
-                                    match std::io::Read::read(&mut reader, &mut buf) {
-                                        Ok(n) if n > 0 => { if let Ok(mut p) = term_reader.lock() { p.process(&buf[..n]); } }
-                                        _ => break,
+                Some(portable_pty::native_pty_system()).and_then(|pty_sys| {
+                    let pty_size = portable_pty::PtySize {
+                        rows: height.saturating_sub(2),
+                        cols: width.saturating_sub(2),
+                        pixel_width: 0,
+                        pixel_height: 0,
+                    };
+                    let pair = pty_sys.openpty(pty_size).ok()?;
+                    let mut cmd_builder = portable_pty::CommandBuilder::new(if cfg!(windows) {
+                        "pwsh"
+                    } else {
+                        "sh"
+                    });
+                    if let Ok(dir) = std::env::current_dir() {
+                        cmd_builder.cwd(dir);
+                    }
+                    if cfg!(windows) {
+                        cmd_builder.args(["-NoProfile", "-Command", &rest]);
+                    } else {
+                        cmd_builder.args(["-c", &rest]);
+                    }
+                    let child = pair.slave.spawn_command(cmd_builder).ok()?;
+                    // Close the slave handle immediately – required for ConPTY.
+                    drop(pair.slave);
+                    let term = std::sync::Arc::new(std::sync::Mutex::new(vt100::Parser::new(
+                        pty_size.rows,
+                        pty_size.cols,
+                        0,
+                    )));
+                    let term_reader = term.clone();
+                    if let Ok(mut reader) = pair.master.try_clone_reader() {
+                        std::thread::spawn(move || {
+                            let mut buf = [0u8; 8192];
+                            loop {
+                                match std::io::Read::read(&mut reader, &mut buf) {
+                                    Ok(n) if n > 0 => {
+                                        if let Ok(mut p) = term_reader.lock() {
+                                            p.process(&buf[..n]);
+                                        }
                                     }
+                                    _ => break,
                                 }
-                            });
-                        }
-                        let mut pty_writer = pair.master.take_writer().ok()?;
-                        crate::pane::conpty_preemptive_dsr_response(&mut *pty_writer);
-                        Some(PopupPty { master: pair.master, writer: pty_writer, child, term })
+                            }
+                        });
+                    }
+                    let mut pty_writer = pair.master.take_writer().ok()?;
+                    crate::pane::conpty_preemptive_dsr_response(&mut *pty_writer);
+                    Some(PopupPty {
+                        master: pair.master,
+                        writer: pty_writer,
+                        child,
+                        term,
                     })
-            } else { None };
-            
+                })
+            } else {
+                None
+            };
+
             app.mode = Mode::PopupMode {
                 command: rest,
                 output: String::new(),
@@ -641,7 +752,7 @@ pub fn execute_command_string(app: &mut AppState, cmd: &str) -> io::Result<()> {
             };
         }
         "resize-pane" | "resizep" => {
-            if parts.iter().any(|p| *p == "-Z") {
+            if parts.contains(&"-Z") {
                 toggle_zoom(app);
             } else {
                 // Forward to server for actual resize
@@ -652,14 +763,19 @@ pub fn execute_command_string(app: &mut AppState, cmd: &str) -> io::Result<()> {
         }
         "swap-pane" | "swapp" => {
             if let Some(port) = app.control_port {
-                let dir = if parts.iter().any(|p| *p == "-U") { "-U" } else { "-D" };
-                let _ = send_control_to_port(port, &format!("swap-pane {}\n", dir), &app.session_key);
+                let dir = if parts.contains(&"-U") { "-U" } else { "-D" };
+                let _ =
+                    send_control_to_port(port, &format!("swap-pane {}\n", dir), &app.session_key);
             }
         }
         "rotate-window" | "rotatew" => {
             if let Some(port) = app.control_port {
-                let flag = if parts.iter().any(|p| *p == "-D") { "-D" } else { "" };
-                let _ = send_control_to_port(port, &format!("rotate-window {}\n", flag), &app.session_key);
+                let flag = if parts.contains(&"-D") { "-D" } else { "" };
+                let _ = send_control_to_port(
+                    port,
+                    &format!("rotate-window {}\n", flag),
+                    &app.session_key,
+                );
             }
         }
         "break-pane" | "breakp" => {
@@ -726,13 +842,23 @@ pub fn execute_command_string(app: &mut AppState, cmd: &str) -> io::Result<()> {
         }
         "choose-tree" | "choose-window" => {
             let tree = build_choose_tree(app);
-            let selected = tree.iter().position(|e| e.is_current_session && e.is_active_window && !e.is_session_header).unwrap_or(0);
+            let selected = tree
+                .iter()
+                .position(|e| e.is_current_session && e.is_active_window && !e.is_session_header)
+                .unwrap_or(0);
             app.mode = Mode::WindowChooser { selected, tree };
         }
         "command-prompt" => {
             // Support -I initial_text, -p prompt (ignored), -1 (ignored)
-            let initial = parts.windows(2).find(|w| w[0] == "-I").map(|w| w[1].to_string()).unwrap_or_default();
-            app.mode = Mode::CommandPrompt { input: initial.clone(), cursor: initial.len() };
+            let initial = parts
+                .windows(2)
+                .find(|w| w[0] == "-I")
+                .map(|w| w[1].to_string())
+                .unwrap_or_default();
+            app.mode = Mode::CommandPrompt {
+                input: initial.clone(),
+                cursor: initial.len(),
+            };
         }
         "paste-buffer" | "pasteb" => {
             paste_latest(app)?;
@@ -740,11 +866,15 @@ pub fn execute_command_string(app: &mut AppState, cmd: &str) -> io::Result<()> {
         "set-buffer" => {
             if let Some(text) = parts.get(1) {
                 app.paste_buffers.insert(0, text.to_string());
-                if app.paste_buffers.len() > 10 { app.paste_buffers.pop(); }
+                if app.paste_buffers.len() > 10 {
+                    app.paste_buffers.pop();
+                }
             }
         }
         "delete-buffer" => {
-            if !app.paste_buffers.is_empty() { app.paste_buffers.remove(0); }
+            if !app.paste_buffers.is_empty() {
+                app.paste_buffers.remove(0);
+            }
         }
         "clear-history" => {
             if let Some(port) = app.control_port {
@@ -761,15 +891,21 @@ pub fn execute_command_string(app: &mut AppState, cmd: &str) -> io::Result<()> {
             let args = parse_command_line(cmd);
             let mut cmd_parts: Vec<&str> = Vec::new();
             for arg in &args[1..] {
-                if arg == "-b" { /* always spawn non-blocking */ }
-                else { cmd_parts.push(arg); }
+                if arg == "-b" { /* always spawn non-blocking */
+                } else {
+                    cmd_parts.push(arg);
+                }
             }
             let shell_cmd = cmd_parts.join(" ");
             if !shell_cmd.is_empty() {
                 // Expand ~ to home directory
                 let shell_cmd = if shell_cmd.contains('~') {
-                    let home = std::env::var("USERPROFILE").or_else(|_| std::env::var("HOME")).unwrap_or_default();
-                    shell_cmd.replace("~/", &format!("{}/", home)).replace("~\\", &format!("{}\\", home))
+                    let home = std::env::var("USERPROFILE")
+                        .or_else(|_| std::env::var("HOME"))
+                        .unwrap_or_default();
+                    shell_cmd
+                        .replace("~/", &format!("{}/", home))
+                        .replace("~\\", &format!("{}\\", home))
                 } else {
                     shell_cmd
                 };

@@ -52,8 +52,7 @@ use std::io;
 use std::time::Duration;
 
 use crossterm::event::{
-    Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers,
-    MouseButton, MouseEvent, MouseEventKind,
+    Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseButton, MouseEvent, MouseEventKind,
 };
 
 /// Explicitly (re-)send the VT mouse-enable escape sequences to stdout.
@@ -146,7 +145,9 @@ pub fn send_mouse_enable() {
                 let vtp = mode & 0x0004 != 0; // ENABLE_VIRTUAL_TERMINAL_PROCESSING
                 ssh_debug_log(&format!(
                     "stdout console mode: 0x{:04X} VTP={} (pass-through={})",
-                    mode, vtp, if vtp { "likely" } else { "NO" },
+                    mode,
+                    vtp,
+                    if vtp { "likely" } else { "NO" },
                 ));
             }
         }
@@ -202,9 +203,7 @@ pub fn is_ssh_session() -> bool {
 /// The fix: use the same VT input parser as SSH sessions to properly decode
 /// X10/SGR mouse sequences from stdin.
 pub fn needs_vt_input() -> bool {
-    is_ssh_session()
-        || std::env::var("TERMINAL_EMULATOR")
-            .map_or(false, |v| v.contains("JetBrains"))
+    is_ssh_session() || std::env::var("TERMINAL_EMULATOR").is_ok_and(|v| v.contains("JetBrains"))
 }
 
 /// Returns the Windows build number (e.g. 19045 for Win10 22H2, 22631 for
@@ -212,6 +211,7 @@ pub fn needs_vt_input() -> bool {
 #[cfg(windows)]
 pub fn windows_build_number() -> Option<u32> {
     #[repr(C)]
+    #[allow(clippy::upper_case_acronyms)]
     struct OSVERSIONINFOW {
         os_version_info_size: u32,
         major: u32,
@@ -227,7 +227,11 @@ pub fn windows_build_number() -> Option<u32> {
     let mut info: OSVERSIONINFOW = unsafe { std::mem::zeroed() };
     info.os_version_info_size = std::mem::size_of::<OSVERSIONINFOW>() as u32;
     let status = unsafe { RtlGetVersion(&mut info) };
-    if status == 0 { Some(info.build) } else { None }
+    if status == 0 {
+        Some(info.build)
+    } else {
+        None
+    }
 }
 
 #[cfg(not(windows))]
@@ -273,7 +277,10 @@ impl InputSource {
                 Ok(rx) => Ok(InputSource::Ssh { rx }),
                 Err(e) => {
                     // Log to file instead of stderr (raw mode garbles eprintln).
-                    ssh_debug_log(&format!("SSH VT input init failed: {}; falling back to crossterm", e));
+                    ssh_debug_log(&format!(
+                        "SSH VT input init failed: {}; falling back to crossterm",
+                        e
+                    ));
                     Ok(InputSource::Crossterm)
                 }
             }
@@ -384,17 +391,17 @@ fn decode_utf16_unit(unit: u16, high_surrogate: &mut Option<u16>) -> Option<char
 #[derive(Clone, Copy, PartialEq)]
 enum PS {
     Ground,
-    Escape,     // received \x1b
-    CsiEntry,   // received \x1b[
-    CsiParam,   // accumulating CSI parameters
-    X10Mouse,   // received \x1b[M — reading 3 raw bytes
-    Ss3,        // received \x1bO
-    Paste,      // inside \x1b[200~ … \x1b[201~
-    PasteEsc,   // received \x1b inside paste
-    PasteBrk,   // received \x1b[ inside paste
-    PasteNum,   // accumulating digits inside paste CSI
-    Osc,        // inside \x1b] … waiting for ST (\x07 or \x1b\\)
-    OscEsc,     // received \x1b inside OSC — might be ST
+    Escape,   // received \x1b
+    CsiEntry, // received \x1b[
+    CsiParam, // accumulating CSI parameters
+    X10Mouse, // received \x1b[M — reading 3 raw bytes
+    Ss3,      // received \x1bO
+    Paste,    // inside \x1b[200~ … \x1b[201~
+    PasteEsc, // received \x1b inside paste
+    PasteBrk, // received \x1b[ inside paste
+    PasteNum, // accumulating digits inside paste CSI
+    Osc,      // inside \x1b] … waiting for ST (\x07 or \x1b\\)
+    OscEsc,   // received \x1b inside OSC — might be ST
 }
 
 struct VtParser {
@@ -450,18 +457,18 @@ impl VtParser {
     #[inline]
     fn feed<F: FnMut(Event)>(&mut self, ch: char, emit: &mut F) {
         match self.state {
-            PS::Ground   => self.on_ground(ch, emit),
-            PS::Escape   => self.on_escape(ch, emit),
+            PS::Ground => self.on_ground(ch, emit),
+            PS::Escape => self.on_escape(ch, emit),
             PS::CsiEntry => self.on_csi_entry(ch, emit),
             PS::CsiParam => self.on_csi_param(ch, emit),
             PS::X10Mouse => self.on_x10(ch, emit),
-            PS::Ss3      => self.on_ss3(ch, emit),
-            PS::Paste    => self.on_paste(ch, emit),
+            PS::Ss3 => self.on_ss3(ch, emit),
+            PS::Paste => self.on_paste(ch, emit),
             PS::PasteEsc => self.on_paste_esc(ch, emit),
             PS::PasteBrk => self.on_paste_brk(ch, emit),
             PS::PasteNum => self.on_paste_num(ch, emit),
-            PS::Osc      => self.on_osc(ch, emit),
-            PS::OscEsc   => self.on_osc_esc(ch, emit),
+            PS::Osc => self.on_osc(ch, emit),
+            PS::OscEsc => self.on_osc_esc(ch, emit),
         }
     }
 
@@ -535,7 +542,7 @@ impl VtParser {
                 self.osc.clear();
                 self.state = PS::Osc;
             }
-            c if c >= ' ' && c <= '~' => {
+            c if (' '..='~').contains(&c) => {
                 // Alt + printable character.
                 emit(make_key(KeyCode::Char(c), KeyModifiers::ALT));
                 self.state = PS::Ground;
@@ -598,7 +605,10 @@ impl VtParser {
     fn on_csi_param<F: FnMut(Event)>(&mut self, ch: char, emit: &mut F) {
         match ch {
             '0'..='9' => {
-                self.cur = self.cur.saturating_mul(10).saturating_add((ch as u16) - (b'0' as u16));
+                self.cur = self
+                    .cur
+                    .saturating_mul(10)
+                    .saturating_add((ch as u16) - (b'0' as u16));
                 self.has_digit = true;
             }
             ';' => {
@@ -726,17 +736,23 @@ impl VtParser {
         let py = self.params[2].saturating_sub(1); // → 0-based row
         let is_release = final_ch == 'm';
 
-        let btn_id    = pb & 0x03;
-        let is_shift  = pb & 0x04 != 0;
-        let is_alt    = pb & 0x08 != 0;
-        let is_ctrl   = pb & 0x10 != 0;
+        let btn_id = pb & 0x03;
+        let is_shift = pb & 0x04 != 0;
+        let is_alt = pb & 0x08 != 0;
+        let is_ctrl = pb & 0x10 != 0;
         let is_motion = pb & 0x20 != 0;
         let is_scroll = pb & 0x40 != 0;
 
         let mut modifiers = KeyModifiers::empty();
-        if is_shift { modifiers |= KeyModifiers::SHIFT; }
-        if is_alt   { modifiers |= KeyModifiers::ALT; }
-        if is_ctrl  { modifiers |= KeyModifiers::CONTROL; }
+        if is_shift {
+            modifiers |= KeyModifiers::SHIFT;
+        }
+        if is_alt {
+            modifiers |= KeyModifiers::ALT;
+        }
+        if is_ctrl {
+            modifiers |= KeyModifiers::CONTROL;
+        }
 
         let kind = if is_scroll {
             if btn_id == 0 {
@@ -797,17 +813,27 @@ impl VtParser {
         let col = self.x10_buf[1].wrapping_sub(33) as u16;
         let row = self.x10_buf[2].wrapping_sub(33) as u16;
 
-        let btn_id    = raw_btn & 0x03;
+        let btn_id = raw_btn & 0x03;
         let is_motion = raw_btn & 0x20 != 0;
         let is_scroll = raw_btn & 0x40 != 0;
 
         let mut modifiers = KeyModifiers::empty();
-        if raw_btn & 0x04 != 0 { modifiers |= KeyModifiers::SHIFT; }
-        if raw_btn & 0x08 != 0 { modifiers |= KeyModifiers::ALT; }
-        if raw_btn & 0x10 != 0 { modifiers |= KeyModifiers::CONTROL; }
+        if raw_btn & 0x04 != 0 {
+            modifiers |= KeyModifiers::SHIFT;
+        }
+        if raw_btn & 0x08 != 0 {
+            modifiers |= KeyModifiers::ALT;
+        }
+        if raw_btn & 0x10 != 0 {
+            modifiers |= KeyModifiers::CONTROL;
+        }
 
         let kind = if is_scroll {
-            if btn_id == 0 { MouseEventKind::ScrollUp } else { MouseEventKind::ScrollDown }
+            if btn_id == 0 {
+                MouseEventKind::ScrollUp
+            } else {
+                MouseEventKind::ScrollDown
+            }
         } else if is_motion {
             match btn_id {
                 0 => MouseEventKind::Drag(MouseButton::Left),
@@ -828,7 +854,12 @@ impl VtParser {
             MouseEventKind::Down(button)
         };
 
-        emit(Event::Mouse(MouseEvent { kind, column: col, row: row, modifiers }));
+        emit(Event::Mouse(MouseEvent {
+            kind,
+            column: col,
+            row,
+            modifiers,
+        }));
     }
 
     // ── SS3 (\x1bO) ─────────────────────────────────────────────────────
@@ -887,7 +918,10 @@ impl VtParser {
 
     fn on_paste_num<F: FnMut(Event)>(&mut self, ch: char, emit: &mut F) {
         if ch.is_ascii_digit() {
-            self.cur = self.cur.saturating_mul(10).saturating_add((ch as u16) - (b'0' as u16));
+            self.cur = self
+                .cur
+                .saturating_mul(10)
+                .saturating_add((ch as u16) - (b'0' as u16));
         } else if ch == '~' && self.cur == 201 {
             // \x1b[201~ — paste end.
             let text = std::mem::take(&mut self.paste);
@@ -970,22 +1004,22 @@ impl VtParser {
 #[cfg(windows)]
 fn vk_to_keycode(vk: u16) -> Option<KeyCode> {
     match vk {
-        0x08 => Some(KeyCode::Backspace),   // VK_BACK
-        0x09 => Some(KeyCode::Tab),         // VK_TAB
-        0x0D => Some(KeyCode::Enter),       // VK_RETURN
-        0x1B => Some(KeyCode::Esc),         // VK_ESCAPE
-        0x20 => Some(KeyCode::Char(' ')),   // VK_SPACE
-        0x21 => Some(KeyCode::PageUp),      // VK_PRIOR
-        0x22 => Some(KeyCode::PageDown),    // VK_NEXT
-        0x23 => Some(KeyCode::End),         // VK_END
-        0x24 => Some(KeyCode::Home),        // VK_HOME
-        0x25 => Some(KeyCode::Left),        // VK_LEFT
-        0x26 => Some(KeyCode::Up),          // VK_UP
-        0x27 => Some(KeyCode::Right),       // VK_RIGHT
-        0x28 => Some(KeyCode::Down),        // VK_DOWN
-        0x2D => Some(KeyCode::Insert),      // VK_INSERT
-        0x2E => Some(KeyCode::Delete),      // VK_DELETE
-        0x70 => Some(KeyCode::F(1)),        // VK_F1
+        0x08 => Some(KeyCode::Backspace), // VK_BACK
+        0x09 => Some(KeyCode::Tab),       // VK_TAB
+        0x0D => Some(KeyCode::Enter),     // VK_RETURN
+        0x1B => Some(KeyCode::Esc),       // VK_ESCAPE
+        0x20 => Some(KeyCode::Char(' ')), // VK_SPACE
+        0x21 => Some(KeyCode::PageUp),    // VK_PRIOR
+        0x22 => Some(KeyCode::PageDown),  // VK_NEXT
+        0x23 => Some(KeyCode::End),       // VK_END
+        0x24 => Some(KeyCode::Home),      // VK_HOME
+        0x25 => Some(KeyCode::Left),      // VK_LEFT
+        0x26 => Some(KeyCode::Up),        // VK_UP
+        0x27 => Some(KeyCode::Right),     // VK_RIGHT
+        0x28 => Some(KeyCode::Down),      // VK_DOWN
+        0x2D => Some(KeyCode::Insert),    // VK_INSERT
+        0x2E => Some(KeyCode::Delete),    // VK_DELETE
+        0x70 => Some(KeyCode::F(1)),      // VK_F1
         0x71 => Some(KeyCode::F(2)),
         0x72 => Some(KeyCode::F(3)),
         0x73 => Some(KeyCode::F(4)),
@@ -996,7 +1030,7 @@ fn vk_to_keycode(vk: u16) -> Option<KeyCode> {
         0x78 => Some(KeyCode::F(9)),
         0x79 => Some(KeyCode::F(10)),
         0x7A => Some(KeyCode::F(11)),
-        0x7B => Some(KeyCode::F(12)),       // VK_F12
+        0x7B => Some(KeyCode::F(12)), // VK_F12
         _ => None,
     }
 }
@@ -1005,9 +1039,15 @@ fn vk_to_keycode(vk: u16) -> Option<KeyCode> {
 #[cfg(windows)]
 fn vk_modifiers(state: u32) -> KeyModifiers {
     let mut m = KeyModifiers::empty();
-    if state & 0x0010 != 0 { m |= KeyModifiers::SHIFT; }      // SHIFT_PRESSED
-    if state & (0x0001 | 0x0002) != 0 { m |= KeyModifiers::ALT; }     // LEFT/RIGHT_ALT
-    if state & (0x0004 | 0x0008) != 0 { m |= KeyModifiers::CONTROL; } // LEFT/RIGHT_CTRL
+    if state & 0x0010 != 0 {
+        m |= KeyModifiers::SHIFT;
+    } // SHIFT_PRESSED
+    if state & (0x0001 | 0x0002) != 0 {
+        m |= KeyModifiers::ALT;
+    } // LEFT/RIGHT_ALT
+    if state & (0x0004 | 0x0008) != 0 {
+        m |= KeyModifiers::CONTROL;
+    } // LEFT/RIGHT_CTRL
     m
 }
 
@@ -1060,20 +1100,20 @@ fn start_ssh_reader() -> io::Result<std::sync::mpsc::Receiver<Event>> {
     // ── Win32 constants ──────────────────────────────────────────────────
     const STD_INPUT_HANDLE: u32 = (-10i32) as u32;
     const ENABLE_VIRTUAL_TERMINAL_INPUT: u32 = 0x0200;
-    const ENABLE_WINDOW_INPUT: u32          = 0x0008;
-    const ENABLE_MOUSE_INPUT: u32           = 0x0010;
-    const ENABLE_EXTENDED_FLAGS: u32        = 0x0080;
-    const ENABLE_LINE_INPUT: u32            = 0x0002;
-    const ENABLE_ECHO_INPUT: u32            = 0x0004;
-    const ENABLE_PROCESSED_INPUT: u32       = 0x0001;
-    const ENABLE_QUICK_EDIT_MODE: u32       = 0x0040;
+    const ENABLE_WINDOW_INPUT: u32 = 0x0008;
+    const ENABLE_MOUSE_INPUT: u32 = 0x0010;
+    const ENABLE_EXTENDED_FLAGS: u32 = 0x0080;
+    const ENABLE_LINE_INPUT: u32 = 0x0002;
+    const ENABLE_ECHO_INPUT: u32 = 0x0004;
+    const ENABLE_PROCESSED_INPUT: u32 = 0x0001;
+    const ENABLE_QUICK_EDIT_MODE: u32 = 0x0040;
 
-    const KEY_EVENT: u16                     = 0x0001;
-    const MOUSE_EVENT: u16                   = 0x0002;
-    const WINDOW_BUFFER_SIZE_EVENT: u16      = 0x0004;
+    const KEY_EVENT: u16 = 0x0001;
+    const MOUSE_EVENT: u16 = 0x0002;
+    const WINDOW_BUFFER_SIZE_EVENT: u16 = 0x0004;
 
     const WAIT_OBJECT_0: u32 = 0x00000000;
-    const WAIT_TIMEOUT: u32  = 0x00000102;
+    const WAIT_TIMEOUT: u32 = 0x00000102;
 
     // ── Win32 structs ────────────────────────────────────────────────────
 
@@ -1131,10 +1171,10 @@ fn start_ssh_reader() -> io::Result<std::sync::mpsc::Receiver<Event>> {
     // ── Native MOUSE_EVENT → crossterm Event conversion ──────────────────
 
     const FROM_LEFT_1ST: u32 = 0x0001;
-    const RIGHTMOST: u32     = 0x0002;
+    const RIGHTMOST: u32 = 0x0002;
     const FROM_LEFT_2ND: u32 = 0x0004;
-    const ME_MOVED: u32      = 0x0001;
-    const ME_WHEELED: u32    = 0x0004;
+    const ME_MOVED: u32 = 0x0001;
+    const ME_WHEELED: u32 = 0x0004;
 
     fn convert_native_mouse(rec: &MOUSE_EVENT_RECORD) -> Option<Event> {
         let col = rec.mouse_x.max(0) as u16;
@@ -1142,41 +1182,91 @@ fn start_ssh_reader() -> io::Result<std::sync::mpsc::Receiver<Event>> {
         let mods = {
             let s = rec.control_key_state;
             let mut m = KeyModifiers::empty();
-            if s & 0x0010 != 0 { m |= KeyModifiers::SHIFT; } // SHIFT_PRESSED
-            if s & (0x0001 | 0x0002) != 0 { m |= KeyModifiers::ALT; } // LEFT/RIGHT_ALT
-            if s & (0x0004 | 0x0008) != 0 { m |= KeyModifiers::CONTROL; } // LEFT/RIGHT_CTRL
+            if s & 0x0010 != 0 {
+                m |= KeyModifiers::SHIFT;
+            } // SHIFT_PRESSED
+            if s & (0x0001 | 0x0002) != 0 {
+                m |= KeyModifiers::ALT;
+            } // LEFT/RIGHT_ALT
+            if s & (0x0004 | 0x0008) != 0 {
+                m |= KeyModifiers::CONTROL;
+            } // LEFT/RIGHT_CTRL
             m
         };
 
         if rec.event_flags & ME_WHEELED != 0 {
             let delta = (rec.button_state >> 16) as i16;
-            let kind = if delta > 0 { MouseEventKind::ScrollUp } else { MouseEventKind::ScrollDown };
-            return Some(Event::Mouse(MouseEvent { kind, column: col, row, modifiers: mods }));
+            let kind = if delta > 0 {
+                MouseEventKind::ScrollUp
+            } else {
+                MouseEventKind::ScrollDown
+            };
+            return Some(Event::Mouse(MouseEvent {
+                kind,
+                column: col,
+                row,
+                modifiers: mods,
+            }));
         }
 
         if rec.event_flags & ME_MOVED != 0 {
             if rec.button_state & FROM_LEFT_1ST != 0 {
-                return Some(Event::Mouse(MouseEvent { kind: MouseEventKind::Drag(MouseButton::Left), column: col, row, modifiers: mods }));
+                return Some(Event::Mouse(MouseEvent {
+                    kind: MouseEventKind::Drag(MouseButton::Left),
+                    column: col,
+                    row,
+                    modifiers: mods,
+                }));
             }
             if rec.button_state & RIGHTMOST != 0 {
-                return Some(Event::Mouse(MouseEvent { kind: MouseEventKind::Drag(MouseButton::Right), column: col, row, modifiers: mods }));
+                return Some(Event::Mouse(MouseEvent {
+                    kind: MouseEventKind::Drag(MouseButton::Right),
+                    column: col,
+                    row,
+                    modifiers: mods,
+                }));
             }
-            return Some(Event::Mouse(MouseEvent { kind: MouseEventKind::Moved, column: col, row, modifiers: mods }));
+            return Some(Event::Mouse(MouseEvent {
+                kind: MouseEventKind::Moved,
+                column: col,
+                row,
+                modifiers: mods,
+            }));
         }
 
         if rec.button_state & FROM_LEFT_1ST != 0 {
-            return Some(Event::Mouse(MouseEvent { kind: MouseEventKind::Down(MouseButton::Left), column: col, row, modifiers: mods }));
+            return Some(Event::Mouse(MouseEvent {
+                kind: MouseEventKind::Down(MouseButton::Left),
+                column: col,
+                row,
+                modifiers: mods,
+            }));
         }
         if rec.button_state & RIGHTMOST != 0 {
-            return Some(Event::Mouse(MouseEvent { kind: MouseEventKind::Down(MouseButton::Right), column: col, row, modifiers: mods }));
+            return Some(Event::Mouse(MouseEvent {
+                kind: MouseEventKind::Down(MouseButton::Right),
+                column: col,
+                row,
+                modifiers: mods,
+            }));
         }
         if rec.button_state & FROM_LEFT_2ND != 0 {
-            return Some(Event::Mouse(MouseEvent { kind: MouseEventKind::Down(MouseButton::Middle), column: col, row, modifiers: mods }));
+            return Some(Event::Mouse(MouseEvent {
+                kind: MouseEventKind::Down(MouseButton::Middle),
+                column: col,
+                row,
+                modifiers: mods,
+            }));
         }
 
         // button_state == 0  → all buttons released
         if rec.button_state == 0 && rec.event_flags == 0 {
-            return Some(Event::Mouse(MouseEvent { kind: MouseEventKind::Up(MouseButton::Left), column: col, row, modifiers: mods }));
+            return Some(Event::Mouse(MouseEvent {
+                kind: MouseEventKind::Up(MouseButton::Left),
+                column: col,
+                row,
+                modifiers: mods,
+            }));
         }
 
         None
@@ -1191,6 +1281,7 @@ fn start_ssh_reader() -> io::Result<std::sync::mpsc::Receiver<Event>> {
     // Log Windows version
     {
         #[repr(C)]
+        #[allow(clippy::upper_case_acronyms)]
         struct OSVERSIONINFOW {
             os_version_info_size: u32,
             major: u32,
@@ -1235,15 +1326,15 @@ fn start_ssh_reader() -> io::Result<std::sync::mpsc::Receiver<Event>> {
     // any error is reported synchronously.
     let handle = unsafe { GetStdHandle(STD_INPUT_HANDLE) };
     if handle.is_null() || handle == (-1isize) as *mut c_void {
-        return Err(io::Error::new(io::ErrorKind::Other, "GetStdHandle(STDIN) failed"));
+        return Err(io::Error::other("GetStdHandle(STDIN) failed"));
     }
 
     let mut orig_mode: u32 = 0;
     if unsafe { GetConsoleMode(handle, &mut orig_mode) } == 0 {
-        return Err(io::Error::new(
-            io::ErrorKind::Other,
-            format!("GetConsoleMode failed (err {})", io::Error::last_os_error()),
-        ));
+        return Err(io::Error::other(format!(
+            "GetConsoleMode failed (err {})",
+            io::Error::last_os_error()
+        )));
     }
 
     // ENABLE_VIRTUAL_TERMINAL_INPUT (0x0200) is CRITICAL for SSH mouse.
@@ -1255,20 +1346,20 @@ fn start_ssh_reader() -> io::Result<std::sync::mpsc::Receiver<Event>> {
     // This must run AFTER crossterm's enable_raw_mode() and
     // EnableMouseCapture so our SetConsoleMode has the final word.
     let new_mode = (orig_mode
-        & !(ENABLE_LINE_INPUT | ENABLE_ECHO_INPUT | ENABLE_PROCESSED_INPUT | ENABLE_QUICK_EDIT_MODE))
+        & !(ENABLE_LINE_INPUT
+            | ENABLE_ECHO_INPUT
+            | ENABLE_PROCESSED_INPUT
+            | ENABLE_QUICK_EDIT_MODE))
         | ENABLE_VIRTUAL_TERMINAL_INPUT
         | ENABLE_WINDOW_INPUT
         | ENABLE_MOUSE_INPUT
         | ENABLE_EXTENDED_FLAGS;
 
     if unsafe { SetConsoleMode(handle, new_mode) } == 0 {
-        return Err(io::Error::new(
-            io::ErrorKind::Other,
-            format!(
-                "SetConsoleMode(+VTI) failed (err {})",
-                io::Error::last_os_error()
-            ),
-        ));
+        return Err(io::Error::other(format!(
+            "SetConsoleMode(+VTI) failed (err {})",
+            io::Error::last_os_error()
+        )));
     }
 
     // Verify the mode actually stuck (some ConPTY implementations may
@@ -1278,7 +1369,10 @@ fn start_ssh_reader() -> io::Result<std::sync::mpsc::Receiver<Event>> {
         let vti_ok = actual_mode & ENABLE_VIRTUAL_TERMINAL_INPUT != 0;
         ssh_debug_log(&format!(
             "Console mode: orig=0x{:04X} requested=0x{:04X} actual=0x{:04X} VTI={}",
-            orig_mode, new_mode, actual_mode, if vti_ok { "YES" } else { "NO" },
+            orig_mode,
+            new_mode,
+            actual_mode,
+            if vti_ok { "YES" } else { "NO" },
         ));
         if !vti_ok {
             ssh_debug_log("WARNING: VTI not set — ConPTY may swallow mouse sequences");
@@ -1321,7 +1415,7 @@ fn start_ssh_reader() -> io::Result<std::sync::mpsc::Receiver<Event>> {
 
                 if wait == WAIT_TIMEOUT {
                     // Heartbeat every ~60 loops (≈30 s at 500 ms timeout)
-                    if loop_count % 60 == 0 {
+                    if loop_count.is_multiple_of(60) {
                         ssh_debug_log(&format!(
                             "heartbeat: loops={} records={} chars={} vk={} mouse={}",
                             loop_count, total_records, key_char_count, key_vk_count, mouse_count,
@@ -1329,13 +1423,12 @@ fn start_ssh_reader() -> io::Result<std::sync::mpsc::Receiver<Event>> {
                         // Verify VTI is still set — ConPTY or other processes can
                         // clear it, which silently breaks mouse input over SSH.
                         let mut cur_mode: u32 = 0;
-                        if unsafe { GetConsoleMode(handle, &mut cur_mode) } != 0 {
-                            if cur_mode & ENABLE_VIRTUAL_TERMINAL_INPUT == 0 {
+                        if unsafe { GetConsoleMode(handle, &mut cur_mode) } != 0
+                            && cur_mode & ENABLE_VIRTUAL_TERMINAL_INPUT == 0 {
                                 ssh_debug_log("WARNING: VTI cleared! Re-enabling...");
                                 let fixed = cur_mode | ENABLE_VIRTUAL_TERMINAL_INPUT | ENABLE_MOUSE_INPUT;
                                 unsafe { SetConsoleMode(handle, fixed) };
                             }
-                        }
                     }
                     // Flush pending Esc (if any) as a standalone keypress.
                     parser.flush_escape(&mut |evt| {
@@ -1362,8 +1455,7 @@ fn start_ssh_reader() -> io::Result<std::sync::mpsc::Receiver<Event>> {
                     break;
                 }
 
-                for i in 0..count as usize {
-                    let rec = &records[i];
+                for rec in records.iter().take(count as usize) {
                     total_records += 1;
                     match rec.event_type {
                         KEY_EVENT => {

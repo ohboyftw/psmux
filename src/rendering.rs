@@ -3,23 +3,21 @@
 //! Style/color parsing is in `style.rs`; this module re-exports it for
 //! backward compatibility so `use crate::rendering::*` still works.
 
-use std::io::{self, Write};
-use std::env;
-use ratatui::prelude::*;
-use ratatui::widgets::*;
-use ratatui::style::{Style, Modifier};
-use unicode_width::UnicodeWidthStr;
-use crossterm::style::Print;
 use crossterm::execute;
+use crossterm::style::Print;
 use portable_pty::PtySize;
+use ratatui::prelude::*;
+use ratatui::style::{Modifier, Style};
+use ratatui::widgets::*;
+use std::env;
+use std::io::{self, Write};
+use unicode_width::UnicodeWidthStr;
 
-use crate::types::{AppState, Mode, Node, LayoutKind};
 use crate::tree::split_with_gaps;
+use crate::types::{AppState, LayoutKind, Mode, Node};
 
 // Re-export style utilities so existing `use crate::rendering::*` still works.
-pub use crate::style::{
-    map_color, parse_tmux_style, parse_inline_styles,
-};
+pub use crate::style::{map_color, parse_inline_styles, parse_tmux_style};
 
 // ─── VT color helpers ───────────────────────────────────────────────────────
 
@@ -33,7 +31,11 @@ pub fn vt_to_color(c: vt100::Color) -> Color {
 
 pub fn dim_color(c: Color) -> Color {
     match c {
-        Color::Rgb(r, g, b) => Color::Rgb((r as u16 * 2 / 5) as u8, (g as u16 * 2 / 5) as u8, (b as u16 * 2 / 5) as u8),
+        Color::Rgb(r, g, b) => Color::Rgb(
+            (r as u16 * 2 / 5) as u8,
+            (g as u16 * 2 / 5) as u8,
+            (b as u16 * 2 / 5) as u8,
+        ),
         Color::Black => Color::Rgb(40, 40, 40),
         Color::White | Color::Gray | Color::DarkGray => Color::Rgb(100, 100, 100),
         Color::LightRed => Color::Rgb(150, 80, 80),
@@ -47,7 +49,9 @@ pub fn dim_color(c: Color) -> Color {
 }
 
 pub fn dim_predictions_enabled() -> bool {
-    std::env::var("PSMUX_DIM_PREDICTIONS").map(|v| v == "1" || v.to_lowercase() == "true").unwrap_or(false)
+    std::env::var("PSMUX_DIM_PREDICTIONS")
+        .map(|v| v == "1" || v.to_lowercase() == "true")
+        .unwrap_or(false)
 }
 
 // ─── Cursor ─────────────────────────────────────────────────────────────────
@@ -78,9 +82,27 @@ pub fn configured_cursor_code() -> u8 {
     let style = env::var("PSMUX_CURSOR_STYLE").unwrap_or_else(|_| "bar".to_string());
     let blink = env::var("PSMUX_CURSOR_BLINK").unwrap_or_else(|_| "1".to_string()) != "0";
     match style.as_str() {
-        "block" => if blink { 1 } else { 2 },
-        "underline" => if blink { 3 } else { 4 },
-        "bar" | "beam" => if blink { 5 } else { 6 },
+        "block" => {
+            if blink {
+                1
+            } else {
+                2
+            }
+        }
+        "underline" => {
+            if blink {
+                3
+            } else {
+                4
+            }
+        }
+        "bar" | "beam" => {
+            if blink {
+                5
+            } else {
+                6
+            }
+        }
         "default" => 0,
         _ => 0,
     }
@@ -98,10 +120,27 @@ pub fn render_window(f: &mut Frame, app: &mut AppState, area: Rect) {
     let dim_preds = app.prediction_dimming;
     let border_style = parse_tmux_style(&app.pane_border_style);
     let active_border_style = parse_tmux_style(&app.pane_active_border_style);
-    let copy_cursor = if matches!(app.mode, Mode::CopyMode | Mode::CopySearch { .. }) { app.copy_pos } else { None };
+    let copy_cursor = if matches!(app.mode, Mode::CopyMode | Mode::CopySearch { .. }) {
+        app.copy_pos
+    } else {
+        None
+    };
+    let zoomed = app.zoom_saved.is_some();
     let win = &mut app.windows[app.active_idx];
     let active_rect = compute_active_rect(&win.root, &win.active_path, area);
-    render_node(f, &mut win.root, &win.active_path, &mut Vec::new(), area, dim_preds, border_style, active_border_style, copy_cursor, active_rect);
+    render_node(
+        f,
+        &mut win.root,
+        &win.active_path,
+        &mut Vec::new(),
+        area,
+        dim_preds,
+        border_style,
+        active_border_style,
+        copy_cursor,
+        active_rect,
+        zoomed,
+    );
     fix_border_intersections(f.buffer_mut());
 }
 
@@ -111,7 +150,9 @@ pub fn render_window(f: &mut Frame, app: &mut AppState, area: Rect) {
 pub fn fix_border_intersections(buf: &mut Buffer) {
     let w = buf.area.width as usize;
     let h = buf.area.height as usize;
-    if w == 0 || h == 0 { return; }
+    if w == 0 || h == 0 {
+        return;
+    }
 
     // Collect fixes first so detection sees only original characters.
     let mut fixes: Vec<(usize, char)> = Vec::new();
@@ -119,7 +160,9 @@ pub fn fix_border_intersections(buf: &mut Buffer) {
     for row in 0..h {
         for col in 0..w {
             let idx = row * w + col;
-            if idx >= buf.content.len() { continue; }
+            if idx >= buf.content.len() {
+                continue;
+            }
             let ch = buf.content[idx].symbol().chars().next().unwrap_or(' ');
 
             match ch {
@@ -127,14 +170,14 @@ pub fn fix_border_intersections(buf: &mut Buffer) {
                     // Cell already has vertical (up+down). Check for horizontal neighbours.
                     let has_left = col > 0 && {
                         let li = row * w + (col - 1);
-                        li < buf.content.len() && buf.content[li].symbol().chars().next() == Some('─')
+                        li < buf.content.len() && buf.content[li].symbol().starts_with('─')
                     };
                     let has_right = col + 1 < w && {
                         let ri = row * w + (col + 1);
-                        ri < buf.content.len() && buf.content[ri].symbol().chars().next() == Some('─')
+                        ri < buf.content.len() && buf.content[ri].symbol().starts_with('─')
                     };
                     match (has_left, has_right) {
-                        (true, true)  => fixes.push((idx, '┼')),
+                        (true, true) => fixes.push((idx, '┼')),
                         (true, false) => fixes.push((idx, '┤')),
                         (false, true) => fixes.push((idx, '├')),
                         _ => {}
@@ -144,14 +187,14 @@ pub fn fix_border_intersections(buf: &mut Buffer) {
                     // Cell already has horizontal (left+right). Check for vertical neighbours.
                     let has_up = row > 0 && {
                         let ui = (row - 1) * w + col;
-                        ui < buf.content.len() && buf.content[ui].symbol().chars().next() == Some('│')
+                        ui < buf.content.len() && buf.content[ui].symbol().starts_with('│')
                     };
                     let has_down = row + 1 < h && {
                         let di = (row + 1) * w + col;
-                        di < buf.content.len() && buf.content[di].symbol().chars().next() == Some('│')
+                        di < buf.content.len() && buf.content[di].symbol().starts_with('│')
                     };
                     match (has_up, has_down) {
-                        (true, true)  => fixes.push((idx, '┼')),
+                        (true, true) => fixes.push((idx, '┼')),
                         (true, false) => fixes.push((idx, '┴')),
                         (false, true) => fixes.push((idx, '┬')),
                         _ => {}
@@ -167,6 +210,7 @@ pub fn fix_border_intersections(buf: &mut Buffer) {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn render_node(
     f: &mut Frame,
     node: &mut Node,
@@ -178,6 +222,7 @@ pub fn render_node(
     active_border_style: Style,
     copy_cursor: Option<(u16, u16)>,
     active_rect: Option<Rect>,
+    zoomed: bool,
 ) {
     match node {
         Node::Leaf(pane) => {
@@ -186,7 +231,12 @@ pub fn render_node(
             let target_rows = inner.height.max(1);
             let target_cols = inner.width.max(1);
             if pane.last_rows != target_rows || pane.last_cols != target_cols {
-                let _ = pane.master.resize(PtySize { rows: target_rows, cols: target_cols, pixel_width: 0, pixel_height: 0 });
+                let _ = pane.master.resize(PtySize {
+                    rows: target_rows,
+                    cols: target_cols,
+                    pixel_width: 0,
+                    pixel_height: 0,
+                });
                 if let Ok(mut parser) = pane.term.lock() {
                     parser.screen_mut().set_size(target_rows, target_cols);
                 }
@@ -194,7 +244,9 @@ pub fn render_node(
                 pane.last_cols = target_cols;
             }
             let parser_guard = pane.term.lock();
-            let Ok(parser) = parser_guard else { return; };
+            let Ok(parser) = parser_guard else {
+                return;
+            };
             let screen = parser.screen();
             let (cur_r, cur_c) = screen.cursor_position();
             let mut lines: Vec<Line> = Vec::with_capacity(target_rows as usize);
@@ -205,19 +257,34 @@ pub fn render_node(
                     if let Some(cell) = screen.cell(r, c) {
                         let mut fg = vt_to_color(cell.fgcolor());
                         let bg = vt_to_color(cell.bgcolor());
-                        if dim_preds && !screen.alternate_screen()
+                        if dim_preds
+                            && !screen.alternate_screen()
                             && (r > cur_r || (r == cur_r && c >= cur_c))
                         {
                             fg = dim_color(fg);
                         }
                         let mut style = Style::default().fg(fg).bg(bg);
-                        if cell.dim() { style = style.add_modifier(Modifier::DIM); }
-                        if cell.bold() { style = style.add_modifier(Modifier::BOLD); }
-                        if cell.italic() { style = style.add_modifier(Modifier::ITALIC); }
-                        if cell.underline() { style = style.add_modifier(Modifier::UNDERLINED); }
-                        if cell.inverse() { style = style.add_modifier(Modifier::REVERSED); }
-                        if cell.blink() { style = style.add_modifier(Modifier::SLOW_BLINK); }
-                        if cell.hidden() { style = style.add_modifier(Modifier::HIDDEN); }
+                        if cell.dim() {
+                            style = style.add_modifier(Modifier::DIM);
+                        }
+                        if cell.bold() {
+                            style = style.add_modifier(Modifier::BOLD);
+                        }
+                        if cell.italic() {
+                            style = style.add_modifier(Modifier::ITALIC);
+                        }
+                        if cell.underline() {
+                            style = style.add_modifier(Modifier::UNDERLINED);
+                        }
+                        if cell.inverse() {
+                            style = style.add_modifier(Modifier::REVERSED);
+                        }
+                        if cell.blink() {
+                            style = style.add_modifier(Modifier::SLOW_BLINK);
+                        }
+                        if cell.hidden() {
+                            style = style.add_modifier(Modifier::HIDDEN);
+                        }
                         let text = cell.contents().to_string();
                         let w = UnicodeWidthStr::width(text.as_str()) as u16;
                         if w == 0 {
@@ -256,23 +323,47 @@ pub fn render_node(
                 }
             }
         }
-        Node::Split { kind, sizes, children } => {
+        Node::Split {
+            kind,
+            sizes,
+            children,
+        } => {
             let effective_sizes: Vec<u16> = if sizes.len() == children.len() {
                 sizes.clone()
-            } else { vec![100 / children.len().max(1) as u16; children.len()] };
+            } else {
+                vec![100 / children.len().max(1) as u16; children.len()]
+            };
             let is_horizontal = *kind == LayoutKind::Horizontal;
             let rects = split_with_gaps(is_horizontal, &effective_sizes, area);
             for (i, child) in children.iter_mut().enumerate() {
                 cur_path.push(i);
                 if i < rects.len() {
-                    render_node(f, child, active_path, cur_path, rects[i], dim_preds, border_style, active_border_style, copy_cursor, active_rect);
+                    render_node(
+                        f,
+                        child,
+                        active_path,
+                        cur_path,
+                        rects[i],
+                        dim_preds,
+                        border_style,
+                        active_border_style,
+                        copy_cursor,
+                        active_rect,
+                        zoomed,
+                    );
                 }
                 cur_path.pop();
             }
             // Draw separator lines
+            // Skip when zoomed — no visible borders (#82)
+            if zoomed {
+                return;
+            }
             let buf = f.buffer_mut();
             for i in 0..children.len().saturating_sub(1) {
-                if i >= rects.len() { break; }
+                if i >= rects.len() {
+                    break;
+                }
                 let both_leaves = matches!(&children[i], Node::Leaf(_))
                     && matches!(children.get(i + 1), Some(Node::Leaf(_)));
 
@@ -286,12 +377,21 @@ pub fn render_node(
                             let right_active = cur_path.len() < active_path.len()
                                 && active_path[..cur_path.len()] == cur_path[..]
                                 && active_path[cur_path.len()] == i + 1;
-                            let left_sty = if left_active { active_border_style } else { border_style };
-                            let right_sty = if right_active { active_border_style } else { border_style };
+                            let left_sty = if left_active {
+                                active_border_style
+                            } else {
+                                border_style
+                            };
+                            let right_sty = if right_active {
+                                active_border_style
+                            } else {
+                                border_style
+                            };
                             let mid_y = area.y + area.height / 2;
                             for y in area.y..area.y + area.height {
                                 let sty = if y < mid_y { left_sty } else { right_sty };
-                                let idx = (y - buf.area.y) as usize * buf.area.width as usize + (sep_x - buf.area.x) as usize;
+                                let idx = (y - buf.area.y) as usize * buf.area.width as usize
+                                    + (sep_x - buf.area.x) as usize;
                                 if idx < buf.content.len() {
                                     buf.content[idx].set_char('│');
                                     buf.content[idx].set_style(sty);
@@ -299,12 +399,18 @@ pub fn render_node(
                             }
                         } else {
                             for y in area.y..area.y + area.height {
-                                let active = active_rect.map_or(false, |ar| {
-                                    y >= ar.y && y < ar.y + ar.height
-                                    && (sep_x == ar.x + ar.width || sep_x + 1 == ar.x)
+                                let active = active_rect.is_some_and(|ar| {
+                                    y >= ar.y
+                                        && y < ar.y + ar.height
+                                        && (sep_x == ar.x + ar.width || sep_x + 1 == ar.x)
                                 });
-                                let sty = if active { active_border_style } else { border_style };
-                                let idx = (y - buf.area.y) as usize * buf.area.width as usize + (sep_x - buf.area.x) as usize;
+                                let sty = if active {
+                                    active_border_style
+                                } else {
+                                    border_style
+                                };
+                                let idx = (y - buf.area.y) as usize * buf.area.width as usize
+                                    + (sep_x - buf.area.x) as usize;
                                 if idx < buf.content.len() {
                                     buf.content[idx].set_char('│');
                                     buf.content[idx].set_style(sty);
@@ -322,12 +428,21 @@ pub fn render_node(
                             let bot_active = cur_path.len() < active_path.len()
                                 && active_path[..cur_path.len()] == cur_path[..]
                                 && active_path[cur_path.len()] == i + 1;
-                            let top_sty = if top_active { active_border_style } else { border_style };
-                            let bot_sty = if bot_active { active_border_style } else { border_style };
+                            let top_sty = if top_active {
+                                active_border_style
+                            } else {
+                                border_style
+                            };
+                            let bot_sty = if bot_active {
+                                active_border_style
+                            } else {
+                                border_style
+                            };
                             let mid_x = area.x + area.width / 2;
                             for x in area.x..area.x + area.width {
                                 let sty = if x < mid_x { top_sty } else { bot_sty };
-                                let idx = (sep_y - buf.area.y) as usize * buf.area.width as usize + (x - buf.area.x) as usize;
+                                let idx = (sep_y - buf.area.y) as usize * buf.area.width as usize
+                                    + (x - buf.area.x) as usize;
                                 if idx < buf.content.len() {
                                     buf.content[idx].set_char('─');
                                     buf.content[idx].set_style(sty);
@@ -335,12 +450,18 @@ pub fn render_node(
                             }
                         } else {
                             for x in area.x..area.x + area.width {
-                                let active = active_rect.map_or(false, |ar| {
-                                    x >= ar.x && x < ar.x + ar.width
-                                    && (sep_y == ar.y + ar.height || sep_y + 1 == ar.y)
+                                let active = active_rect.is_some_and(|ar| {
+                                    x >= ar.x
+                                        && x < ar.x + ar.width
+                                        && (sep_y == ar.y + ar.height || sep_y + 1 == ar.y)
                                 });
-                                let sty = if active { active_border_style } else { border_style };
-                                let idx = (sep_y - buf.area.y) as usize * buf.area.width as usize + (x - buf.area.x) as usize;
+                                let sty = if active {
+                                    active_border_style
+                                } else {
+                                    border_style
+                                };
+                                let idx = (sep_y - buf.area.y) as usize * buf.area.width as usize
+                                    + (x - buf.area.x) as usize;
                                 if idx < buf.content.len() {
                                     buf.content[idx].set_char('─');
                                     buf.content[idx].set_style(sty);
@@ -366,10 +487,18 @@ fn compute_active_rect(node: &Node, active_path: &[usize], area: Rect) -> Option
 pub fn compute_active_rect_pub(node: &Node, active_path: &[usize], area: Rect) -> Option<Rect> {
     match node {
         Node::Leaf(_) => Some(area),
-        Node::Split { kind, sizes, children } => {
-            if active_path.is_empty() || children.is_empty() { return None; }
+        Node::Split {
+            kind,
+            sizes,
+            children,
+        } => {
+            if active_path.is_empty() || children.is_empty() {
+                return None;
+            }
             let idx = active_path[0];
-            if idx >= children.len() { return None; }
+            if idx >= children.len() {
+                return None;
+            }
             let effective_sizes: Vec<u16> = if sizes.len() == children.len() {
                 sizes.clone()
             } else {
@@ -422,5 +551,10 @@ pub fn centered_rect(percent_x: u16, height: u16, r: Rect) -> Rect {
     // Use the Layout-allocated height, not the raw parameter,
     // to guarantee the rect stays within the parent area.
     let final_h = middle.height.min(clamped_h);
-    Rect { x, y: middle.y, width, height: final_h }
+    Rect {
+        x,
+        y: middle.y,
+        width,
+        height: final_h,
+    }
 }

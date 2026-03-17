@@ -1,10 +1,10 @@
-use std::sync::{Arc, Mutex, mpsc};
+use std::sync::{mpsc, Arc, Mutex};
 use std::time::Instant;
 
+use chrono::Local;
 use crossterm::event::{KeyCode, KeyModifiers};
 use portable_pty::MasterPty;
 use ratatui::prelude::Rect;
-use chrono::Local;
 
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 
@@ -54,6 +54,11 @@ pub struct Pane {
     /// Stored for API compatibility; ConPTY rendering doesn't support
     /// per-pane fg/bg tinting so this is not rendered yet.
     pub pane_style: Option<String>,
+    /// Per-pane user metadata (set via `set-option -p @key value`).
+    /// Supports arbitrary @-prefixed keys for swarm orchestration queries
+    /// (e.g. `@agent`, `@task`).  Queryable via `show-options -p @key`
+    /// and format variables `#{pane_agent}`, `#{pane_task}`.
+    pub metadata: std::collections::HashMap<String, String>,
 }
 
 /// Pre-spawned shell ready to be transplanted into a new window instantly.
@@ -74,11 +79,19 @@ pub struct WarmPane {
 }
 
 #[derive(Clone, Copy, PartialEq)]
-pub enum LayoutKind { Horizontal, Vertical }
+pub enum LayoutKind {
+    Horizontal,
+    Vertical,
+}
 
+#[allow(clippy::large_enum_variant)]
 pub enum Node {
     Leaf(Pane),
-    Split { kind: LayoutKind, sizes: Vec<u16>, children: Vec<Node> },
+    Split {
+        kind: LayoutKind,
+        sizes: Vec<u16>,
+        children: Vec<Node>,
+    },
 }
 
 pub struct Window {
@@ -156,21 +169,38 @@ pub struct WaitChannel {
     pub waiters: Vec<mpsc::Sender<()>>,
 }
 
+#[allow(clippy::enum_variant_names)]
 pub enum Mode {
     Passthrough,
-    Prefix { armed_at: Instant },
-    CommandPrompt { input: String, cursor: usize },
-    WindowChooser { selected: usize, tree: Vec<crate::session::TreeEntry> },
-    RenamePrompt { input: String },
-    RenameSessionPrompt { input: String },
+    Prefix {
+        armed_at: Instant,
+    },
+    CommandPrompt {
+        input: String,
+        cursor: usize,
+    },
+    WindowChooser {
+        selected: usize,
+        tree: Vec<crate::session::TreeEntry>,
+    },
+    RenamePrompt {
+        input: String,
+    },
+    RenameSessionPrompt {
+        input: String,
+    },
     CopyMode,
-    PaneChooser { opened_at: Instant },
+    PaneChooser {
+        opened_at: Instant,
+    },
     /// Interactive menu mode
-    MenuMode { menu: Menu },
+    MenuMode {
+        menu: Menu,
+    },
     /// Popup window running a command (with optional PTY for interactive programs)
-    PopupMode { 
-        command: String, 
-        output: String, 
+    PopupMode {
+        command: String,
+        output: String,
         process: Option<std::process::Child>,
         width: u16,
         height: u16,
@@ -179,8 +209,8 @@ pub enum Mode {
         popup_pty: Option<PopupPty>,
     },
     /// Confirmation prompt before command
-    ConfirmMode { 
-        prompt: String, 
+    ConfirmMode {
+        prompt: String,
         command: String,
         input: String,
     },
@@ -192,11 +222,17 @@ pub enum Mode {
     /// Big clock display (tmux clock-mode)
     ClockMode,
     /// Interactive buffer chooser (prefix =)
-    BufferChooser { selected: usize },
+    BufferChooser {
+        selected: usize,
+    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
-pub enum SelectionMode { Char, Line, Rect }
+pub enum SelectionMode {
+    Char,
+    Line,
+    Rect,
+}
 
 /// Per-pane copy mode state, saved/restored on pane focus changes to provide
 /// tmux-style pane-local copy mode.
@@ -225,7 +261,12 @@ pub struct CopyModeState {
 }
 
 #[derive(Debug, Clone, Copy)]
-pub enum FocusDir { Left, Right, Up, Down }
+pub enum FocusDir {
+    Left,
+    Right,
+    Up,
+    Down,
+}
 
 pub struct AppState {
     pub windows: Vec<Window>,
@@ -245,16 +286,18 @@ pub struct AppState {
     pub status_left: String,
     pub status_right: String,
     pub window_base_index: usize,
-    pub copy_anchor: Option<(u16,u16)>,
+    pub copy_anchor: Option<(u16, u16)>,
     /// Scroll offset when copy_anchor was set (for viewport-relative adjustment)
     pub copy_anchor_scroll_offset: usize,
-    pub copy_pos: Option<(u16,u16)>,
+    pub copy_pos: Option<(u16, u16)>,
     pub copy_scroll_offset: usize,
     /// Selection mode: Char (default), Line (V), Rect (C-v)
     pub copy_selection_mode: SelectionMode,
     /// Copy-mode search query
-    pub copy_search_query: String,    /// Numeric prefix count for copy-mode motions (vi-style)
-    pub copy_count: Option<usize>,    /// Copy-mode search matches: (row, col_start, col_end) in screen coords
+    pub copy_search_query: String,
+    /// Numeric prefix count for copy-mode motions (vi-style)
+    pub copy_count: Option<usize>,
+    /// Copy-mode search matches: (row, col_start, col_end) in screen coords
     pub copy_search_matches: Vec<(u16, u16, u16)>,
     /// Current match index in copy_search_matches
     pub copy_search_idx: usize,
@@ -452,6 +495,9 @@ pub struct AppState {
     pub status_message: Option<(String, std::time::Instant)>,
     /// Pre-spawned warm pane: shell already loaded, ready for instant new-window.
     pub warm_pane: Option<WarmPane>,
+    /// Number of warm (standby) servers to keep in the pool for instant
+    /// session creation.  Configurable via `set -g warm-pool-size N` (0-10, default 1).
+    pub warm_pool_size: usize,
     /// Plugin .ps1 scripts queued during config loading for post-startup execution.
     /// These need the server to be running (TCP listener) before they can apply.
     pub pending_plugin_scripts: Vec<String>,
@@ -586,6 +632,7 @@ impl AppState {
             last_hover_pos: None,
             status_message: None,
             warm_pane: None,
+            warm_pool_size: 1,
             pending_plugin_scripts: Vec::new(),
         }
     }
@@ -615,8 +662,8 @@ pub struct DragState {
 }
 
 #[derive(Clone)]
-pub enum Action { 
-    DisplayPanes, 
+pub enum Action {
+    DisplayPanes,
     MoveFocus(FocusDir),
     /// Execute an arbitrary tmux-style command string
     Command(String),
@@ -640,13 +687,39 @@ pub enum Action {
 }
 
 #[derive(Clone)]
-pub struct Bind { pub key: (KeyCode, KeyModifiers), pub action: Action, pub repeat: bool }
+pub struct Bind {
+    pub key: (KeyCode, KeyModifiers),
+    pub action: Action,
+    pub repeat: bool,
+}
 
 pub enum CtrlReq {
-    NewWindow(Option<String>, Option<String>, bool, Option<String>),  // cmd, name, detached, start_dir
-    NewWindowPrint(Option<String>, Option<String>, bool, Option<String>, Option<String>, mpsc::Sender<String>),  // cmd, name, detached, start_dir, format, resp
-    SplitWindow(LayoutKind, Option<String>, bool, Option<String>, Option<u16>, mpsc::Sender<String>),  // kind, cmd, detached, start_dir, size_percent, error_resp
-    SplitWindowPrint(LayoutKind, Option<String>, bool, Option<String>, Option<u16>, Option<String>, mpsc::Sender<String>),  // kind, cmd, detached, start_dir, size_percent, format, resp
+    NewWindow(Option<String>, Option<String>, bool, Option<String>), // cmd, name, detached, start_dir
+    NewWindowPrint(
+        Option<String>,
+        Option<String>,
+        bool,
+        Option<String>,
+        Option<String>,
+        mpsc::Sender<String>,
+    ), // cmd, name, detached, start_dir, format, resp
+    SplitWindow(
+        LayoutKind,
+        Option<String>,
+        bool,
+        Option<String>,
+        Option<u16>,
+        mpsc::Sender<String>,
+    ), // kind, cmd, detached, start_dir, size_percent, error_resp
+    SplitWindowPrint(
+        LayoutKind,
+        Option<String>,
+        bool,
+        Option<String>,
+        Option<u16>,
+        Option<String>,
+        mpsc::Sender<String>,
+    ), // kind, cmd, detached, start_dir, size_percent, format, resp
     KillPane,
     KillPaneById(usize),
     CapturePane(mpsc::Sender<String>),
@@ -664,7 +737,7 @@ pub enum CtrlReq {
     ClientAttach(u64),
     ClientDetach(u64),
     DumpLayout(mpsc::Sender<String>),
-    DumpState(mpsc::Sender<String>, bool),  // (resp, allow_nc)
+    DumpState(mpsc::Sender<String>, bool), // (resp, allow_nc)
     SendText(String),
     SendKey(String),
     SendPaste(String),
@@ -678,14 +751,14 @@ pub enum CtrlReq {
     ClientSize(u64, u16, u16),
     FocusPaneCmd(usize),
     FocusWindowCmd(usize),
-    MouseDown(u16,u16),
-    MouseDownRight(u16,u16),
-    MouseDownMiddle(u16,u16),
-    MouseDrag(u16,u16),
-    MouseUp(u16,u16),
-    MouseUpRight(u16,u16),
-    MouseUpMiddle(u16,u16),
-    MouseMove(u16,u16),
+    MouseDown(u16, u16),
+    MouseDownRight(u16, u16),
+    MouseDownMiddle(u16, u16),
+    MouseDrag(u16, u16),
+    MouseUp(u16, u16),
+    MouseUpRight(u16, u16),
+    MouseUpMiddle(u16, u16),
+    MouseMove(u16, u16),
     ScrollUp(u16, u16),
     ScrollDown(u16, u16),
     NextWindow,
@@ -699,13 +772,21 @@ pub enum CtrlReq {
     SetPaneTitle(String),
     SetPaneStyle(String),
     SendKeys(String, bool),
-    SendKeysX(String),  // send-keys -X copy-mode-command
+    SendKeysX(String), // send-keys -X copy-mode-command
     SelectPane(String),
     SelectWindow(usize),
     ListPanes(mpsc::Sender<String>),
     ListPanesFormat(mpsc::Sender<String>, String),
     ListAllPanes(mpsc::Sender<String>),
     ListAllPanesFormat(mpsc::Sender<String>, String),
+    /// JSON-structured output for `list-sessions --json`.
+    ListSessionsJson(mpsc::Sender<String>),
+    /// JSON-structured output for `list-panes --json`.
+    ListPanesJson(mpsc::Sender<String>, bool), // (resp, all_sessions)
+    /// JSON-structured output for `list-windows --json`.
+    ListWindowsJson(mpsc::Sender<String>),
+    /// JSON-structured output for `capture-pane --json`.
+    CapturePaneJson(mpsc::Sender<String>),
     KillWindow,
     KillSession,
     HasSession(mpsc::Sender<bool>),
@@ -720,7 +801,7 @@ pub enum CtrlReq {
     ShowBuffer(mpsc::Sender<String>),
     ShowBufferAt(mpsc::Sender<String>, usize),
     DeleteBuffer,
-    DisplayMessage(mpsc::Sender<String>, String, Option<usize>),  // resp, format, target_pane_idx
+    DisplayMessage(mpsc::Sender<String>, String, Option<usize>), // resp, format, target_pane_idx
     LastWindow,
     LastPane,
     RotateWindow(bool),
@@ -728,13 +809,13 @@ pub enum CtrlReq {
     BreakPane,
     JoinPane(usize),
     RespawnPane,
-    BindKey(String, String, String, bool),  // table, key, command, repeat
+    BindKey(String, String, String, bool), // table, key, command, repeat
     UnbindKey(String),
     ListKeys(mpsc::Sender<String>),
     SetOption(String, String),
-    SetOptionQuiet(String, String, bool),  // set-option with quiet flag
-    SetOptionUnset(String),  // set-option -u
-    SetOptionAppend(String, String),  // set-option -a
+    SetOptionQuiet(String, String, bool), // set-option with quiet flag
+    SetOptionUnset(String),               // set-option -u
+    SetOptionAppend(String, String),      // set-option -a
     ShowOptions(mpsc::Sender<String>),
     ShowWindowOptions(mpsc::Sender<String>),
     SourceFile(String),
@@ -773,6 +854,10 @@ pub enum CtrlReq {
     ResizePanePercent(String, u8), // axis, percentage (0-100)
     ShowOptionValue(mpsc::Sender<String>, String),
     ShowWindowOptionValue(mpsc::Sender<String>, String),
+    /// Set a pane-level option (e.g. `set-option -p @agent "agent-name"`).
+    SetPaneOption(String, String),
+    /// Query a pane-level option (e.g. `show-options -p @agent`).
+    ShowPaneOptionValue(mpsc::Sender<String>, String),
     ChooseBuffer(mpsc::Sender<String>),
     ServerInfo(mpsc::Sender<String>),
     SendPrefix,
@@ -800,14 +885,16 @@ pub enum CtrlReq {
 /// Global flag set by PTY reader threads when new output arrives.
 /// The server loop checks this to use a shorter recv_timeout, reducing
 /// keystroke-to-display latency for nested shells (e.g. WSL inside pwsh).
-pub static PTY_DATA_READY: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+pub static PTY_DATA_READY: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
 
 /// Tracked persistent client TCP streams.
 /// Connection handlers register clones here so the server can explicitly
 /// `shutdown()` them before `process::exit(0)`.  Without this, Windows
 /// does not reliably deliver TCP RST on loopback sockets when a process
 /// exits, leaving the client's blocking `read_line()` stuck forever.
-static PERSISTENT_STREAMS: std::sync::Mutex<Vec<std::net::TcpStream>> = std::sync::Mutex::new(Vec::new());
+static PERSISTENT_STREAMS: std::sync::Mutex<Vec<std::net::TcpStream>> =
+    std::sync::Mutex::new(Vec::new());
 
 /// Register a persistent client stream (call from connection handler).
 pub fn register_persistent_stream(stream: &std::net::TcpStream) {
@@ -832,8 +919,9 @@ pub fn shutdown_persistent_streams() {
 /// serialized frames through these channels whenever state changes.
 /// Each sender feeds a `Receiver<String>` into the persistent connection's
 /// existing writer-thread pipeline (which expects oneshot receivers).
-static FRAME_PUSH_SENDERS: std::sync::Mutex<Vec<std::sync::mpsc::Sender<std::sync::mpsc::Receiver<String>>>> =
-    std::sync::Mutex::new(Vec::new());
+static FRAME_PUSH_SENDERS: std::sync::Mutex<
+    Vec<std::sync::mpsc::Sender<std::sync::mpsc::Receiver<String>>>,
+> = std::sync::Mutex::new(Vec::new());
 
 /// Register a persistent connection's resp_tx clone for server-pushed frames.
 pub fn register_frame_sender(tx: std::sync::mpsc::Sender<std::sync::mpsc::Receiver<String>>) {
@@ -848,7 +936,9 @@ pub fn push_frame(frame: &str) {
         senders.retain(|tx| {
             let (rtx, rrx) = std::sync::mpsc::channel();
             // Send the frame through a oneshot so it fits the existing writer thread protocol
-            if rtx.send(frame.to_string()).is_err() { return false; }
+            if rtx.send(frame.to_string()).is_err() {
+                return false;
+            }
             tx.send(rrx).is_ok()
         });
     }
@@ -856,7 +946,7 @@ pub fn push_frame(frame: &str) {
 
 /// Check if any persistent clients are registered for push.
 pub fn has_frame_receivers() -> bool {
-    FRAME_PUSH_SENDERS.lock().map_or(false, |v| !v.is_empty())
+    FRAME_PUSH_SENDERS.lock().is_ok_and(|v| !v.is_empty())
 }
 
 /// Wait-for operation types

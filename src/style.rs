@@ -5,7 +5,7 @@
 //! Both the server-side renderer and the remote client import from here.
 
 use ratatui::prelude::*;
-use ratatui::style::{Style, Modifier};
+use ratatui::style::{Modifier, Style};
 
 use crate::debug_log::style_log;
 
@@ -27,7 +27,11 @@ pub fn map_color(name: &str) -> Color {
     if let Some(rgb_str) = name.strip_prefix("rgb:") {
         let parts: Vec<&str> = rgb_str.split(',').collect();
         if parts.len() == 3 {
-            if let (Ok(r), Ok(g), Ok(b)) = (parts[0].parse::<u8>(), parts[1].parse::<u8>(), parts[2].parse::<u8>()) {
+            if let (Ok(r), Ok(g), Ok(b)) = (
+                parts[0].parse::<u8>(),
+                parts[1].parse::<u8>(),
+                parts[2].parse::<u8>(),
+            ) {
                 return Color::Rgb(r, g, b);
             }
         }
@@ -46,7 +50,10 @@ pub fn map_color(name: &str) -> Color {
     }
     // colour0-colour255 / color0-color255 (tmux primary indexed color format)
     let lower = name.to_lowercase();
-    if let Some(idx_str) = lower.strip_prefix("colour").or_else(|| lower.strip_prefix("color")) {
+    if let Some(idx_str) = lower
+        .strip_prefix("colour")
+        .or_else(|| lower.strip_prefix("color"))
+    {
         if let Ok(idx) = idx_str.parse::<u8>() {
             return Color::Indexed(idx);
         }
@@ -83,7 +90,11 @@ pub fn parse_tmux_color(s: &str) -> Option<Color> {
         "default" | "" => None,
         _ => {
             let c = map_color(s);
-            if c == Color::Reset { None } else { Some(c) }
+            if c == Color::Reset {
+                None
+            } else {
+                Some(c)
+            }
         }
     }
 }
@@ -95,12 +106,18 @@ pub fn parse_tmux_color(s: &str) -> Option<Color> {
 /// Used for status-style, pane-border-style, message-style, mode-style, etc.
 pub fn parse_tmux_style(style_str: &str) -> Style {
     let mut style = Style::default();
-    if style_str.is_empty() { return style; }
+    if style_str.is_empty() {
+        return style;
+    }
     for part in style_str.split(',') {
         let p = part.trim();
-        if p.starts_with("fg=") { style = style.fg(map_color(&p[3..])); }
-        else if p.starts_with("bg=") { style = style.bg(map_color(&p[3..])); }
-        else { apply_modifier(p, &mut style); }
+        if let Some(rest) = p.strip_prefix("fg=") {
+            style = style.fg(map_color(rest));
+        } else if let Some(rest) = p.strip_prefix("bg=") {
+            style = style.bg(map_color(rest));
+        } else {
+            apply_modifier(p, &mut style);
+        }
     }
     style
 }
@@ -131,27 +148,61 @@ pub fn parse_tmux_style_components(style: &str) -> (Option<Color>, Option<Color>
 /// Apply a modifier token (e.g. "bold", "nobold", "italic") to a `Style`.
 fn apply_modifier(token: &str, style: &mut Style) {
     match token {
-        "bold" => { *style = style.add_modifier(Modifier::BOLD); }
-        "dim" => { *style = style.add_modifier(Modifier::DIM); }
-        "italic" | "italics" => { *style = style.add_modifier(Modifier::ITALIC); }
-        "underline" | "underscore" => { *style = style.add_modifier(Modifier::UNDERLINED); }
-        "blink" => { *style = style.add_modifier(Modifier::SLOW_BLINK); }
-        "reverse" => { *style = style.add_modifier(Modifier::REVERSED); }
-        "hidden" => { *style = style.add_modifier(Modifier::HIDDEN); }
-        "strikethrough" => { *style = style.add_modifier(Modifier::CROSSED_OUT); }
+        "bold" => {
+            *style = style.add_modifier(Modifier::BOLD);
+        }
+        "dim" => {
+            *style = style.add_modifier(Modifier::DIM);
+        }
+        "italic" | "italics" => {
+            *style = style.add_modifier(Modifier::ITALIC);
+        }
+        "underline" | "underscore" => {
+            *style = style.add_modifier(Modifier::UNDERLINED);
+        }
+        "blink" => {
+            *style = style.add_modifier(Modifier::SLOW_BLINK);
+        }
+        "reverse" => {
+            *style = style.add_modifier(Modifier::REVERSED);
+        }
+        "hidden" => {
+            *style = style.add_modifier(Modifier::HIDDEN);
+        }
+        "strikethrough" => {
+            *style = style.add_modifier(Modifier::CROSSED_OUT);
+        }
         "overline" => { /* ratatui doesn't support overline natively */ }
         "double-underscore" | "curly-underscore" | "dotted-underscore" | "dashed-underscore" => {
             *style = style.add_modifier(Modifier::UNDERLINED);
         }
-        "default" | "none" => { *style = Style::default(); }
-        "nobold" => { *style = style.remove_modifier(Modifier::BOLD); }
-        "nodim" => { *style = style.remove_modifier(Modifier::DIM); }
-        "noitalics" | "noitalic" => { *style = style.remove_modifier(Modifier::ITALIC); }
-        "nounderline" | "nounderscore" => { *style = style.remove_modifier(Modifier::UNDERLINED); }
-        "noblink" => { *style = style.remove_modifier(Modifier::SLOW_BLINK); }
-        "noreverse" => { *style = style.remove_modifier(Modifier::REVERSED); }
-        "nohidden" => { *style = style.remove_modifier(Modifier::HIDDEN); }
-        "nostrikethrough" => { *style = style.remove_modifier(Modifier::CROSSED_OUT); }
+        "default" | "none" => {
+            *style = Style::default();
+        }
+        "nobold" => {
+            *style = style.remove_modifier(Modifier::BOLD);
+        }
+        "nodim" => {
+            *style = style.remove_modifier(Modifier::DIM);
+        }
+        "noitalics" | "noitalic" => {
+            *style = style.remove_modifier(Modifier::ITALIC);
+        }
+        "nounderline" | "nounderscore" => {
+            *style = style.remove_modifier(Modifier::UNDERLINED);
+        }
+        "noblink" => {
+            *style = style.remove_modifier(Modifier::SLOW_BLINK);
+        }
+        "noreverse" => {
+            *style = style.remove_modifier(Modifier::REVERSED);
+        }
+        "nohidden" => {
+            *style = style.remove_modifier(Modifier::HIDDEN);
+        }
+        "nostrikethrough" => {
+            *style = style.remove_modifier(Modifier::CROSSED_OUT);
+        }
         _ => {}
     }
 }
@@ -186,26 +237,45 @@ pub fn parse_inline_styles(text: &str, base_style: Style) -> Vec<Span<'static>> 
                 let token = &text[i + 2..i + 2 + end];
                 for part in token.split(',') {
                     let p = part.trim();
-                    if p.starts_with("fg=") { cur_style = cur_style.fg(map_color(&p[3..])); }
-                    else if p.starts_with("bg=") { cur_style = cur_style.bg(map_color(&p[3..])); }
-                    else if p == "default" || p == "none" { cur_style = base_style; }
-                    else if p == "push-default" { style_stack.push(cur_style); }
-                    else if p == "pop-default" {
-                        if let Some(s) = style_stack.pop() { cur_style = s; }
-                        else { cur_style = base_style; }
+                    if let Some(rest) = p.strip_prefix("fg=") {
+                        cur_style = cur_style.fg(map_color(rest));
+                    } else if let Some(rest) = p.strip_prefix("bg=") {
+                        cur_style = cur_style.bg(map_color(rest));
+                    } else if p == "default" || p == "none" {
+                        cur_style = base_style;
+                    } else if p == "push-default" {
+                        style_stack.push(cur_style);
+                    } else if p == "pop-default" {
+                        if let Some(s) = style_stack.pop() {
+                            cur_style = s;
+                        } else {
+                            cur_style = base_style;
+                        }
                     }
                     // Recognised but handled at a higher level — silently skip
-                    else if p == "fill" || p.starts_with("list") || p == "nolist"
-                         || p.starts_with("range") || p == "norange"
-                         || p.starts_with("align") {}
-                    else { apply_modifier(p, &mut cur_style); }
+                    else if p == "fill"
+                        || p.starts_with("list")
+                        || p == "nolist"
+                        || p.starts_with("range")
+                        || p == "norange"
+                        || p.starts_with("align")
+                    {
+                    } else {
+                        apply_modifier(p, &mut cur_style);
+                    }
                 }
                 i += 2 + end + 1;
                 continue;
             }
             // No closing ']' found — treat remaining text as literal
-            style_log("parse_inline", &format!("WARN: unclosed #[ at pos {} in: [{}]",
-                i, text.chars().take(120).collect::<String>()));
+            style_log(
+                "parse_inline",
+                &format!(
+                    "WARN: unclosed #[ at pos {} in: [{}]",
+                    i,
+                    text.chars().take(120).collect::<String>()
+                ),
+            );
             let chunk = &text[i..];
             if !chunk.is_empty() {
                 spans.push(Span::styled(chunk.to_string(), cur_style));
@@ -213,7 +283,8 @@ pub fn parse_inline_styles(text: &str, base_style: Style) -> Vec<Span<'static>> 
             break;
         }
         let mut j = i;
-        while j < bytes.len() && !(bytes[j] == b'#' && j + 1 < bytes.len() && bytes[j + 1] == b'[') {
+        while j < bytes.len() && !(bytes[j] == b'#' && j + 1 < bytes.len() && bytes[j + 1] == b'[')
+        {
             j += 1;
         }
         let chunk = &text[i..j];
@@ -228,13 +299,22 @@ pub fn parse_inline_styles(text: &str, base_style: Style) -> Vec<Span<'static>> 
 /// Calculate the visual display width of styled spans.
 pub fn spans_visual_width(spans: &[Span]) -> usize {
     use unicode_width::UnicodeWidthStr;
-    spans.iter().map(|s| UnicodeWidthStr::width(s.content.as_ref())).sum()
+    spans
+        .iter()
+        .map(|s| UnicodeWidthStr::width(s.content.as_ref()))
+        .sum()
 }
 
 // ─── Status bar parsing ─────────────────────────────────────────────────────
 
 /// Expand simple status variables (`#I`, `#W`, `#S`, `%H:%M`) in a fragment.
-pub fn expand_status(fmt: &str, session_name: &str, win_name: &str, win_idx: usize, time_str: &str) -> String {
+pub fn expand_status(
+    fmt: &str,
+    session_name: &str,
+    win_name: &str,
+    win_idx: usize,
+    time_str: &str,
+) -> String {
     let mut s = fmt.to_string();
     s = s.replace("#I", &win_idx.to_string());
     s = s.replace("#W", win_name);
@@ -246,34 +326,55 @@ pub fn expand_status(fmt: &str, session_name: &str, win_name: &str, win_idx: usi
 /// Parse a format string with inline `#[style]` directives into styled spans.
 ///
 /// Handles both style tokens and status variable expansion.
-pub fn parse_status(fmt: &str, session_name: &str, win_name: &str, win_idx: usize, time_str: &str) -> Vec<Span<'static>> {
+pub fn parse_status(
+    fmt: &str,
+    session_name: &str,
+    win_name: &str,
+    win_idx: usize,
+    time_str: &str,
+) -> Vec<Span<'static>> {
     let mut spans: Vec<Span<'static>> = Vec::new();
     let mut cur_style = Style::default();
     let mut i = 0;
     while i < fmt.len() {
-        if fmt.as_bytes()[i] == b'#' && i + 1 < fmt.len() && fmt.as_bytes()[i+1] == b'[' {
-            if let Some(end) = fmt[i+2..].find(']') {
-                let token = &fmt[i+2..i+2+end];
+        if fmt.as_bytes()[i] == b'#' && i + 1 < fmt.len() && fmt.as_bytes()[i + 1] == b'[' {
+            if let Some(end) = fmt[i + 2..].find(']') {
+                let token = &fmt[i + 2..i + 2 + end];
                 for part in token.split(',') {
                     let p = part.trim();
-                    if p.starts_with("fg=") { cur_style = cur_style.fg(map_color(&p[3..])); }
-                    else if p.starts_with("bg=") { cur_style = cur_style.bg(map_color(&p[3..])); }
-                    else if p == "default" || p == "none" { cur_style = Style::default(); }
-                    else { apply_modifier(p, &mut cur_style); }
+                    if let Some(rest) = p.strip_prefix("fg=") {
+                        cur_style = cur_style.fg(map_color(rest));
+                    } else if let Some(rest) = p.strip_prefix("bg=") {
+                        cur_style = cur_style.bg(map_color(rest));
+                    } else if p == "default" || p == "none" {
+                        cur_style = Style::default();
+                    } else {
+                        apply_modifier(p, &mut cur_style);
+                    }
                 }
                 i += 2 + end + 1;
                 continue;
             }
             // No closing ']' found — treat remaining text as literal
-            style_log("parse_status", &format!("WARN: unclosed #[ at pos {} in: [{}]",
-                i, fmt.chars().take(120).collect::<String>()));
+            style_log(
+                "parse_status",
+                &format!(
+                    "WARN: unclosed #[ at pos {} in: [{}]",
+                    i,
+                    fmt.chars().take(120).collect::<String>()
+                ),
+            );
             let chunk = &fmt[i..];
             let text = expand_status(chunk, session_name, win_name, win_idx, time_str);
             spans.push(Span::styled(text, cur_style));
             break;
         }
         let mut j = i;
-        while j < fmt.len() && !(fmt.as_bytes()[j] == b'#' && j + 1 < fmt.len() && fmt.as_bytes()[j+1] == b'[') { j += 1; }
+        while j < fmt.len()
+            && !(fmt.as_bytes()[j] == b'#' && j + 1 < fmt.len() && fmt.as_bytes()[j + 1] == b'[')
+        {
+            j += 1;
+        }
         let chunk = &fmt[i..j];
         let text = expand_status(chunk, session_name, win_name, win_idx, time_str);
         spans.push(Span::styled(text, cur_style));

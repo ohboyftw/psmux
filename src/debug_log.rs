@@ -21,8 +21,8 @@
 //! - **Truncated on startup** — fresh log each session (no stale data)
 
 use std::io::Write;
-use std::sync::{LazyLock, Mutex};
 use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::{LazyLock, Mutex};
 
 /// Resolve the psmux data directory (`~/.psmux/`).
 fn psmux_dir() -> String {
@@ -47,7 +47,7 @@ fn open_log(filename: &str) -> Option<std::fs::File> {
 
 /// Check if an env var is set to a truthy value ("1" or "true").
 fn env_enabled(var: &str) -> bool {
-    std::env::var(var).map_or(false, |v| v == "1" || v.eq_ignore_ascii_case("true"))
+    std::env::var(var).is_ok_and(|v| v == "1" || v.eq_ignore_ascii_case("true"))
 }
 
 // ─── Client debug log ───────────────────────────────────────────────────────
@@ -55,7 +55,9 @@ fn env_enabled(var: &str) -> bool {
 /// Client debug log file, gated by `PSMUX_CLIENT_DEBUG=1`.
 /// Covers: frame receive, JSON parse, draw lifecycle, status bar rendering.
 static CLIENT_LOG: LazyLock<Mutex<Option<std::fs::File>>> = LazyLock::new(|| {
-    if !env_enabled("PSMUX_CLIENT_DEBUG") { return Mutex::new(None); }
+    if !env_enabled("PSMUX_CLIENT_DEBUG") {
+        return Mutex::new(None);
+    }
     Mutex::new(open_log("client_debug.log"))
 });
 
@@ -86,8 +88,13 @@ pub fn client_log(component: &str, msg: &str) {
     }
     if let Ok(mut guard) = CLIENT_LOG.lock() {
         if let Some(ref mut f) = *guard {
-            let _ = writeln!(f, "[{}][{}] {}",
-                chrono::Local::now().format("%H:%M:%S%.3f"), component, msg);
+            let _ = writeln!(
+                f,
+                "[{}][{}] {}",
+                chrono::Local::now().format("%H:%M:%S%.3f"),
+                component,
+                msg
+            );
             let _ = f.flush();
         }
     }
@@ -95,7 +102,7 @@ pub fn client_log(component: &str, msg: &str) {
 
 /// Returns `true` if client debug logging is active.
 pub fn client_log_enabled() -> bool {
-    CLIENT_LOG.lock().ok().map_or(false, |g| g.is_some())
+    CLIENT_LOG.lock().ok().is_some_and(|g| g.is_some())
 }
 
 // ─── Style debug log ────────────────────────────────────────────────────────
@@ -103,7 +110,9 @@ pub fn client_log_enabled() -> bool {
 /// Style/theme parsing debug log, gated by `PSMUX_STYLE_DEBUG=1`.
 /// Covers: inline style parsing, unclosed directives, color mapping.
 static STYLE_LOG: LazyLock<Mutex<Option<std::fs::File>>> = LazyLock::new(|| {
-    if !env_enabled("PSMUX_STYLE_DEBUG") { return Mutex::new(None); }
+    if !env_enabled("PSMUX_STYLE_DEBUG") {
+        return Mutex::new(None);
+    }
     Mutex::new(open_log("style_debug.log"))
 });
 
@@ -117,8 +126,11 @@ pub fn style_log(component: &str, msg: &str) {
         if n == STYLE_LOG_CAP {
             if let Ok(mut guard) = STYLE_LOG.lock() {
                 if let Some(ref mut f) = *guard {
-                    let _ = writeln!(f, "[{}][log] --- log cap reached ---",
-                        chrono::Local::now().format("%H:%M:%S%.3f"));
+                    let _ = writeln!(
+                        f,
+                        "[{}][log] --- log cap reached ---",
+                        chrono::Local::now().format("%H:%M:%S%.3f")
+                    );
                     let _ = f.flush();
                 }
             }
@@ -127,8 +139,13 @@ pub fn style_log(component: &str, msg: &str) {
     }
     if let Ok(mut guard) = STYLE_LOG.lock() {
         if let Some(ref mut f) = *guard {
-            let _ = writeln!(f, "[{}][{}] {}",
-                chrono::Local::now().format("%H:%M:%S%.3f"), component, msg);
+            let _ = writeln!(
+                f,
+                "[{}][{}] {}",
+                chrono::Local::now().format("%H:%M:%S%.3f"),
+                component,
+                msg
+            );
             let _ = f.flush();
         }
     }
@@ -136,7 +153,7 @@ pub fn style_log(component: &str, msg: &str) {
 
 /// Returns `true` if style debug logging is active.
 pub fn style_log_enabled() -> bool {
-    STYLE_LOG.lock().ok().map_or(false, |g| g.is_some())
+    STYLE_LOG.lock().ok().is_some_and(|g| g.is_some())
 }
 
 // ─── Input debug log ────────────────────────────────────────────────────────
@@ -144,7 +161,9 @@ pub fn style_log_enabled() -> bool {
 /// Input event debug log, gated by `PSMUX_INPUT_DEBUG=1`.
 /// Traces every crossterm event + console input mode at startup.
 static INPUT_LOG: LazyLock<Mutex<Option<std::fs::File>>> = LazyLock::new(|| {
-    if !env_enabled("PSMUX_INPUT_DEBUG") { return Mutex::new(None); }
+    if !env_enabled("PSMUX_INPUT_DEBUG") {
+        return Mutex::new(None);
+    }
     Mutex::new(open_log("input_debug.log"))
 });
 
@@ -158,8 +177,11 @@ pub fn input_log(component: &str, msg: &str) {
         if n == INPUT_LOG_CAP {
             if let Ok(mut guard) = INPUT_LOG.lock() {
                 if let Some(ref mut f) = *guard {
-                    let _ = writeln!(f, "[{}][log] --- log cap reached ---",
-                        chrono::Local::now().format("%H:%M:%S%.3f"));
+                    let _ = writeln!(
+                        f,
+                        "[{}][log] --- log cap reached ---",
+                        chrono::Local::now().format("%H:%M:%S%.3f")
+                    );
                     let _ = f.flush();
                 }
             }
@@ -168,8 +190,13 @@ pub fn input_log(component: &str, msg: &str) {
     }
     if let Ok(mut guard) = INPUT_LOG.lock() {
         if let Some(ref mut f) = *guard {
-            let _ = writeln!(f, "[{}][{}] {}",
-                chrono::Local::now().format("%H:%M:%S%.3f"), component, msg);
+            let _ = writeln!(
+                f,
+                "[{}][{}] {}",
+                chrono::Local::now().format("%H:%M:%S%.3f"),
+                component,
+                msg
+            );
             let _ = f.flush();
         }
     }
@@ -177,7 +204,7 @@ pub fn input_log(component: &str, msg: &str) {
 
 /// Returns `true` if input debug logging is active.
 pub fn input_log_enabled() -> bool {
-    INPUT_LOG.lock().ok().map_or(false, |g| g.is_some())
+    INPUT_LOG.lock().ok().is_some_and(|g| g.is_some())
 }
 
 // ─── Server debug log ───────────────────────────────────────────────────────
@@ -185,7 +212,9 @@ pub fn input_log_enabled() -> bool {
 /// Server debug log, gated by `PSMUX_SERVER_DEBUG=1`.
 /// Traces active_idx changes, command dispatch, etc.
 static SERVER_LOG: LazyLock<Mutex<Option<std::fs::File>>> = LazyLock::new(|| {
-    if !env_enabled("PSMUX_SERVER_DEBUG") { return Mutex::new(None); }
+    if !env_enabled("PSMUX_SERVER_DEBUG") {
+        return Mutex::new(None);
+    }
     Mutex::new(open_log("server_debug.log"))
 });
 
@@ -199,8 +228,11 @@ pub fn server_log(component: &str, msg: &str) {
         if n == SERVER_LOG_CAP {
             if let Ok(mut guard) = SERVER_LOG.lock() {
                 if let Some(ref mut f) = *guard {
-                    let _ = writeln!(f, "[{}][log] --- log cap reached ---",
-                        chrono::Local::now().format("%H:%M:%S%.3f"));
+                    let _ = writeln!(
+                        f,
+                        "[{}][log] --- log cap reached ---",
+                        chrono::Local::now().format("%H:%M:%S%.3f")
+                    );
                     let _ = f.flush();
                 }
             }
@@ -209,8 +241,13 @@ pub fn server_log(component: &str, msg: &str) {
     }
     if let Ok(mut guard) = SERVER_LOG.lock() {
         if let Some(ref mut f) = *guard {
-            let _ = writeln!(f, "[{}][{}] {}",
-                chrono::Local::now().format("%H:%M:%S%.3f"), component, msg);
+            let _ = writeln!(
+                f,
+                "[{}][{}] {}",
+                chrono::Local::now().format("%H:%M:%S%.3f"),
+                component,
+                msg
+            );
             let _ = f.flush();
         }
     }
@@ -218,5 +255,5 @@ pub fn server_log(component: &str, msg: &str) {
 
 /// Returns `true` if server debug logging is active.
 pub fn server_log_enabled() -> bool {
-    SERVER_LOG.lock().ok().map_or(false, |g| g.is_some())
+    SERVER_LOG.lock().ok().is_some_and(|g| g.is_some())
 }

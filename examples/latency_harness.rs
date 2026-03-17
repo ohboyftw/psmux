@@ -16,7 +16,7 @@
 //   cargo run --release --example latency_harness -- --pwsh
 //   cargo run --release --example latency_harness -- --chars 80 --delay 200
 
-use portable_pty::{CommandBuilder, PtySize, native_pty_system};
+use portable_pty::{native_pty_system, CommandBuilder, PtySize};
 use std::io::{Read, Write};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
@@ -70,7 +70,10 @@ fn main() {
         .trim()
         .parse()
         .unwrap();
-    let key = std::fs::read_to_string(&key_file).unwrap().trim().to_string();
+    let key = std::fs::read_to_string(&key_file)
+        .unwrap()
+        .trim()
+        .to_string();
     println!("  Server on port {}", port);
 
     // ── 2. Disable status-bar clock via TCP ──
@@ -95,10 +98,7 @@ fn main() {
 
     let mut cmd = CommandBuilder::new(&psmux_exe);
     cmd.args(["attach", "-t", &session_name]);
-    let _child = pair
-        .slave
-        .spawn_command(cmd)
-        .expect("spawn psmux client");
+    let _child = pair.slave.spawn_command(cmd).expect("spawn psmux client");
     drop(pair.slave);
 
     let reader = pair.master.try_clone_reader().expect("clone reader");
@@ -269,12 +269,9 @@ fn main() {
     let q_len = char_count / 4;
     if q_len > 0 {
         let q1: f64 = latencies[..q_len].iter().sum::<f64>() / q_len as f64;
-        let q2: f64 =
-            latencies[q_len..q_len * 2].iter().sum::<f64>() / q_len as f64;
-        let q3: f64 =
-            latencies[q_len * 2..q_len * 3].iter().sum::<f64>() / q_len as f64;
-        let q4: f64 = latencies[q_len * 3..].iter().sum::<f64>()
-            / (char_count - q_len * 3) as f64;
+        let q2: f64 = latencies[q_len..q_len * 2].iter().sum::<f64>() / q_len as f64;
+        let q3: f64 = latencies[q_len * 2..q_len * 3].iter().sum::<f64>() / q_len as f64;
+        let q4: f64 = latencies[q_len * 3..].iter().sum::<f64>() / (char_count - q_len * 3) as f64;
         let degrade = if q1 > 0.0 {
             ((q4 - q1) / q1) * 100.0
         } else {
@@ -283,10 +280,7 @@ fn main() {
 
         println!();
         println!("  Degradation trend (chars split into quarters):");
-        println!(
-            "    Q1 [{:3}-{:3}] = {:6.1}ms avg",
-            1, q_len, q1
-        );
+        println!("    Q1 [{:3}-{:3}] = {:6.1}ms avg", 1, q_len, q1);
         println!(
             "    Q2 [{:3}-{:3}] = {:6.1}ms avg",
             q_len + 1,
@@ -382,9 +376,7 @@ fn find_psmux_exe() -> std::path::PathBuf {
 
 fn wait_for_files(port_file: &str, key_file: &str, timeout: Duration) {
     let start = Instant::now();
-    while !std::path::Path::new(port_file).exists()
-        || !std::path::Path::new(key_file).exists()
-    {
+    while !std::path::Path::new(port_file).exists() || !std::path::Path::new(key_file).exists() {
         if start.elapsed() > timeout {
             panic!("Timeout waiting for server files");
         }
@@ -405,11 +397,7 @@ fn send_oneshot(psmux_exe: &std::path::Path, session: &str, cmd: &str) {
     let _ = command.status();
 }
 
-fn wait_for_quiesce(
-    last_output_nanos: &Arc<AtomicU64>,
-    epoch: &Instant,
-    quiet_duration: Duration,
-) {
+fn wait_for_quiesce(last_output_nanos: &Arc<AtomicU64>, epoch: &Instant, quiet_duration: Duration) {
     let quiet_ns = quiet_duration.as_nanos() as u64;
     loop {
         let last_ns = last_output_nanos.load(Ordering::Acquire);

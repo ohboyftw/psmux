@@ -1,7 +1,12 @@
-use portable_pty::{native_pty_system, PtySize, CommandBuilder};
+use portable_pty::{native_pty_system, CommandBuilder, PtySize};
 use std::io::{Read, Write};
 
-fn read_output(reader: &mut dyn Read, mut writer: Option<&mut dyn Write>, timeout_secs: u64, expect: &str) -> String {
+fn read_output(
+    reader: &mut dyn Read,
+    mut writer: Option<&mut dyn Write>,
+    timeout_secs: u64,
+    expect: &str,
+) -> String {
     let mut buf = [0u8; 4096];
     let mut all = String::new();
     let start = std::time::Instant::now();
@@ -28,9 +33,14 @@ fn read_output(reader: &mut dyn Read, mut writer: Option<&mut dyn Write>, timeou
                         responded = true;
                     }
                 }
-                if all.contains(expect) { break; }
+                if all.contains(expect) {
+                    break;
+                }
             }
-            Err(e) => { println!("  Read error: {}", e); break; }
+            Err(e) => {
+                println!("  Read error: {}", e);
+                break;
+            }
         }
     }
     all
@@ -38,7 +48,12 @@ fn read_output(reader: &mut dyn Read, mut writer: Option<&mut dyn Write>, timeou
 
 fn main() {
     let pty_system = native_pty_system();
-    let size = PtySize { rows: 24, cols: 80, pixel_width: 0, pixel_height: 0 };
+    let size = PtySize {
+        rows: 24,
+        cols: 80,
+        pixel_width: 0,
+        pixel_height: 0,
+    };
 
     // TEST A: Respond to DSR query
     println!("=== TEST A: Respond to DSR \\x1b[6n] with cursor position ===");
@@ -52,7 +67,14 @@ fn main() {
         let mut writer = pair.master.take_writer().expect("writer");
         let out = read_output(&mut *reader, Some(&mut *writer), 8, "TESTA_HELLO");
         let _ = child.wait();
-        println!("  Result: {}", if out.contains("TESTA_HELLO") { "PASS" } else { "FAIL - no output" });
+        println!(
+            "  Result: {}",
+            if out.contains("TESTA_HELLO") {
+                "PASS"
+            } else {
+                "FAIL - no output"
+            }
+        );
     }
 
     // TEST B: Same but do NOT drop slave
@@ -68,7 +90,14 @@ fn main() {
         let out = read_output(&mut *reader, Some(&mut *writer), 8, "TESTB_HELLO");
         let _ = child.wait();
         drop(pair.slave);
-        println!("  Result: {}", if out.contains("TESTB_HELLO") { "PASS" } else { "FAIL - no output" });
+        println!(
+            "  Result: {}",
+            if out.contains("TESTB_HELLO") {
+                "PASS"
+            } else {
+                "FAIL - no output"
+            }
+        );
     }
 
     // TEST C: Preemptive DSR response (write \x1b[1;1R BEFORE reading)
@@ -87,7 +116,14 @@ fn main() {
         println!("  >> Sent preemptive DSR response");
         let out = read_output(&mut *reader, None, 8, "TESTC_HELLO");
         let _ = child.wait();
-        println!("  Result: {}", if out.contains("TESTC_HELLO") { "PASS" } else { "FAIL - no output" });
+        println!(
+            "  Result: {}",
+            if out.contains("TESTC_HELLO") {
+                "PASS"
+            } else {
+                "FAIL - no output"
+            }
+        );
     }
 
     // TEST D: No DSR response at all (control - should hang)
@@ -102,7 +138,14 @@ fn main() {
         let _writer = pair.master.take_writer().expect("writer");
         let out = read_output(&mut *reader, None, 5, "TESTD_HELLO");
         let _ = child.wait();
-        println!("  Result: {}", if out.contains("TESTD_HELLO") { "PASS" } else { "FAIL - no output (expected)" });
+        println!(
+            "  Result: {}",
+            if out.contains("TESTD_HELLO") {
+                "PASS"
+            } else {
+                "FAIL - no output (expected)"
+            }
+        );
     }
 
     println!("\n=== ALL TESTS COMPLETE ===");
