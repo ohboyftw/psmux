@@ -924,6 +924,42 @@ pub enum CtrlReq {
     /// Wait for a pane's child process to exit and return its exit code.
     /// (pane_id, exit_code_sender)
     WaitPane(usize, mpsc::Sender<i32>),
+
+    // ── Backend JSON-RPC variants (CustomPaneBackend pipe protocol) ──
+
+    /// Backend `initialize` — return the active pane's context ID.
+    BackendInitialize {
+        resp: mpsc::Sender<String>,
+    },
+    /// Backend `spawn_agent` — create a new pane with the given command.
+    BackendSpawnAgent {
+        command: Vec<String>,
+        cwd: Option<String>,
+        env: Option<std::collections::HashMap<String, String>>,
+        metadata: Option<(Option<String>, Option<String>)>, // (name, role)
+        resp: mpsc::Sender<String>,
+    },
+    /// Backend `capture` — capture pane content by context ID.
+    BackendCapturePane {
+        pane_id: String,
+        lines: Option<u32>,
+        clean: bool,
+        resp: mpsc::Sender<String>,
+    },
+    /// Backend `list` — list all pane context IDs and metadata.
+    BackendListPanes {
+        resp: mpsc::Sender<String>,
+    },
+    /// Backend `kill` — kill a pane by context ID.
+    BackendKillPane {
+        pane_id: String,
+        resp: mpsc::Sender<()>,
+    },
+    /// Backend `write` — send text to a pane by context ID.
+    BackendSendText {
+        pane_id: String,
+        text: String,
+    },
 }
 
 /// Global flag set by PTY reader threads when new output arrives.

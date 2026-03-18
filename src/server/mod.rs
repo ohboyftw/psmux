@@ -556,6 +556,11 @@ pub fn run_server(
     > = std::sync::Arc::new(std::sync::RwLock::new(std::collections::HashMap::new()));
     let shared_aliases_main = shared_aliases.clone();
 
+    // Clone tx for the backend pipe listener before moving tx into the TCP accept thread.
+    let backend_tx = tx.clone();
+    let backend_session_name = app.session_name.clone();
+    let backend_session_key = app.session_key.clone();
+
     thread::spawn(move || {
         for stream in listener.incoming().flatten() {
             let tx = tx.clone();
@@ -566,6 +571,17 @@ pub fn run_server(
             }); // end per-connection thread
         }
     });
+
+    // Start CustomPaneBackend named pipe listener (Windows only).
+    // This provides the JSON-RPC endpoint that Claude Code's TeammateTool
+    // uses to spawn/capture/kill agent panes.
+    if let Err(e) = crate::backend::pipe::start_pipe_listener(
+        &backend_session_name,
+        backend_tx,
+        backend_session_key,
+    ) {
+        eprintln!("psmux: warning: failed to start backend pipe: {}", e);
+    }
 
     // Load config AFTER the TCP listener is bound, port/key files are written,
     // and the accept thread is running.  This ensures that run-shell commands
@@ -4305,6 +4321,235 @@ pub fn run_server(
                                         menu.selected = next;
                                     }
                                     state_dirty = true;
+                                }
+                            }
+                        }
+
+                        // ── Backend JSON-RPC handlers (CustomPaneBackend) ──
+
+                        CtrlReq::BackendInitialize { resp } => {
+                            // Return the active pane's context ID as "%{id}".
+                            let pane_id = get_active_pane_id(
+                                &app.windows[app.active_idx].root,
+                                &app.windows[app.active_idx].active_path,
+                            )
+                            .unwrap_or(0);
+                            let _ = resp.send(format!("%{}", pane_id));
+                        }
+                        CtrlReq::BackendSpawnAgent {
+                            command,
+                            cwd,
+                            env: extra_env,
+                            metadata,
+                            resp,
+                        } => {
+                            // Build command string: join argv into a single
+                            // shell command for split_active_with_command.
+                            let cmd_str = command.join(" ");
+                            let start_dir = cwd
+                                .map(|d| expand_format(&d, &app))
+                                .filter(|d| !d.is_empty());
+                            let saved_dir = if start_dir.is_some() {
+                                env::current_dir().ok()
+                            } else {
+                                None
+                            };
+                            if let Some(dir) = &start_dir {
+                                env::set_current_dir(dir).ok();
+                            }
+                            // Temporarily stash warm pane when custom dir is given
+                            let stashed_warm = if start_dir.is_some() {
+                                app.warm_pane.take()
+                            } else {
+                                None
+                            };
+                            // Set extra env vars in the process environment
+                            // before spawning (they'll be inherited via ConPTY).
+                            let mut saved_envs: Vec<(String, Option<String>)> = Vec::new();
+                            if let Some(ref vars) = extra_env {
+                                for (k, v) in vars {
+                                    saved_envs
+                                        .push((k.clone(), env::var(k).ok()));
+                                    env::set_var(k, v);
+                                }
+                            }
+                            let split_result = split_active_with_command(
+                                &mut app,
+                                LayoutKind::Vertical,
+                                Some(&cmd_str),
+                                Some(&*pty_system),
+                                start_dir.as_deref(),
+                            );
+                            // Restore stashed env vars
+                            for (k, prev) in saved_envs {
+                                if let Some(v) = prev {
+                                    env::set_var(&k, v);
+                                } else {
+                                    env::remove_var(&k);
+                                }
+                            }
+                            if let Some(wp) = stashed_warm {
+                                app.warm_pane = Some(wp);
+                            }
+                            match split_result {
+                                Ok(()) => {
+                                    let new_pane_id = get_active_pane_id(
+                                        &app.windows[app.active_idx].root,
+                                        &app.windows[app.active_idx].active_path,
+                                    )
+                                    .unwrap_or(0);
+                                    // Apply metadata to the new pane
+                                    if let Some((name, role)) = metadata {
+                                        let win = &mut app.windows[app.active_idx];
+                                        if let Some(p) = active_pane_mut(
+                                            &mut win.root,
+                                            &win.active_path,
+                                        ) {
+                                            if let Some(n) = name {
+                                                p.metadata
+                                                    .insert("@agent".into(), n);
+                                            }
+                                            if let Some(r) = role {
+                                                p.metadata
+                                                    .insert("@role".into(), r);
+                                            }
+                                        }
+                                    }
+                                    resize_all_panes(&mut app);
+                                    meta_dirty = true;
+                                    // Replenish warm pane
+                                    if app.warm_pane.is_none() {
+                                        if let Ok(wp) =
+                                            spawn_warm_pane(&*pty_system, &mut app)
+                                        {
+                                            app.warm_pane = Some(wp);
+                                        }
+                                    }
+                                    let _ = resp.send(format!("%{}", new_pane_id));
+                                }
+                                Err(e) => {
+                                    let _ = resp
+                                        .send(format!("ERROR:{}", e));
+                                }
+                            }
+                            if let Some(prev) = saved_dir {
+                                env::set_current_dir(prev).ok();
+                            }
+                        }
+                        CtrlReq::BackendCapturePane {
+                            pane_id,
+                            lines: _lines,
+                            clean: _clean,
+                            resp,
+                        } => {
+                            // Parse "%N" format to get numeric pane ID.
+                            let id = pane_id
+                                .strip_prefix('%')
+                                .and_then(|s| s.parse::<usize>().ok());
+                            let mut captured = String::new();
+                            if let Some(pid) = id {
+                                // Find the pane across all windows
+                                for win in &app.windows {
+                                    if let Some(path) =
+                                        crate::tree::find_path_by_id(&win.root, pid)
+                                    {
+                                        if let Some(p) =
+                                            crate::tree::active_pane(&win.root, &path)
+                                        {
+                                            if let Ok(parser) = p.term.lock() {
+                                                let screen = parser.screen();
+                                                for row in 0..p.last_rows {
+                                                    let mut line = String::new();
+                                                    for col in 0..p.last_cols {
+                                                        if let Some(cell) =
+                                                            screen.cell(row, col)
+                                                        {
+                                                            line.push_str(cell.contents());
+                                                        } else {
+                                                            line.push(' ');
+                                                        }
+                                                    }
+                                                    captured.push_str(line.trim_end());
+                                                    captured.push('\n');
+                                                }
+                                            }
+                                        }
+                                        break;
+                                    }
+                                }
+                            }
+                            let _ = resp.send(captured);
+                        }
+                        CtrlReq::BackendListPanes { resp } => {
+                            // Build a JSON array of all panes across all windows.
+                            let mut contexts: Vec<crate::backend::protocol::ContextInfo> =
+                                Vec::new();
+                            for win in &app.windows {
+                                fn collect_backend_panes(
+                                    node: &Node,
+                                    out: &mut Vec<crate::backend::protocol::ContextInfo>,
+                                ) {
+                                    match node {
+                                        Node::Leaf(p) => {
+                                            let meta = if p.metadata.is_empty() {
+                                                None
+                                            } else {
+                                                Some(crate::backend::protocol::AgentMetadata {
+                                                    name: p.metadata.get("@agent").cloned(),
+                                                    color: None,
+                                                    role: p.metadata.get("@role").cloned(),
+                                                })
+                                            };
+                                            out.push(crate::backend::protocol::ContextInfo {
+                                                context_id: format!("%{}", p.id),
+                                                metadata: meta,
+                                            });
+                                        }
+                                        Node::Split { children, .. } => {
+                                            for c in children {
+                                                collect_backend_panes(c, out);
+                                            }
+                                        }
+                                    }
+                                }
+                                collect_backend_panes(&win.root, &mut contexts);
+                            }
+                            let result = crate::backend::protocol::ListResult { contexts };
+                            let json = serde_json::to_string(&result)
+                                .unwrap_or_else(|_| r#"{"contexts":[]}"#.to_string());
+                            let _ = resp.send(json);
+                        }
+                        CtrlReq::BackendKillPane { pane_id, resp } => {
+                            let id = pane_id
+                                .strip_prefix('%')
+                                .and_then(|s| s.parse::<usize>().ok());
+                            if let Some(pid) = id {
+                                unzoom_if_zoomed(&mut app);
+                                let _ = kill_pane_by_id(&mut app, pid);
+                                resize_all_panes(&mut app);
+                                meta_dirty = true;
+                            }
+                            let _ = resp.send(());
+                        }
+                        CtrlReq::BackendSendText { pane_id, text } => {
+                            let id = pane_id
+                                .strip_prefix('%')
+                                .and_then(|s| s.parse::<usize>().ok());
+                            if let Some(pid) = id {
+                                // Find the pane and write text to its PTY writer.
+                                for win in &mut app.windows {
+                                    if let Some(path) =
+                                        crate::tree::find_path_by_id(&win.root, pid)
+                                    {
+                                        if let Some(p) = crate::tree::active_pane_mut(
+                                            &mut win.root,
+                                            &path,
+                                        ) {
+                                            let _ = p.writer.write_all(text.as_bytes());
+                                            let _ = p.writer.flush();
+                                        }
+                                        break;
+                                    }
                                 }
                             }
                         }

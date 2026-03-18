@@ -802,6 +802,12 @@ pub fn set_tmux_env(
     // real session name.  Tools like Claude Code can use PSMUX_SESSION for explicit
     // psmux detection (e.g. `if (process.env.PSMUX_SESSION) return 'psmux'`).
     builder.env("PSMUX_SESSION", session_name);
+    // CustomPaneBackend named pipe path — Claude Code's TeammateTool discovers
+    // the backend endpoint via this env var.
+    builder.env(
+        "CLAUDE_PANE_BACKEND_SOCKET",
+        crate::backend::pipe::pipe_path(session_name),
+    );
     // Prevent MSYS2/Git-Bash from path-mangling the TMUX value (which starts
     // with /tmp/ and would be rewritten to a Windows path otherwise).
     builder.env("MSYS2_ENV_CONV_EXCL", "TMUX");

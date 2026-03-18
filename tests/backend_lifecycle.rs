@@ -1,8 +1,41 @@
 use std::sync::mpsc;
+use std::thread;
+
+/// Create a tx/rx pair with a background thread that handles CtrlReq variants
+/// by sending back mock responses. This simulates the server's main loop.
+fn make_mock_server() -> mpsc::Sender<psmux::types::CtrlReq> {
+    let (tx, rx) = mpsc::channel::<psmux::types::CtrlReq>();
+    thread::spawn(move || {
+        while let Ok(req) = rx.recv() {
+            match req {
+                psmux::types::CtrlReq::BackendInitialize { resp } => {
+                    let _ = resp.send("%0".to_string());
+                }
+                psmux::types::CtrlReq::BackendSpawnAgent { resp, .. } => {
+                    let _ = resp.send("%1".to_string());
+                }
+                psmux::types::CtrlReq::BackendCapturePane { resp, .. } => {
+                    let _ = resp.send(String::new());
+                }
+                psmux::types::CtrlReq::BackendListPanes { resp } => {
+                    let _ = resp.send(r#"{"contexts":[]}"#.to_string());
+                }
+                psmux::types::CtrlReq::BackendKillPane { resp, .. } => {
+                    let _ = resp.send(());
+                }
+                psmux::types::CtrlReq::BackendSendText { .. } => {
+                    // Fire-and-forget, no response needed
+                }
+                _ => {}
+            }
+        }
+    });
+    tx
+}
 
 #[test]
 fn test_dispatch_initialize() {
-    let (tx, _rx) = mpsc::channel();
+    let tx = make_mock_server();
     let input = r#"{"id":"1","method":"initialize","params":{"protocol_version":"1","capabilities":["events"]}}"#;
 
     let response = psmux::backend::dispatcher::dispatch_rpc(input, &tx);
@@ -16,7 +49,7 @@ fn test_dispatch_initialize() {
 
 #[test]
 fn test_dispatch_spawn_agent() {
-    let (tx, _rx) = mpsc::channel();
+    let tx = make_mock_server();
     let input = r#"{"id":"2","method":"spawn_agent","params":{"command":["claude","--agent"],"cwd":"/project"}}"#;
 
     let response = psmux::backend::dispatcher::dispatch_rpc(input, &tx);
@@ -29,7 +62,7 @@ fn test_dispatch_spawn_agent() {
 
 #[test]
 fn test_dispatch_write_valid_base64() {
-    let (tx, _rx) = mpsc::channel();
+    let tx = make_mock_server();
     // "aGVsbG8=" is base64 for "hello"
     let input = r#"{"id":"3","method":"write","params":{"context_id":"%1","data":"aGVsbG8="}}"#;
 
@@ -44,7 +77,7 @@ fn test_dispatch_write_valid_base64() {
 
 #[test]
 fn test_dispatch_capture() {
-    let (tx, _rx) = mpsc::channel();
+    let tx = make_mock_server();
     let input = r#"{"id":"4","method":"capture","params":{"context_id":"%1","lines":200}}"#;
 
     let response = psmux::backend::dispatcher::dispatch_rpc(input, &tx);
@@ -58,7 +91,7 @@ fn test_dispatch_capture() {
 
 #[test]
 fn test_dispatch_kill() {
-    let (tx, _rx) = mpsc::channel();
+    let tx = make_mock_server();
     let input = r#"{"id":"5","method":"kill","params":{"context_id":"%1"}}"#;
 
     let response = psmux::backend::dispatcher::dispatch_rpc(input, &tx);
@@ -71,7 +104,7 @@ fn test_dispatch_kill() {
 
 #[test]
 fn test_dispatch_list() {
-    let (tx, _rx) = mpsc::channel();
+    let tx = make_mock_server();
     let input = r#"{"id":"6","method":"list","params":{}}"#;
 
     let response = psmux::backend::dispatcher::dispatch_rpc(input, &tx);
@@ -85,7 +118,7 @@ fn test_dispatch_list() {
 
 #[test]
 fn test_dispatch_unknown_method() {
-    let (tx, _rx) = mpsc::channel();
+    let tx = make_mock_server();
     let input = r#"{"id":"1","method":"nonexistent","params":{}}"#;
 
     let response = psmux::backend::dispatcher::dispatch_rpc(input, &tx);
@@ -98,7 +131,7 @@ fn test_dispatch_unknown_method() {
 
 #[test]
 fn test_dispatch_malformed_json() {
-    let (tx, _rx) = mpsc::channel();
+    let tx = make_mock_server();
     let response = psmux::backend::dispatcher::dispatch_rpc("not json", &tx);
     assert!(response.is_some());
 
@@ -109,7 +142,7 @@ fn test_dispatch_malformed_json() {
 
 #[test]
 fn test_dispatch_write_invalid_base64() {
-    let (tx, _rx) = mpsc::channel();
+    let tx = make_mock_server();
     let input = r#"{"id":"1","method":"write","params":{"context_id":"%1","data":"!!!not-base64!!!"}}"#;
 
     let response = psmux::backend::dispatcher::dispatch_rpc(input, &tx);
@@ -122,7 +155,7 @@ fn test_dispatch_write_invalid_base64() {
 
 #[test]
 fn test_dispatch_spawn_agent_empty_command() {
-    let (tx, _rx) = mpsc::channel();
+    let tx = make_mock_server();
     let input = r#"{"id":"1","method":"spawn_agent","params":{"command":[]}}"#;
 
     let response = psmux::backend::dispatcher::dispatch_rpc(input, &tx);
@@ -135,7 +168,7 @@ fn test_dispatch_spawn_agent_empty_command() {
 
 #[test]
 fn test_dispatch_preserves_request_id() {
-    let (tx, _rx) = mpsc::channel();
+    let tx = make_mock_server();
 
     // String ID
     let input = r#"{"id":"abc-123","method":"list","params":{}}"#;
