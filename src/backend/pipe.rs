@@ -143,11 +143,12 @@ fn create_and_wait_for_client(
 fn handle_rpc_connection(
     reader: impl BufRead,
     writer: impl Write + Send + 'static,
-    _tx: mpsc::Sender<CtrlReq>,
+    tx: mpsc::Sender<CtrlReq>,
 ) -> io::Result<()> {
-    // Dispatcher will be wired in Task 7; for now we hold the writer behind
-    // a mutex so it can be shared across the read loop and (future) async
-    // event pushes.
+    use super::dispatcher::dispatch_rpc;
+
+    // Hold the writer behind a mutex so it can be shared across the read
+    // loop and (future) async event pushes.
     let writer = std::sync::Mutex::new(writer);
 
     for line in reader.lines() {
@@ -155,12 +156,11 @@ fn handle_rpc_connection(
         if line.is_empty() {
             continue;
         }
-        // TODO(Task 7): let response = dispatch_rpc(&line, &tx);
-        // For now, return a JSON-RPC internal error for every request.
-        let response = r#"{"id":null,"error":{"code":-32603,"message":"dispatcher not wired yet"}}"#;
-        let mut w = writer.lock().unwrap();
-        writeln!(w, "{}", response)?;
-        w.flush()?;
+        if let Some(resp_json) = dispatch_rpc(&line, &tx) {
+            let mut w = writer.lock().unwrap();
+            writeln!(w, "{}", resp_json)?;
+            w.flush()?;
+        }
     }
 
     Ok(())

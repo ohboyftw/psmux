@@ -1,3 +1,3 @@
 pub mod protocol;
 pub mod pipe;
-// pub mod dispatcher; // Task 7
+pub mod dispatcher;
