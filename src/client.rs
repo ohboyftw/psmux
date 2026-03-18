@@ -3652,6 +3652,40 @@ pub fn run_remote(
             crate::copy_mode::emit_osc52(&mut std::io::stdout(), &clip_text);
         }
 
+        // ── Post-draw: forward DCS passthrough from active pane ─────
+        // DCS passthrough sequences (e.g. iTerm2 graphics protocol) are
+        // carried as base64 strings in the layout JSON.  Decode and write
+        // raw bytes directly to the host terminal, bypassing ratatui.
+        {
+            fn find_active_passthrough(node: &LayoutJson) -> &[String] {
+                match node {
+                    LayoutJson::Leaf { active, passthrough, .. } => {
+                        if *active { passthrough.as_slice() } else { &[] }
+                    }
+                    LayoutJson::Split { children, .. } => {
+                        for child in children {
+                            let pt = find_active_passthrough(child);
+                            if !pt.is_empty() {
+                                return pt;
+                            }
+                        }
+                        &[]
+                    }
+                }
+            }
+            let pt = find_active_passthrough(&root);
+            if !pt.is_empty() {
+                use base64::Engine;
+                let mut out = std::io::stdout().lock();
+                for encoded in pt {
+                    if let Ok(raw) = base64::engine::general_purpose::STANDARD.decode(encoded) {
+                        let _ = out.write_all(&raw);
+                    }
+                }
+                let _ = out.flush();
+            }
+        }
+
         // ── SSH: periodic mouse-enable refresh ───────────────────────
         // ConPTY or terminal resize can silently disable mouse reporting.
         // Re-send every 30 seconds to keep mouse working reliably.

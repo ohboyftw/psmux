@@ -1134,6 +1134,25 @@ pub fn run(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> io::Result<
             }
         })?;
 
+        // Forward DCS passthrough sequences from the active pane to the host
+        // terminal.  Written directly to stdout as raw bytes, bypassing ratatui,
+        // so the host terminal (e.g. Windows Terminal, iTerm2) can process the
+        // DCS content (graphics protocol, sixel, etc.).
+        if app.allow_passthrough == "on" || app.allow_passthrough == "all" {
+            let win = &app.windows[app.active_idx];
+            if let Some(pane) = crate::tree::active_pane(&win.root, &win.active_path) {
+                let sequences = pane.passthrough_queue.drain();
+                if !sequences.is_empty() {
+                    use std::io::Write;
+                    let mut out = std::io::stdout().lock();
+                    for seq in &sequences {
+                        let _ = out.write_all(seq);
+                    }
+                    let _ = out.flush();
+                }
+            }
+        }
+
         // Forward active pane's cursor shape (DECSCUSR) to the real terminal.
         // Write directly to stdout (not through ratatui backend) to avoid
         // any buffering interference with the next draw cycle.
