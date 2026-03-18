@@ -23,10 +23,7 @@ pub enum ControlModeMessage {
         success: bool,
     },
     /// Pane produced output (octal-decoded).
-    Output {
-        pane_id: String,
-        data: Vec<u8>,
-    },
+    Output { pane_id: String, data: Vec<u8> },
     /// Extended output with lag information.
     ExtendedOutput {
         pane_id: String,
@@ -34,31 +31,17 @@ pub enum ControlModeMessage {
         data: Vec<u8>,
     },
     /// A window was added to the current session.
-    WindowAdd {
-        window_id: String,
-    },
+    WindowAdd { window_id: String },
     /// A window was closed in the current session.
-    WindowClose {
-        window_id: String,
-    },
+    WindowClose { window_id: String },
     /// A window was renamed in the current session.
-    WindowRenamed {
-        window_id: String,
-        new_name: String,
-    },
+    WindowRenamed { window_id: String, new_name: String },
     /// A window was added outside the current session.
-    UnlinkedWindowAdd {
-        window_id: String,
-    },
+    UnlinkedWindowAdd { window_id: String },
     /// A window was closed outside the current session.
-    UnlinkedWindowClose {
-        window_id: String,
-    },
+    UnlinkedWindowClose { window_id: String },
     /// A window was renamed outside the current session.
-    UnlinkedWindowRenamed {
-        window_id: String,
-        new_name: String,
-    },
+    UnlinkedWindowRenamed { window_id: String, new_name: String },
     /// The client switched to a different session.
     SessionChanged {
         session_id: String,
@@ -83,36 +66,22 @@ pub enum ControlModeMessage {
         session_name: String,
     },
     /// The active pane of a window changed.
-    WindowPaneChanged {
-        window_id: String,
-        pane_id: String,
-    },
+    WindowPaneChanged { window_id: String, pane_id: String },
     /// A pane's mode changed (e.g. copy mode entered/exited).
-    PaneModeChanged {
-        pane_id: String,
-    },
+    PaneModeChanged { pane_id: String },
     /// A window's layout changed.
     LayoutChange {
         window_id: String,
         layout_string: String,
     },
     /// A pane has been paused (output throttled).
-    Pause {
-        pane_id: String,
-    },
+    Pause { pane_id: String },
     /// A paused pane has resumed.
-    Continue {
-        pane_id: String,
-    },
+    Continue { pane_id: String },
     /// A user-defined subscription variable changed.
-    SubscriptionChanged {
-        name: String,
-        value: String,
-    },
+    SubscriptionChanged { name: String, value: String },
     /// The control mode session is exiting.
-    Exit {
-        reason: Option<String>,
-    },
+    Exit { reason: Option<String> },
 }
 
 /// Parse a single control mode notification line.
@@ -266,11 +235,10 @@ fn parse_extended_output(rest: &str) -> Option<ControlModeMessage> {
     let (lag_str, data_after_colon) = split_first_token(remainder)?;
     let lag_ms = lag_str.parse::<u64>().ok()?;
     // Skip the `:` separator if present.
-    let data_str = if data_after_colon.starts_with(": ") {
-        &data_after_colon[2..]
-    } else if data_after_colon.starts_with(':') {
-        let after = &data_after_colon[1..];
-        after.trim_start()
+    let data_str = if let Some(rest) = data_after_colon.strip_prefix(": ") {
+        rest
+    } else if let Some(rest) = data_after_colon.strip_prefix(':') {
+        rest.trim_start()
     } else {
         data_after_colon
     };
@@ -398,8 +366,7 @@ mod tests {
 
     #[test]
     fn test_parse_client_session_changed() {
-        let msg =
-            parse_notification("%client-session-changed /dev/pts/1 $2 work").unwrap();
+        let msg = parse_notification("%client-session-changed /dev/pts/1 $2 work").unwrap();
         if let ControlModeMessage::ClientSessionChanged {
             client,
             session_id,
@@ -417,11 +384,7 @@ mod tests {
     #[test]
     fn test_parse_window_pane_changed() {
         let msg = parse_notification("%window-pane-changed @0 %1").unwrap();
-        if let ControlModeMessage::WindowPaneChanged {
-            window_id,
-            pane_id,
-        } = msg
-        {
+        if let ControlModeMessage::WindowPaneChanged { window_id, pane_id } = msg {
             assert_eq!(window_id, "@0");
             assert_eq!(pane_id, "%1");
         } else {
@@ -441,10 +404,8 @@ mod tests {
 
     #[test]
     fn test_parse_layout_change() {
-        let msg = parse_notification(
-            "%layout-change @0 177x44,0,0{88x44,0,0,0,88x44,89,0,1}",
-        )
-        .unwrap();
+        let msg =
+            parse_notification("%layout-change @0 177x44,0,0{88x44,0,0,0,88x44,89,0,1}").unwrap();
         if let ControlModeMessage::LayoutChange {
             window_id,
             layout_string,
@@ -460,10 +421,7 @@ mod tests {
     #[test]
     fn test_parse_layout_change_with_visible_layout() {
         // Some layout strings contain spaces (e.g. with window-visible-layout).
-        let msg = parse_notification(
-            "%layout-change @0 177x44,0,0 extra info",
-        )
-        .unwrap();
+        let msg = parse_notification("%layout-change @0 177x44,0,0 extra info").unwrap();
         if let ControlModeMessage::LayoutChange {
             window_id,
             layout_string,
