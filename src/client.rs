@@ -2866,6 +2866,7 @@ pub fn run_remote(
                         copy_cursor_col,
                         content,
                         rows_v2,
+                        passthrough: _,
                     } => {
                         // No borders — content fills entire area (tmux-style)
                         let inner = area;

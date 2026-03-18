@@ -1,0 +1,18 @@
+%begin 1711234567 0 0
+%end 1711234567 0 0
+%output %0 \033[32muser@vm\033[0m:~$
+%window-add @0
+%session-changed $0 main
+%layout-change @0 80x24,0,0,0
+%output %0 ls\015\012
+%output %0 file1.txt  file2.txt\015\012
+%output %0 \033[32muser@vm\033[0m:~$
+%begin 1711234568 1 0
+%1
+%end 1711234568 1 0
+%window-add @1
+%layout-change @0 80x24,0,0{40x24,0,0,0,39x24,41,0,1}
+%output %1 \033[32muser@vm\033[0m:~$
+%window-pane-changed @0 %1
+%pane-mode-changed %0
+%sessions-changed

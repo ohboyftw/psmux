@@ -97,6 +97,12 @@ pub enum LayoutJson {
         content: Vec<Vec<CellJson>>,
         #[serde(default)]
         rows_v2: Vec<RowRunsJson>,
+        /// Base64-encoded DCS passthrough sequences from the child process.
+        /// Only populated for the active pane when `allow-passthrough` is
+        /// "on" or "all".  The client drains this and writes the decoded
+        /// bytes directly to the host terminal's stdout, bypassing ratatui.
+        #[serde(default)]
+        passthrough: Vec<String>,
     },
 }
 
@@ -109,6 +115,7 @@ pub fn dump_layout_json(app: &mut AppState) -> io::Result<String> {
         cur_path: &mut Vec<usize>,
         active_path: &[usize],
         include_full_content: bool,
+        allow_passthrough: bool,
     ) -> LayoutJson {
         match node {
             Node::Split {
@@ -123,7 +130,7 @@ pub fn dump_layout_json(app: &mut AppState) -> io::Result<String> {
                 let mut ch: Vec<LayoutJson> = Vec::new();
                 for (i, c) in children.iter_mut().enumerate() {
                     cur_path.push(i);
-                    ch.push(build(c, cur_path, active_path, include_full_content));
+                    ch.push(build(c, cur_path, active_path, include_full_content, allow_passthrough));
                     cur_path.pop();
                 }
                 LayoutJson::Split {
@@ -163,6 +170,7 @@ pub fn dump_layout_json(app: &mut AppState) -> io::Result<String> {
                         copy_cursor_col: None,
                         content: vec![],
                         rows_v2: vec![],
+                        passthrough: vec![],
                     };
                 };
                 let screen = parser.screen();
@@ -405,13 +413,22 @@ pub fn dump_layout_json(app: &mut AppState) -> io::Result<String> {
                     copy_cursor_col: None,
                     content: lines,
                     rows_v2,
+                    passthrough: if allow_passthrough && *cur_path == active_path {
+                        use base64::Engine;
+                        p.passthrough_queue.drain().into_iter()
+                            .map(|seq| base64::engine::general_purpose::STANDARD.encode(&seq))
+                            .collect()
+                    } else {
+                        vec![]
+                    },
                 }
             }
         }
     }
+    let allow_pt = app.allow_passthrough == "on" || app.allow_passthrough == "all";
     let win = &mut app.windows[app.active_idx];
     let mut path = Vec::new();
-    let mut root = build(&mut win.root, &mut path, &win.active_path, in_copy_mode);
+    let mut root = build(&mut win.root, &mut path, &win.active_path, in_copy_mode, allow_pt);
     // Mark the active pane and set copy mode info
     fn mark_active(
         node: &mut LayoutJson,
@@ -569,6 +586,7 @@ pub fn dump_layout_json_fast(app: &mut AppState) -> io::Result<String> {
         anchor_scroll: usize,
         cpos: Option<(u16, u16)>,
         sel_mode: crate::types::SelectionMode,
+        allow_passthrough: bool,
         out: &mut String,
     ) {
         match node {
@@ -605,6 +623,7 @@ pub fn dump_layout_json_fast(app: &mut AppState) -> io::Result<String> {
                         anchor_scroll,
                         cpos,
                         sel_mode,
+                        allow_passthrough,
                         out,
                     );
                     cur_path.pop();
@@ -1007,6 +1026,22 @@ pub fn dump_layout_json_fast(app: &mut AppState) -> io::Result<String> {
                     }
                     out.push_str("]}");
                 }
+                out.push_str("],");
+
+                // ── passthrough (DCS sequences, only active pane) ────
+                out.push_str("\"passthrough\":[");
+                if allow_passthrough && is_active {
+                    use base64::Engine;
+                    let sequences = p.passthrough_queue.drain();
+                    for (i, seq) in sequences.iter().enumerate() {
+                        if i > 0 {
+                            out.push(',');
+                        }
+                        out.push('"');
+                        out.push_str(&base64::engine::general_purpose::STANDARD.encode(seq));
+                        out.push('"');
+                    }
+                }
                 out.push_str("]}");
             }
         }
@@ -1016,6 +1051,7 @@ pub fn dump_layout_json_fast(app: &mut AppState) -> io::Result<String> {
     let active_path = win.active_path.clone();
     let mut path = Vec::new();
     let mut out = String::with_capacity(32768);
+    let allow_pt = app.allow_passthrough == "on" || app.allow_passthrough == "all";
     write_node(
         &mut win.root,
         &mut path,
@@ -1026,6 +1062,7 @@ pub fn dump_layout_json_fast(app: &mut AppState) -> io::Result<String> {
         anchor_scroll,
         cpos,
         sel_mode,
+        allow_pt,
         &mut out,
     );
     Ok(out)
