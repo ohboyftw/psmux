@@ -19,7 +19,10 @@ pub struct PassthroughQueue {
 
 impl PassthroughQueue {
     pub fn new(max_depth: usize) -> Self {
-        Self { entries: Arc::new(Mutex::new(Vec::new())), max_depth }
+        Self {
+            entries: Arc::new(Mutex::new(Vec::new())),
+            max_depth,
+        }
     }
 
     pub fn push(&self, data: Vec<u8>) {
@@ -32,7 +35,9 @@ impl PassthroughQueue {
     }
 
     pub fn drain(&self) -> Vec<Vec<u8>> {
-        self.entries.lock().ok()
+        self.entries
+            .lock()
+            .ok()
             .map(|mut e| std::mem::take(&mut *e))
             .unwrap_or_default()
     }
@@ -926,7 +931,6 @@ pub enum CtrlReq {
     WaitPane(usize, mpsc::Sender<i32>),
 
     // ── Backend JSON-RPC variants (CustomPaneBackend pipe protocol) ──
-
     /// Backend `initialize` — return the active pane's context ID.
     BackendInitialize {
         resp: mpsc::Sender<String>,

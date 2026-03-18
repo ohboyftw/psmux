@@ -17,39 +17,43 @@ fn test_golden_transcript() {
     );
 
     // Should contain output notifications.
-    assert!(messages.iter().any(
-        |m| matches!(m, psmux::remote::protocol::ControlModeMessage::Output { .. })
-    ));
+    assert!(messages.iter().any(|m| matches!(
+        m,
+        psmux::remote::protocol::ControlModeMessage::Output { .. }
+    )));
     // Should contain window-add notifications.
-    assert!(messages.iter().any(
-        |m| matches!(m, psmux::remote::protocol::ControlModeMessage::WindowAdd { .. })
-    ));
+    assert!(messages.iter().any(|m| matches!(
+        m,
+        psmux::remote::protocol::ControlModeMessage::WindowAdd { .. }
+    )));
     // Should contain successful response blocks.
     assert!(messages.iter().any(|m| matches!(
         m,
-        psmux::remote::protocol::ControlModeMessage::Response {
-            success: true,
-            ..
-        }
+        psmux::remote::protocol::ControlModeMessage::Response { success: true, .. }
     )));
     // Should contain layout-change notifications.
-    assert!(messages.iter().any(
-        |m| matches!(m, psmux::remote::protocol::ControlModeMessage::LayoutChange { .. })
-    ));
+    assert!(messages.iter().any(|m| matches!(
+        m,
+        psmux::remote::protocol::ControlModeMessage::LayoutChange { .. }
+    )));
     // Should contain session-changed notification.
-    assert!(messages.iter().any(
-        |m| matches!(m, psmux::remote::protocol::ControlModeMessage::SessionChanged { .. })
-    ));
+    assert!(messages.iter().any(|m| matches!(
+        m,
+        psmux::remote::protocol::ControlModeMessage::SessionChanged { .. }
+    )));
     // Should contain sessions-changed notification.
-    assert!(messages
-        .iter()
-        .any(|m| matches!(m, psmux::remote::protocol::ControlModeMessage::SessionsChanged)));
+    assert!(messages.iter().any(|m| matches!(
+        m,
+        psmux::remote::protocol::ControlModeMessage::SessionsChanged
+    )));
     // Should contain window-pane-changed notification.
-    assert!(messages.iter().any(
-        |m| matches!(m, psmux::remote::protocol::ControlModeMessage::WindowPaneChanged { .. })
-    ));
+    assert!(messages.iter().any(|m| matches!(
+        m,
+        psmux::remote::protocol::ControlModeMessage::WindowPaneChanged { .. }
+    )));
     // Should contain pane-mode-changed notification.
-    assert!(messages.iter().any(
-        |m| matches!(m, psmux::remote::protocol::ControlModeMessage::PaneModeChanged { .. })
-    ));
+    assert!(messages.iter().any(|m| matches!(
+        m,
+        psmux::remote::protocol::ControlModeMessage::PaneModeChanged { .. }
+    )));
 }

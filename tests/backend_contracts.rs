@@ -52,11 +52,26 @@ struct ContextExitedParams {
 #[test]
 fn test_all_rpc_methods_deserialize() {
     let cases = vec![
-        (r#"{"id":"1","method":"initialize","params":{"protocol_version":"1","capabilities":["events"]}}"#, "initialize"),
-        (r#"{"id":"2","method":"spawn_agent","params":{"command":["claude","--agent"],"cwd":"/project"}}"#, "spawn_agent"),
-        (r#"{"id":"3","method":"write","params":{"context_id":"%1","data":"aGVsbG8="}}"#, "write"),
-        (r#"{"id":"4","method":"capture","params":{"context_id":"%1","lines":200}}"#, "capture"),
-        (r#"{"id":"5","method":"kill","params":{"context_id":"%1"}}"#, "kill"),
+        (
+            r#"{"id":"1","method":"initialize","params":{"protocol_version":"1","capabilities":["events"]}}"#,
+            "initialize",
+        ),
+        (
+            r#"{"id":"2","method":"spawn_agent","params":{"command":["claude","--agent"],"cwd":"/project"}}"#,
+            "spawn_agent",
+        ),
+        (
+            r#"{"id":"3","method":"write","params":{"context_id":"%1","data":"aGVsbG8="}}"#,
+            "write",
+        ),
+        (
+            r#"{"id":"4","method":"capture","params":{"context_id":"%1","lines":200}}"#,
+            "capture",
+        ),
+        (
+            r#"{"id":"5","method":"kill","params":{"context_id":"%1"}}"#,
+            "kill",
+        ),
         (r#"{"id":"6","method":"list","params":{}}"#, "list"),
     ];
     for (json_str, expected_method) in cases {

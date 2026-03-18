@@ -87,9 +87,7 @@ impl RemotePaneManager {
                     if !self.panes.contains_key(pid) {
                         self.panes.insert(
                             pid.clone(),
-                            Arc::new(Mutex::new(vt100::Parser::new(
-                                self.rows, self.cols, 0,
-                            ))),
+                            Arc::new(Mutex::new(vt100::Parser::new(self.rows, self.cols, 0))),
                         );
                     }
                 }
@@ -110,9 +108,7 @@ impl RemotePaneManager {
 
     /// Get the VT100 parser for the currently active pane, if any.
     pub fn get_active_pane(&self) -> Option<&Arc<Mutex<vt100::Parser>>> {
-        self.active_pane
-            .as_ref()
-            .and_then(|id| self.panes.get(id))
+        self.active_pane.as_ref().and_then(|id| self.panes.get(id))
     }
 
     /// Get the VT100 parser for a specific pane by ID.
@@ -244,9 +240,8 @@ mod tests {
 
     #[test]
     fn test_parse_layout_three_panes_mixed() {
-        let ids = parse_layout_pane_ids(
-            "177x44,0,0{88x44,0,0,0,88x44,89,0[88x22,89,0,1,88x21,89,23,2]}",
-        );
+        let ids =
+            parse_layout_pane_ids("177x44,0,0{88x44,0,0,0,88x44,89,0[88x22,89,0,1,88x21,89,23,2]}");
         assert_eq!(ids, vec!["%0", "%1", "%2"]);
     }
 
@@ -372,7 +367,10 @@ mod tests {
         assert!(mgr.panes.contains_key("%0"));
         assert!(mgr.panes.contains_key("%1"));
         assert_eq!(mgr.panes.len(), 2);
-        assert_eq!(mgr.windows.get("@0").unwrap(), &vec!["%0".to_string(), "%1".to_string()]);
+        assert_eq!(
+            mgr.windows.get("@0").unwrap(),
+            &vec!["%0".to_string(), "%1".to_string()]
+        );
     }
 
     #[test]
@@ -435,8 +433,7 @@ mod tests {
         let mut mgr = RemotePaneManager::new(80, 24);
         mgr.handle_message(ControlModeMessage::LayoutChange {
             window_id: "@0".into(),
-            layout_string: "177x44,0,0{88x44,0,0,0,88x44,89,0[88x22,89,0,1,88x21,89,23,2]}"
-                .into(),
+            layout_string: "177x44,0,0{88x44,0,0,0,88x44,89,0[88x22,89,0,1,88x21,89,23,2]}".into(),
         });
         let mut ids = mgr.pane_ids();
         ids.sort();

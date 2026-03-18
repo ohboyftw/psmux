@@ -143,7 +143,8 @@ fn test_dispatch_malformed_json() {
 #[test]
 fn test_dispatch_write_invalid_base64() {
     let tx = make_mock_server();
-    let input = r#"{"id":"1","method":"write","params":{"context_id":"%1","data":"!!!not-base64!!!"}}"#;
+    let input =
+        r#"{"id":"1","method":"write","params":{"context_id":"%1","data":"!!!not-base64!!!"}}"#;
 
     let response = psmux::backend::dispatcher::dispatch_rpc(input, &tx);
     assert!(response.is_some());

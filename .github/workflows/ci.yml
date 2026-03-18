@@ -40,3 +40,20 @@ jobs:
 
       - name: Build
         run: cargo build --release --target ${{ matrix.target }}
+
+  boundary-contracts:
+    name: Boundary Contract Tests
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Backend contract tests
+        run: cargo test --test backend_contracts
+      - name: Backend lifecycle tests
+        run: cargo test --test backend_lifecycle
+      - name: Control mode contract tests
+        run: cargo test --test control_mode_contracts
+      - name: Passthrough tests
+        run: cargo test --test passthrough_tests
+      - name: Unit tests
+        run: cargo test

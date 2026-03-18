@@ -1,3 +1,3 @@
-pub mod protocol;
-pub mod pipe;
 pub mod dispatcher;
+pub mod pipe;
+pub mod protocol;

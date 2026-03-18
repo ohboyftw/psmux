@@ -130,7 +130,13 @@ pub fn dump_layout_json(app: &mut AppState) -> io::Result<String> {
                 let mut ch: Vec<LayoutJson> = Vec::new();
                 for (i, c) in children.iter_mut().enumerate() {
                     cur_path.push(i);
-                    ch.push(build(c, cur_path, active_path, include_full_content, allow_passthrough));
+                    ch.push(build(
+                        c,
+                        cur_path,
+                        active_path,
+                        include_full_content,
+                        allow_passthrough,
+                    ));
                     cur_path.pop();
                 }
                 LayoutJson::Split {
@@ -415,7 +421,9 @@ pub fn dump_layout_json(app: &mut AppState) -> io::Result<String> {
                     rows_v2,
                     passthrough: if allow_passthrough && *cur_path == active_path {
                         use base64::Engine;
-                        p.passthrough_queue.drain().into_iter()
+                        p.passthrough_queue
+                            .drain()
+                            .into_iter()
                             .map(|seq| base64::engine::general_purpose::STANDARD.encode(&seq))
                             .collect()
                     } else {
@@ -428,7 +436,13 @@ pub fn dump_layout_json(app: &mut AppState) -> io::Result<String> {
     let allow_pt = app.allow_passthrough == "on" || app.allow_passthrough == "all";
     let win = &mut app.windows[app.active_idx];
     let mut path = Vec::new();
-    let mut root = build(&mut win.root, &mut path, &win.active_path, in_copy_mode, allow_pt);
+    let mut root = build(
+        &mut win.root,
+        &mut path,
+        &win.active_path,
+        in_copy_mode,
+        allow_pt,
+    );
     // Mark the active pane and set copy mode info
     fn mark_active(
         node: &mut LayoutJson,

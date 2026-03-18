@@ -3659,8 +3659,16 @@ pub fn run_remote(
         {
             fn find_active_passthrough(node: &LayoutJson) -> &[String] {
                 match node {
-                    LayoutJson::Leaf { active, passthrough, .. } => {
-                        if *active { passthrough.as_slice() } else { &[] }
+                    LayoutJson::Leaf {
+                        active,
+                        passthrough,
+                        ..
+                    } => {
+                        if *active {
+                            passthrough.as_slice()
+                        } else {
+                            &[]
+                        }
                     }
                     LayoutJson::Split { children, .. } => {
                         for child in children {

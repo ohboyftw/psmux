@@ -8,7 +8,10 @@ struct PassthroughQueue {
 
 impl PassthroughQueue {
     fn new(max_depth: usize) -> Self {
-        Self { entries: Arc::new(Mutex::new(Vec::new())), max_depth }
+        Self {
+            entries: Arc::new(Mutex::new(Vec::new())),
+            max_depth,
+        }
     }
 
     fn push(&self, data: Vec<u8>) {

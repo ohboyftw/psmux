@@ -4326,7 +4326,6 @@ pub fn run_server(
                         }
 
                         // ── Backend JSON-RPC handlers (CustomPaneBackend) ──
-
                         CtrlReq::BackendInitialize { resp } => {
                             // Return the active pane's context ID as "%{id}".
                             let pane_id = get_active_pane_id(
@@ -4368,8 +4367,7 @@ pub fn run_server(
                             let mut saved_envs: Vec<(String, Option<String>)> = Vec::new();
                             if let Some(ref vars) = extra_env {
                                 for (k, v) in vars {
-                                    saved_envs
-                                        .push((k.clone(), env::var(k).ok()));
+                                    saved_envs.push((k.clone(), env::var(k).ok()));
                                     env::set_var(k, v);
                                 }
                             }
@@ -4401,17 +4399,14 @@ pub fn run_server(
                                     // Apply metadata to the new pane
                                     if let Some((name, role)) = metadata {
                                         let win = &mut app.windows[app.active_idx];
-                                        if let Some(p) = active_pane_mut(
-                                            &mut win.root,
-                                            &win.active_path,
-                                        ) {
+                                        if let Some(p) =
+                                            active_pane_mut(&mut win.root, &win.active_path)
+                                        {
                                             if let Some(n) = name {
-                                                p.metadata
-                                                    .insert("@agent".into(), n);
+                                                p.metadata.insert("@agent".into(), n);
                                             }
                                             if let Some(r) = role {
-                                                p.metadata
-                                                    .insert("@role".into(), r);
+                                                p.metadata.insert("@role".into(), r);
                                             }
                                         }
                                     }
@@ -4419,17 +4414,14 @@ pub fn run_server(
                                     meta_dirty = true;
                                     // Replenish warm pane
                                     if app.warm_pane.is_none() {
-                                        if let Ok(wp) =
-                                            spawn_warm_pane(&*pty_system, &mut app)
-                                        {
+                                        if let Ok(wp) = spawn_warm_pane(&*pty_system, &mut app) {
                                             app.warm_pane = Some(wp);
                                         }
                                     }
                                     let _ = resp.send(format!("%{}", new_pane_id));
                                 }
                                 Err(e) => {
-                                    let _ = resp
-                                        .send(format!("ERROR:{}", e));
+                                    let _ = resp.send(format!("ERROR:{}", e));
                                 }
                             }
                             if let Some(prev) = saved_dir {
@@ -4450,20 +4442,16 @@ pub fn run_server(
                             if let Some(pid) = id {
                                 // Find the pane across all windows
                                 for win in &app.windows {
-                                    if let Some(path) =
-                                        crate::tree::find_path_by_id(&win.root, pid)
+                                    if let Some(path) = crate::tree::find_path_by_id(&win.root, pid)
                                     {
-                                        if let Some(p) =
-                                            crate::tree::active_pane(&win.root, &path)
+                                        if let Some(p) = crate::tree::active_pane(&win.root, &path)
                                         {
                                             if let Ok(parser) = p.term.lock() {
                                                 let screen = parser.screen();
                                                 for row in 0..p.last_rows {
                                                     let mut line = String::new();
                                                     for col in 0..p.last_cols {
-                                                        if let Some(cell) =
-                                                            screen.cell(row, col)
-                                                        {
+                                                        if let Some(cell) = screen.cell(row, col) {
                                                             line.push_str(cell.contents());
                                                         } else {
                                                             line.push(' ');
@@ -4538,13 +4526,11 @@ pub fn run_server(
                             if let Some(pid) = id {
                                 // Find the pane and write text to its PTY writer.
                                 for win in &mut app.windows {
-                                    if let Some(path) =
-                                        crate::tree::find_path_by_id(&win.root, pid)
+                                    if let Some(path) = crate::tree::find_path_by_id(&win.root, pid)
                                     {
-                                        if let Some(p) = crate::tree::active_pane_mut(
-                                            &mut win.root,
-                                            &path,
-                                        ) {
+                                        if let Some(p) =
+                                            crate::tree::active_pane_mut(&mut win.root, &path)
+                                        {
                                             let _ = p.writer.write_all(text.as_bytes());
                                             let _ = p.writer.flush();
                                         }

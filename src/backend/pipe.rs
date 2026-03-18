@@ -42,21 +42,19 @@ pub fn start_pipe_listener(
     let pipe_name = pipe_path(session_name);
     let pipe_name_clone = pipe_name.clone();
 
-    thread::spawn(move || {
-        loop {
-            match create_and_wait_for_client(&pipe_name_clone) {
-                Ok((reader, writer)) => {
-                    let tx = tx.clone();
-                    thread::spawn(move || {
-                        if let Err(e) = handle_rpc_connection(reader, writer, tx) {
-                            eprintln!("RPC connection error: {}", e);
-                        }
-                    });
-                }
-                Err(e) => {
-                    eprintln!("Pipe accept error: {}", e);
-                    thread::sleep(std::time::Duration::from_millis(100));
-                }
+    thread::spawn(move || loop {
+        match create_and_wait_for_client(&pipe_name_clone) {
+            Ok((reader, writer)) => {
+                let tx = tx.clone();
+                thread::spawn(move || {
+                    if let Err(e) = handle_rpc_connection(reader, writer, tx) {
+                        eprintln!("RPC connection error: {}", e);
+                    }
+                });
+            }
+            Err(e) => {
+                eprintln!("Pipe accept error: {}", e);
+                thread::sleep(std::time::Duration::from_millis(100));
             }
         }
     });

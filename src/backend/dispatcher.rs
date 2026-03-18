@@ -15,18 +15,12 @@ use super::protocol::*;
 /// Returns `Some(json_string)` with the response to send back to the client,
 /// or `None` if the request is a notification (no `id`) — though the current
 /// protocol doesn't use notifications.
-pub fn dispatch_rpc(
-    line: &str,
-    tx: &mpsc::Sender<CtrlReq>,
-) -> Option<String> {
+pub fn dispatch_rpc(line: &str, tx: &mpsc::Sender<CtrlReq>) -> Option<String> {
     let req: RpcRequest = match serde_json::from_str(line) {
         Ok(r) => r,
         Err(e) => {
-            let resp = RpcResponse::error(
-                serde_json::Value::Null,
-                -32700,
-                format!("Parse error: {e}"),
-            );
+            let resp =
+                RpcResponse::error(serde_json::Value::Null, -32700, format!("Parse error: {e}"));
             return Some(serde_json::to_string(&resp).unwrap());
         }
     };
@@ -126,8 +120,7 @@ fn handle_write(
         .decode(&p.data)
         .map_err(|e| (-32602, format!("Invalid base64: {e}")))?;
 
-    let text = String::from_utf8(decoded)
-        .map_err(|e| (-32602, format!("Invalid UTF-8: {e}")))?;
+    let text = String::from_utf8(decoded).map_err(|e| (-32602, format!("Invalid UTF-8: {e}")))?;
 
     // Fire-and-forget: send text to the pane.
     tx.send(CtrlReq::BackendSendText {
@@ -202,8 +195,7 @@ fn handle_list(
         .map_err(|_| (-32603, "Server response timeout".to_string()))?;
 
     // The server returns a pre-serialized JSON string; parse it back to Value.
-    serde_json::from_str(&json_str)
-        .map_err(|e| (-32603, format!("Internal error: {e}")))
+    serde_json::from_str(&json_str).map_err(|e| (-32603, format!("Internal error: {e}")))
 }
 
 #[cfg(test)]
@@ -235,7 +227,8 @@ mod tests {
     #[test]
     fn dispatch_write_rejects_bad_base64() {
         let tx = make_tx();
-        let input = r#"{"id":"1","method":"write","params":{"context_id":"%1","data":"!!!not-base64!!!"}}"#;
+        let input =
+            r#"{"id":"1","method":"write","params":{"context_id":"%1","data":"!!!not-base64!!!"}}"#;
         let resp = dispatch_rpc(input, &tx).unwrap();
         let v: serde_json::Value = serde_json::from_str(&resp).unwrap();
         assert_eq!(v["error"]["code"], -32602);

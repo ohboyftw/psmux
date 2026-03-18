@@ -42,6 +42,11 @@ scripting/orchestration (7), plus 6 agent-specific commands (`wait-pane`, `run`,
 Full scripting support including `send-keys`, `capture-pane`, `pipe-pane`,
 `run-shell`, `source-file`, `bind-key`/`unbind-key`.
 
+### Remote & Backend Features (ohboy-builds)
+- **Remote tmux control mode**: `attach-remote`, `new-session-remote`, `list-sessions-remote` — connect to remote tmux sessions over SSH using `-CC` control mode
+- **CustomPaneBackend**: JSON-RPC named pipe server (`CLAUDE_PANE_BACKEND_SOCKET` env var) for Claude Code's TeammateTool agent spawning protocol
+- **DCS passthrough**: `set -g allow-passthrough on` forwards DCS tmux passthrough sequences to the host terminal (e.g., for title setting, clipboard)
+
 ## Common Tasks
 - **Build**: `cargo build` (debug) / `cargo build --release` (optimized)
 - **Run**: `cargo run` or `cargo run -- new-session -s work`
@@ -55,6 +60,9 @@ Full scripting support including `send-keys`, `capture-pane`, `pipe-pane`,
 - Key prefix system mirrors tmux: Ctrl+b default, configurable via `~/.psmux.conf`
 - Configuration parsing supports tmux `set -g` syntax
 - Copy mode implements vim-like keybindings with scrollback buffer (1000 lines default)
+- **CustomPaneBackend** (`src/backend/`): JSON-RPC over named pipes — `protocol.rs` (types), `pipe.rs` (listener), `dispatcher.rs` (routing)
+- **Remote control mode** (`src/remote/`): SSH transport + tmux `-CC` parser + pane manager for rendering remote sessions locally
+- **DCS passthrough** (`crates/vt100-psmux/`): VT parser hook/put/unhook DCS handlers with `PassthroughQueue` forwarding
 
 ## Swarm Backend Context
 psmux can serve as the tmux spawn backend for Claude Code's TeammateTool on Windows.
