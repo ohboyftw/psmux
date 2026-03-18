@@ -523,13 +523,40 @@ pub fn get_split_mut<'a>(node: &'a mut Node, path: &[usize]) -> Option<&'a mut N
 }
 
 pub fn prune_exited(n: Node, remain_on_exit: bool) -> Option<Node> {
+    let mut exited = Vec::new();
+    let result = prune_exited_inner(n, remain_on_exit, &mut exited);
+    // Push context_exited events for all newly-dead panes
+    for (pane_id, exit_code) in exited {
+        let event = crate::backend::protocol::ContextExitedEvent {
+            method: "context_exited".into(),
+            params: crate::backend::protocol::ContextExitedParams {
+                context_id: format!("%{}", pane_id),
+                exit_code,
+            },
+        };
+        if let Ok(json) = serde_json::to_string(&event) {
+            crate::types::push_backend_event(&json);
+        }
+    }
+    result
+}
+
+/// Inner recursive implementation of prune_exited that collects newly-exited
+/// pane info (pane_id, exit_code) for push event delivery.
+fn prune_exited_inner(
+    n: Node,
+    remain_on_exit: bool,
+    exited: &mut Vec<(usize, Option<i32>)>,
+) -> Option<Node> {
     match n {
         Node::Leaf(mut p) => {
             if p.dead {
                 return Some(Node::Leaf(p));
             }
             match p.child.try_wait() {
-                Ok(Some(_)) => {
+                Ok(Some(status)) => {
+                    let exit_code = Some(status.exit_code() as i32);
+                    exited.push((p.id, exit_code));
                     if remain_on_exit {
                         p.dead = true;
                         Some(Node::Leaf(p))
@@ -548,7 +575,7 @@ pub fn prune_exited(n: Node, remain_on_exit: bool) -> Option<Node> {
             let mut new_children: Vec<Node> = Vec::new();
             let mut new_sizes: Vec<u16> = Vec::new();
             for (i, child) in children.into_iter().enumerate() {
-                if let Some(c) = prune_exited(child, remain_on_exit) {
+                if let Some(c) = prune_exited_inner(child, remain_on_exit, exited) {
                     new_children.push(c);
                     new_sizes.push(sizes.get(i).copied().unwrap_or(0));
                 }

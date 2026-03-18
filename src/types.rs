@@ -968,6 +968,27 @@ pub enum CtrlReq {
 pub static PTY_DATA_READY: std::sync::atomic::AtomicBool =
     std::sync::atomic::AtomicBool::new(false);
 
+/// Backend event senders for pushing JSON-RPC notifications (e.g. `context_exited`)
+/// to all connected CustomPaneBackend clients via their named pipe connections.
+/// Each sender feeds a `Receiver<String>` in a backend connection's writer thread.
+static BACKEND_EVENT_SENDERS: std::sync::Mutex<Vec<mpsc::Sender<String>>> =
+    std::sync::Mutex::new(Vec::new());
+
+/// Register a backend connection's event sender so it receives push events.
+pub fn register_backend_event_sender(tx: mpsc::Sender<String>) {
+    if let Ok(mut v) = BACKEND_EVENT_SENDERS.lock() {
+        v.push(tx);
+    }
+}
+
+/// Push a JSON-RPC notification to all connected backend clients.
+/// Dead senders (disconnected clients) are automatically pruned.
+pub fn push_backend_event(event_json: &str) {
+    if let Ok(mut senders) = BACKEND_EVENT_SENDERS.lock() {
+        senders.retain(|tx| tx.send(event_json.to_string()).is_ok());
+    }
+}
+
 /// Tracked persistent client TCP streams.
 /// Connection handlers register clones here so the server can explicitly
 /// `shutdown()` them before `process::exit(0)`.  Without this, Windows

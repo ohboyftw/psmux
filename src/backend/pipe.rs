@@ -140,17 +140,41 @@ fn create_and_wait_for_client(
 
 /// Handle a single JSON-RPC connection: read newline-delimited requests,
 /// dispatch them, and write responses.
+///
+/// Also registers for server push events (e.g. `context_exited`) so that
+/// backend clients are notified asynchronously when panes die.
 fn handle_rpc_connection(
     reader: impl BufRead,
     writer: impl Write + Send + 'static,
     tx: mpsc::Sender<CtrlReq>,
 ) -> io::Result<()> {
     use super::dispatcher::dispatch_rpc;
+    use std::sync::Arc;
 
-    // Hold the writer behind a mutex so it can be shared across the read
-    // loop and (future) async event pushes.
-    let writer = std::sync::Mutex::new(writer);
+    // Hold the writer behind a mutex so both the request/response loop and
+    // the push-event writer thread can write to the same pipe connection.
+    let writer = Arc::new(std::sync::Mutex::new(writer));
+    let writer_for_events = Arc::clone(&writer);
 
+    // Register for push events (e.g. context_exited notifications)
+    let (event_tx, event_rx) = mpsc::channel::<String>();
+    crate::types::register_backend_event_sender(event_tx);
+
+    // Spawn a writer thread that forwards push events to the pipe
+    thread::spawn(move || {
+        while let Ok(event_json) = event_rx.recv() {
+            if let Ok(mut w) = writer_for_events.lock() {
+                if writeln!(w, "{}", event_json).is_err() {
+                    break;
+                }
+                if w.flush().is_err() {
+                    break;
+                }
+            }
+        }
+    });
+
+    // Request/response loop
     for line in reader.lines() {
         let line = line?;
         if line.is_empty() {
