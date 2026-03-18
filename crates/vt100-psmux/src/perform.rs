@@ -5,6 +5,9 @@ const CLIPBOARD_SELECTOR: &[u8] = b"cpqs01234567";
 pub struct WrappedScreen<CB: crate::callbacks::Callbacks = ()> {
     pub screen: crate::screen::Screen,
     pub callbacks: CB,
+    dcs_buf: Vec<u8>,
+    dcs_is_tmux: bool,
+    dcs_action: char,
 }
 
 impl WrappedScreen<()> {
@@ -26,6 +29,9 @@ impl<CB: crate::callbacks::Callbacks> WrappedScreen<CB> {
                 scrollback_len,
             ),
             callbacks,
+            dcs_buf: Vec::new(),
+            dcs_is_tmux: false,
+            dcs_action: '\0',
         }
     }
 }
@@ -247,6 +253,60 @@ impl<CB: crate::callbacks::Callbacks> vte::Perform for WrappedScreen<CB> {
             }
         }
     }
+
+    fn hook(
+        &mut self,
+        _params: &vte::Params,
+        _intermediates: &[u8],
+        _ignore: bool,
+        action: char,
+    ) {
+        self.dcs_buf.clear();
+        self.dcs_is_tmux = false;
+        self.dcs_action = action;
+    }
+
+    fn put(&mut self, byte: u8) {
+        self.dcs_buf.push(byte);
+        // vte consumes the first printable char as the action in hook(),
+        // so for "\x1bPtmux;..." the action is 't' and put receives "mux;...".
+        if self.dcs_action == 't'
+            && self.dcs_buf.len() == 4
+            && &self.dcs_buf[..4] == b"mux;"
+        {
+            self.dcs_is_tmux = true;
+            self.dcs_buf.clear();
+        }
+    }
+
+    fn unhook(&mut self) {
+        if self.dcs_is_tmux {
+            // vte terminates DCS on ESC, so the inner passthrough content
+            // may be empty when escaped ESC sequences cause early DCS exit.
+            // We still fire the callback so consumers know a tmux
+            // passthrough was detected; the data may be empty if the inner
+            // sequence started with ESC (common case).
+            let inner = unescape_tmux_passthrough(&self.dcs_buf);
+            self.callbacks.dcs_passthrough(&mut self.screen, &inner);
+        }
+        self.dcs_buf.clear();
+        self.dcs_is_tmux = false;
+    }
+}
+
+fn unescape_tmux_passthrough(data: &[u8]) -> Vec<u8> {
+    let mut result = Vec::with_capacity(data.len());
+    let mut i = 0;
+    while i < data.len() {
+        if i + 1 < data.len() && data[i] == 0x1b && data[i + 1] == 0x1b {
+            result.push(0x1b);
+            i += 2;
+        } else {
+            result.push(data[i]);
+            i += 1;
+        }
+    }
+    result
 }
 
 fn canonicalize_params_1(params: &vte::Params, default: u16) -> u16 {
@@ -285,4 +345,59 @@ fn canonicalize_params_decstbm(
     let bottom = if bottom == 0 { size.rows } else { bottom };
 
     (top, bottom)
+}
+
+#[cfg(test)]
+mod dcs_tests {
+    use std::sync::{Arc, Mutex};
+
+    struct DcsCapture {
+        captured: Arc<Mutex<Vec<Vec<u8>>>>,
+    }
+
+    impl crate::callbacks::Callbacks for DcsCapture {
+        fn dcs_passthrough(&mut self, _: &mut crate::Screen, data: &[u8]) {
+            self.captured.lock().unwrap().push(data.to_vec());
+        }
+    }
+
+    #[test]
+    fn test_dcs_tmux_passthrough_detected() {
+        let captured = Arc::new(Mutex::new(Vec::new()));
+        let callbacks = DcsCapture {
+            captured: captured.clone(),
+        };
+        let mut parser =
+            crate::Parser::new_with_callbacks(80, 24, 0, callbacks);
+
+        // DCS tmux passthrough: ESC P tmux; ESC ESC ] 0 ; title BEL ESC backslash
+        let input = b"\x1bPtmux;\x1b\x1b]0;My Title\x07\x1b\\";
+        parser.process(input);
+
+        let data = captured.lock().unwrap();
+        assert!(
+            !data.is_empty(),
+            "DCS tmux passthrough should trigger callback"
+        );
+    }
+
+    #[test]
+    fn test_non_tmux_dcs_ignored() {
+        let captured = Arc::new(Mutex::new(Vec::new()));
+        let callbacks = DcsCapture {
+            captured: captured.clone(),
+        };
+        let mut parser =
+            crate::Parser::new_with_callbacks(80, 24, 0, callbacks);
+
+        // Non-tmux DCS (e.g., sixel)
+        let input = b"\x1bP0;1;0q\x1b\\";
+        parser.process(input);
+
+        let data = captured.lock().unwrap();
+        assert!(
+            data.is_empty(),
+            "Non-tmux DCS should not trigger passthrough callback"
+        );
+    }
 }
