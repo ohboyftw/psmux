@@ -26,6 +26,8 @@ mod util;
 mod window_ops;
 
 #[allow(unused)]
+mod backend;
+#[allow(unused)]
 mod remote;
 
 use std::env;
