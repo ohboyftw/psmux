@@ -8,6 +8,36 @@ use ratatui::prelude::Rect;
 
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 
+/// Thread-safe bounded queue for DCS passthrough sequences captured by the
+/// vt100 parser's `dcs_passthrough` callback.  Shared between the PTY reader
+/// thread (producer) and the client render loop (consumer).
+#[derive(Clone)]
+pub struct PassthroughQueue {
+    entries: Arc<Mutex<Vec<Vec<u8>>>>,
+    max_depth: usize,
+}
+
+impl PassthroughQueue {
+    pub fn new(max_depth: usize) -> Self {
+        Self { entries: Arc::new(Mutex::new(Vec::new())), max_depth }
+    }
+
+    pub fn push(&self, data: Vec<u8>) {
+        if let Ok(mut entries) = self.entries.lock() {
+            if entries.len() >= self.max_depth {
+                entries.remove(0);
+            }
+            entries.push(data);
+        }
+    }
+
+    pub fn drain(&self) -> Vec<Vec<u8>> {
+        self.entries.lock().ok()
+            .map(|mut e| std::mem::take(&mut *e))
+            .unwrap_or_default()
+    }
+}
+
 pub struct Pane {
     pub master: Box<dyn MasterPty>,
     pub writer: Box<dyn std::io::Write + Send>,
@@ -59,6 +89,10 @@ pub struct Pane {
     /// (e.g. `@agent`, `@task`).  Queryable via `show-options -p @key`
     /// and format variables `#{pane_agent}`, `#{pane_task}`.
     pub metadata: std::collections::HashMap<String, String>,
+    /// Bounded queue of DCS passthrough sequences from the child process.
+    /// Filled by the PTY reader thread's vt100 callback, drained by the
+    /// client render loop when `allow_passthrough` is "on" or "all".
+    pub passthrough_queue: PassthroughQueue,
 }
 
 /// Pre-spawned shell ready to be transplanted into a new window instantly.

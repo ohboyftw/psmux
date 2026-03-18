@@ -6,7 +6,7 @@ use std::time::Duration;
 use portable_pty::{native_pty_system, CommandBuilder, PtySize};
 
 use crate::tree::{active_pane_mut, kill_leaf, replace_leaf_with_split};
-use crate::types::{AppState, LayoutKind, Node, Pane, Window};
+use crate::types::{AppState, LayoutKind, Node, Pane, PassthroughQueue, Window};
 
 /// Sentinel value for cursor_shape: means "no DECSCUSR received from child yet".
 /// When ConPTY passthrough mode is unavailable, DECSCUSR sequences from child
@@ -133,6 +133,7 @@ pub fn create_window(
             copy_state: None,
             pane_style: None,
             metadata: std::collections::HashMap::new(),
+            passthrough_queue: PassthroughQueue::new(64),
         };
         let win_name = default_shell_name(None, configured_shell);
         let initial_pane_id = wp.pane_id;
@@ -253,6 +254,7 @@ pub fn create_window(
         copy_state: None,
         pane_style: None,
         metadata: std::collections::HashMap::new(),
+        passthrough_queue: PassthroughQueue::new(64),
     };
     app.next_pane_id += 1;
     let win_name = command
@@ -442,6 +444,7 @@ pub fn create_window_raw(
         copy_state: None,
         pane_style: None,
         metadata: std::collections::HashMap::new(),
+        passthrough_queue: PassthroughQueue::new(64),
     };
     app.next_pane_id += 1;
     let win_name = std::path::Path::new(&raw_args[0])
@@ -601,6 +604,7 @@ pub fn split_active_with_command(
             copy_state: None,
             pane_style: None,
             metadata: std::collections::HashMap::new(),
+            passthrough_queue: PassthroughQueue::new(64),
         });
         let win = &mut app.windows[app.active_idx];
         replace_leaf_with_split(&mut win.root, &win.active_path, kind, new_leaf);
@@ -688,6 +692,7 @@ pub fn split_active_with_command(
         copy_state: None,
         pane_style: None,
         metadata: std::collections::HashMap::new(),
+        passthrough_queue: PassthroughQueue::new(64),
     });
     app.next_pane_id += 1;
     let win = &mut app.windows[app.active_idx];
