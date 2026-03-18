@@ -25,6 +25,9 @@ mod types;
 mod util;
 mod window_ops;
 
+#[allow(unused)]
+mod remote;
+
 use std::env;
 use std::io::{self, BufRead as _, Read as _, Write};
 use std::time::Duration;
