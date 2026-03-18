@@ -64,6 +64,34 @@ pub trait Callbacks {
     /// This callback is called when the terminal receives a OSC sequence
     /// (`\e]`) which is otherwise not implemented.
     fn unhandled_osc(&mut self, _: &mut crate::Screen, _params: &[&[u8]]) {}
+    /// This callback is called when the terminal receives a DCS (Device
+    /// Control String) sequence that should be passed through to the host
+    /// terminal unchanged (e.g. tmux passthrough `\ePtmux;...\e\\`).
+    fn dcs_passthrough(&mut self, _: &mut crate::Screen, _data: &[u8]) {}
 }
 
 impl Callbacks for () {}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    struct TestCallbacks {
+        passthrough_data: Vec<Vec<u8>>,
+    }
+
+    impl Callbacks for TestCallbacks {
+        fn dcs_passthrough(&mut self, _screen: &mut crate::Screen, data: &[u8]) {
+            self.passthrough_data.push(data.to_vec());
+        }
+    }
+
+    #[test]
+    fn test_dcs_passthrough_callback_exists() {
+        let mut cb = TestCallbacks { passthrough_data: vec![] };
+        let mut screen = crate::Screen::new(crate::grid::Size { rows: 24, cols: 80 }, 0);
+        cb.dcs_passthrough(&mut screen, b"\x1b]0;title\x07");
+        assert_eq!(cb.passthrough_data.len(), 1);
+        assert_eq!(cb.passthrough_data[0], b"\x1b]0;title\x07");
+    }
+}
