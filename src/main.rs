@@ -3065,6 +3065,79 @@ fn run_main() -> io::Result<()> {
             send_control("unlink-window\n".to_string())?;
             return Ok(());
         }
+        // ── Remote tmux (SSH control mode) commands ──────────────────
+        "attach-remote" => {
+            let ssh_target = cmd_args.get(1).ok_or_else(|| {
+                io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    "Usage: psmux attach-remote <user@host> [-t session] [--ssh-opts \"...\"]",
+                )
+            })?;
+            let session = cmd_args
+                .iter()
+                .position(|a| a.as_str() == "-t")
+                .and_then(|i| cmd_args.get(i + 1))
+                .map(|s| s.to_string());
+            let ssh_opts = cmd_args
+                .iter()
+                .position(|a| a.as_str() == "--ssh-opts")
+                .and_then(|i| cmd_args.get(i + 1))
+                .map(|s| s.to_string());
+            return crate::remote::run_remote_tmux(
+                ssh_target,
+                session.as_deref(),
+                ssh_opts.as_deref(),
+            );
+        }
+        "new-session-remote" => {
+            let ssh_target = cmd_args.get(1).ok_or_else(|| {
+                io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    "Usage: psmux new-session-remote <user@host> -s <name> [--ssh-opts \"...\"]",
+                )
+            })?;
+            let session = cmd_args
+                .iter()
+                .position(|a| a.as_str() == "-s")
+                .and_then(|i| cmd_args.get(i + 1))
+                .map(|s| s.to_string());
+            let ssh_opts = cmd_args
+                .iter()
+                .position(|a| a.as_str() == "--ssh-opts")
+                .and_then(|i| cmd_args.get(i + 1))
+                .map(|s| s.to_string());
+            return crate::remote::run_remote_tmux(
+                ssh_target,
+                session.as_deref(),
+                ssh_opts.as_deref(),
+            );
+        }
+        "list-sessions-remote" | "lsr" => {
+            let ssh_target = cmd_args.get(1).ok_or_else(|| {
+                io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    "Usage: psmux list-sessions-remote <user@host> [--ssh-opts \"...\"]",
+                )
+            })?;
+            let ssh_opts_str = cmd_args
+                .iter()
+                .position(|a| a.as_str() == "--ssh-opts")
+                .and_then(|i| cmd_args.get(i + 1))
+                .map(|s| s.to_string());
+            let mut ssh_cmd = std::process::Command::new("ssh");
+            if let Some(ref opts) = ssh_opts_str {
+                for opt in opts.split_whitespace() {
+                    ssh_cmd.arg(opt);
+                }
+            }
+            ssh_cmd.arg(ssh_target.as_str()).arg("tmux list-sessions");
+            let output = ssh_cmd.output()?;
+            print!("{}", String::from_utf8_lossy(&output.stdout));
+            if !output.stderr.is_empty() {
+                eprint!("{}", String::from_utf8_lossy(&output.stderr));
+            }
+            return Ok(());
+        }
         _ => {
             // Unknown command - print error and exit
             if !cmd.is_empty() {
