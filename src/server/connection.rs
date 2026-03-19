@@ -1492,12 +1492,18 @@ pub(crate) fn handle_connection(
                 }
             }
             "set-hook" => {
+                let unset = args.iter().any(|a| a.starts_with('-') && a.contains('u'));
                 let non_flag: Vec<&str> = args
                     .iter()
                     .filter(|a| !a.starts_with('-'))
                     .copied()
                     .collect();
-                if non_flag.len() >= 2 {
+                if unset {
+                    // set-hook -gu hook-name — remove the hook
+                    if !non_flag.is_empty() {
+                        let _ = tx.send(CtrlReq::RemoveHook(non_flag[0].to_string()));
+                    }
+                } else if non_flag.len() >= 2 {
                     let _ = tx.send(CtrlReq::SetHook(
                         non_flag[0].to_string(),
                         non_flag[1..].join(" "),

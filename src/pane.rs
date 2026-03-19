@@ -746,9 +746,6 @@ pub fn kill_active_pane(app: &mut AppState) -> io::Result<()> {
 
 pub fn kill_pane_by_id(app: &mut AppState, pane_id: usize) -> io::Result<()> {
     let restore_idx = app.active_idx;
-    let restore_path = app.windows[restore_idx].active_path.clone();
-    let restore_pane_id =
-        crate::tree::get_active_pane_id(&app.windows[restore_idx].root, &restore_path);
 
     let target = app.windows.iter().enumerate().find_map(|(wi, win)| {
         crate::tree::find_path_by_id(&win.root, pane_id).map(|path| (wi, path))
@@ -758,22 +755,37 @@ pub fn kill_pane_by_id(app: &mut AppState, pane_id: usize) -> io::Result<()> {
         return Ok(());
     };
 
-    {
+    if target_idx == restore_idx {
+        // Same window: kill_pane_at_path already sets active_path via MRU.
+        // We must NOT overwrite it afterward (issue #71).
         let win = &mut app.windows[target_idx];
         kill_pane_at_path(win, &target_path);
-    }
+    } else {
+        // Different window: kill the pane in its window, then restore focus
+        // to the original active pane in the original window.
+        let restore_pane_id = crate::tree::get_active_pane_id(
+            &app.windows[restore_idx].root,
+            &app.windows[restore_idx].active_path,
+        );
+        let restore_path = app.windows[restore_idx].active_path.clone();
 
-    if restore_idx < app.windows.len() {
-        app.active_idx = restore_idx;
-        let restore_win = &mut app.windows[restore_idx];
-        let resolved_restore_path = restore_pane_id
-            .and_then(|id| crate::tree::find_path_by_id(&restore_win.root, id))
-            .or_else(|| {
-                crate::tree::path_exists(&restore_win.root, &restore_path)
-                    .then_some(restore_path.clone())
-            })
-            .unwrap_or_else(|| crate::tree::first_leaf_path(&restore_win.root));
-        restore_win.active_path = resolved_restore_path;
+        {
+            let win = &mut app.windows[target_idx];
+            kill_pane_at_path(win, &target_path);
+        }
+
+        if restore_idx < app.windows.len() {
+            app.active_idx = restore_idx;
+            let restore_win = &mut app.windows[restore_idx];
+            let resolved_restore_path = restore_pane_id
+                .and_then(|id| crate::tree::find_path_by_id(&restore_win.root, id))
+                .or_else(|| {
+                    crate::tree::path_exists(&restore_win.root, &restore_path)
+                        .then_some(restore_path.clone())
+                })
+                .unwrap_or_else(|| crate::tree::first_leaf_path(&restore_win.root));
+            restore_win.active_path = resolved_restore_path;
+        }
     }
 
     Ok(())

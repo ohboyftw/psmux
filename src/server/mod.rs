@@ -3932,7 +3932,8 @@ pub fn run_server(
                             let _ = resp.send(output);
                         }
                         CtrlReq::SetHook(hook, cmd) => {
-                            app.hooks.entry(hook).or_default().push(cmd);
+                            // Replace semantics: only one command per hook event
+                            app.hooks.insert(hook, vec![cmd]);
                         }
                         CtrlReq::ShowHooks(resp) => {
                             let mut output = String::new();

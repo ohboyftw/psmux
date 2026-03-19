@@ -293,13 +293,24 @@ pub fn parse_config_line(app: &mut AppState, line: &str) {
     } else if l.starts_with("if-shell ") || l.starts_with("if ") {
         parse_if_shell(app, l);
     } else if l.starts_with("set-hook ") {
-        // Parse set-hook: set-hook [-g] hook-name command
+        // Parse set-hook: set-hook [-g] [-u] hook-name command
+        // -gu or -u: unset (remove) the hook for the given event
         let parts: Vec<&str> = l.split_whitespace().collect();
         let mut i = 1;
+        let mut unset = false;
         while i < parts.len() && parts[i].starts_with('-') {
+            if parts[i].contains('u') {
+                unset = true;
+            }
             i += 1;
         }
-        if i + 1 < parts.len() {
+        if unset {
+            // set-hook -gu hook-name — remove the hook
+            if i < parts.len() {
+                let hook = parts[i].to_string();
+                app.hooks.remove(&hook);
+            }
+        } else if i + 1 < parts.len() {
             let hook = parts[i].to_string();
             let cmd = parts[i + 1..].join(" ");
             // Strip matching outer quotes (single or double) that wrap the command
@@ -318,7 +329,8 @@ pub fn parse_config_line(app: &mut AppState, line: &str) {
                     cmd
                 }
             };
-            app.hooks.entry(hook).or_default().push(cmd);
+            // Replace semantics: only one command per hook event
+            app.hooks.insert(hook, vec![cmd]);
         }
     } else if l.starts_with("set-environment ") || l.starts_with("setenv ") {
         let parts: Vec<&str> = l.split_whitespace().collect();
@@ -330,7 +342,7 @@ pub fn parse_config_line(app: &mut AppState, line: &str) {
             let val = parts[i + 1..].join(" ");
             app.environment.insert(parts[i].to_string(), val.clone());
             // Also set on the server process so child panes inherit via env block
-            std::env::set_var(parts[i], &val);
+            crate::util::set_env(parts[i], &val);
         }
     }
 }
@@ -470,8 +482,8 @@ pub fn parse_option_value(app: &mut AppState, rest: &str, _is_global: bool) {
         "prediction-dimming" | "dim-predictions" => {
             app.prediction_dimming = !matches!(value, "off" | "false" | "0");
         }
-        "cursor-style" => env::set_var("PSMUX_CURSOR_STYLE", value),
-        "cursor-blink" => env::set_var(
+        "cursor-style" => crate::util::set_env("PSMUX_CURSOR_STYLE", value),
+        "cursor-blink" => crate::util::set_env(
             "PSMUX_CURSOR_BLINK",
             if matches!(value, "on" | "true" | "1") {
                 "1"
@@ -708,9 +720,6 @@ pub fn parse_option_value(app: &mut AppState, rest: &str, _is_global: bool) {
         }
         "env-shim" => {
             app.env_shim = matches!(value, "on" | "true" | "1");
-        }
-        "claude-code-fix-tty" => {
-            app.claude_code_fix_tty = matches!(value, "on" | "true" | "1");
         }
         "claude-code-force-interactive" => {
             app.claude_code_force_interactive = matches!(value, "on" | "true" | "1");
@@ -1668,5 +1677,63 @@ fn parse_if_shell(app: &mut AppState, line: &str) {
     if let Some(cmd) = cmd_to_run {
         // Execute the branch as a config line (recursive — supports set, bind, source, etc.)
         parse_config_line(app, cmd);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::parse_config_line;
+    use crate::types::AppState;
+
+    #[test]
+    fn set_hook_replaces_existing_hook_for_same_event() {
+        let mut app = AppState::new("test".to_string());
+        parse_config_line(&mut app, "set-hook -g client-attached 'display-message first'");
+        parse_config_line(&mut app, "set-hook -g client-attached 'display-message second'");
+
+        let hooks = app.hooks.get("client-attached").unwrap();
+        assert_eq!(hooks.len(), 1, "should have exactly one hook, not duplicates");
+        assert_eq!(hooks[0], "display-message second");
+    }
+
+    #[test]
+    fn set_hook_different_events_preserved() {
+        let mut app = AppState::new("test".to_string());
+        parse_config_line(&mut app, "set-hook -g client-attached 'display-message attached'");
+        parse_config_line(&mut app, "set-hook -g after-new-window 'display-message new-win'");
+
+        assert!(app.hooks.contains_key("client-attached"));
+        assert!(app.hooks.contains_key("after-new-window"));
+        assert_eq!(app.hooks.get("client-attached").unwrap().len(), 1);
+        assert_eq!(app.hooks.get("after-new-window").unwrap().len(), 1);
+    }
+
+    #[test]
+    fn set_hook_unset_removes_hook() {
+        let mut app = AppState::new("test".to_string());
+        parse_config_line(&mut app, "set-hook -g client-attached 'display-message hello'");
+        assert!(app.hooks.contains_key("client-attached"));
+
+        parse_config_line(&mut app, "set-hook -gu client-attached");
+        assert!(!app.hooks.contains_key("client-attached"), "hook should be removed by -gu");
+    }
+
+    #[test]
+    fn set_hook_unset_u_flag_alone() {
+        let mut app = AppState::new("test".to_string());
+        parse_config_line(&mut app, "set-hook -g client-attached 'display-message hello'");
+        assert!(app.hooks.contains_key("client-attached"));
+
+        // -u alone (without -g) should also unset
+        parse_config_line(&mut app, "set-hook -u client-attached");
+        assert!(!app.hooks.contains_key("client-attached"), "hook should be removed by -u");
+    }
+
+    #[test]
+    fn set_hook_unset_nonexistent_is_noop() {
+        let mut app = AppState::new("test".to_string());
+        // Should not panic when removing a hook that doesn't exist
+        parse_config_line(&mut app, "set-hook -gu nonexistent-hook");
+        assert!(!app.hooks.contains_key("nonexistent-hook"));
     }
 }

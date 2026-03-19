@@ -606,7 +606,7 @@ pub fn handle_key(app: &mut AppState, key: KeyEvent) -> io::Result<bool> {
                             }
                         } else {
                             // Different session: set env and trigger switch
-                            std::env::set_var("PSMUX_SWITCH_TO", &entry.session_name);
+                            crate::util::set_env("PSMUX_SWITCH_TO", &entry.session_name);
                         }
                     }
                     app.mode = Mode::Passthrough;
@@ -1851,7 +1851,14 @@ pub fn encode_key_event(key: &KeyEvent) -> Option<Vec<u8>> {
             vec![c as u8]
         }
         KeyCode::Char(c) => format!("{}", c).into_bytes(),
-        KeyCode::Enter => b"\r".to_vec(),
+        KeyCode::Enter => {
+            let m = modifier_param(key.modifiers);
+            if m > 1 {
+                format!("\x1b[13;{}~", m).into_bytes()
+            } else {
+                b"\r".to_vec()
+            }
+        }
         KeyCode::Tab => {
             let m = modifier_param(key.modifiers);
             if m > 1 {
@@ -3703,5 +3710,36 @@ mod tests {
         let ev = key(KeyCode::Char('\\'), KeyModifiers::NONE);
         let bytes = encode_key_event(&ev).unwrap();
         assert_eq!(bytes, b"\\");
+    }
+
+    // ── Enter with modifiers (GitHub issue #121) ──
+
+    #[test]
+    fn plain_enter_produces_cr() {
+        let ev = key(KeyCode::Enter, KeyModifiers::NONE);
+        let bytes = encode_key_event(&ev).unwrap();
+        assert_eq!(bytes, b"\r", "plain Enter must produce CR");
+    }
+
+    #[test]
+    fn shift_enter_produces_modified_sequence() {
+        let ev = key(KeyCode::Enter, KeyModifiers::SHIFT);
+        let bytes = encode_key_event(&ev).unwrap();
+        assert_eq!(
+            bytes,
+            b"\x1b[13;2~",
+            "Shift+Enter must produce CSI 13;2 ~"
+        );
+    }
+
+    #[test]
+    fn ctrl_enter_produces_modified_sequence() {
+        let ev = key(KeyCode::Enter, KeyModifiers::CONTROL);
+        let bytes = encode_key_event(&ev).unwrap();
+        assert_eq!(
+            bytes,
+            b"\x1b[13;5~",
+            "Ctrl+Enter must produce CSI 13;5 ~"
+        );
     }
 }
