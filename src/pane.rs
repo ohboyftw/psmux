@@ -189,7 +189,6 @@ pub fn create_window(
         app.control_port,
         app.socket_name.as_deref(),
         &app.session_name,
-        app.claude_code_fix_tty,
         app.claude_code_force_interactive,
     );
     apply_user_environment(&mut shell_cmd, &app.environment);
@@ -313,7 +312,6 @@ pub fn spawn_warm_pane(
         app.control_port,
         app.socket_name.as_deref(),
         &app.session_name,
-        app.claude_code_fix_tty,
         app.claude_code_force_interactive,
     );
     apply_user_environment(&mut shell_cmd, &app.environment);
@@ -388,7 +386,6 @@ pub fn create_window_raw(
         app.control_port,
         app.socket_name.as_deref(),
         &app.session_name,
-        app.claude_code_fix_tty,
         app.claude_code_force_interactive,
     );
     apply_user_environment(&mut shell_cmd, &app.environment);
@@ -638,7 +635,6 @@ pub fn split_active_with_command(
         app.control_port,
         app.socket_name.as_deref(),
         &app.session_name,
-        app.claude_code_fix_tty,
         app.claude_code_force_interactive,
     );
     apply_user_environment(&mut shell_cmd, &app.environment);
@@ -785,17 +781,18 @@ pub fn set_tmux_env(
     control_port: Option<u16>,
     socket_name: Option<&str>,
     session_name: &str,
-    fix_tty: bool,
     _force_interactive: bool,
 ) {
     let server_pid = std::process::id();
     let port = control_port.unwrap_or(0);
     let sn = socket_name.unwrap_or("default");
     // Format compatible with tmux: <socket_path>,<pid>,<session_idx>
-    // We encode the socket name in the path component for -L namespace resolution
+    // Use a uid-based path like real tmux (/tmp/tmux-{uid}/default) so that
+    // Claude Code's detection regex doesn't reject the non-standard path.
+    // On Windows we use the server PID as a stable per-session identifier.
     builder.env(
         "TMUX",
-        format!("/tmp/psmux-{}/{},{},0", server_pid, sn, port),
+        format!("/tmp/tmux-{}/{},{},0", server_pid, sn, port),
     );
     builder.env("TMUX_PANE", format!("%{}", pane_id));
     // Override the placeholder "1" from build_command/build_default_shell with the
@@ -818,17 +815,22 @@ pub fn set_tmux_env(
     // always falls back to the in-process "Agent" tool.
     builder.env("CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS", "1");
 
-    // ── Claude Code workarounds (removable once upstream fixes land) ──
-    //
-    // claude-code-fix-tty (set -g claude-code-fix-tty on/off):
-    //   Claude Code v2.1.71 standalone binary ignores `teammateMode` from
-    //   settings.json (config schema strips the field).  The `--teammate-mode
-    //   tmux` CLI flag DOES work.  We set PSMUX_CLAUDE_TEAMMATE_MODE=tmux so
-    //   the PowerShell env-shim `claude` wrapper function injects the flag
-    //   automatically.  Disable with: set -g claude-code-fix-tty off
-    if fix_tty {
-        builder.env("PSMUX_CLAUDE_TEAMMATE_MODE", "tmux");
+    // CC v2.1.74-v2.1.79: propagate Claude Code env vars to agent panes if set.
+    for key in &[
+        "CLAUDE_CODE_SESSIONEND_HOOKS_TIMEOUT_MS",
+        "CLAUDE_PLUGIN_DATA",
+        "CLAUDE_CODE_PLUGIN_SEED_DIR",
+        "CLAUDE_CODE_DISABLE_TERMINAL_TITLE",
+        "CLAUDE_CODE_DISABLE_GIT_INSTRUCTIONS",
+        "ANTHROPIC_CUSTOM_MODEL_OPTION",
+    ] {
+        if let Ok(val) = std::env::var(key) {
+            builder.env(key, &val);
+        }
     }
+
+    // Claude Code detects $TMUX and reads `teammateMode` from its own
+    // settings.json — no CLI flag injection needed from psmux.
 }
 
 /// Apply user-defined environment variables (from set-environment -g) to a CommandBuilder.
@@ -898,17 +900,8 @@ const ENV_SHIM_PS: &str = concat!(
     "} elseif($v.Count -gt 0){ ",
     "foreach($e in $v.GetEnumerator()){[Environment]::SetEnvironmentVariable($e.Key,$e.Value,'Process')} ",
     "} else { Get-ChildItem Env:|ForEach-Object{$_.Name+'='+$_.Value} } } }; ",
-    // Claude Code teammate-mode wrapper (claude-code#26244):
-    // The standalone (Bun SFE) binary ignores `teammateMode` from settings.json
-    // but honours the `--teammate-mode tmux` CLI flag.  The agent teams tool-set
-    // is separately gated by CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS env var (set
-    // above in set_tmux_env).  This wrapper auto-injects --teammate-mode when
-    // PSMUX_CLAUDE_TEAMMATE_MODE is set (via `set -g claude-code-fix-tty on`).
-    // Disable with: set -g claude-code-fix-tty off
-    "if($env:PSMUX_CLAUDE_TEAMMATE_MODE){ ",
-    "function Global:claude { ",
-    "if($args -contains '--teammate-mode'){ & claude.exe @args } ",
-    "else{ & claude.exe --teammate-mode $env:PSMUX_CLAUDE_TEAMMATE_MODE @args } } }",
+    // Claude Code reads teammateMode from its own settings.json and auto-detects
+    // $TMUX — no wrapper function needed.
 );
 
 /// PSReadLine prediction fix — disables predictions that crash with

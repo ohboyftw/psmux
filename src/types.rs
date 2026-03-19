@@ -358,6 +358,9 @@ pub struct AppState {
     /// Current key table for switch-client -T (None = normal mode)
     pub current_key_table: Option<String>,
     pub control_rx: Option<mpsc::Receiver<CtrlReq>>,
+    /// Clone of the control channel sender for spawning background tasks
+    /// (e.g. deferred force-kill after a grace period).
+    pub control_tx: Option<mpsc::Sender<CtrlReq>>,
     pub control_port: Option<u16>,
     pub session_key: String,
     pub session_name: String,
@@ -511,13 +514,6 @@ pub struct AppState {
     /// so that `env VAR=val command` syntax works (required by Claude Code, etc.).
     /// Default: on
     pub env_shim: bool,
-    /// claude-code-fix-tty: inject a Node.js preload script via NODE_OPTIONS
-    /// that patches process.stdout.isTTY = true inside ConPTY panes.  Works around
-    /// Claude Code's isTTY gate that forces in-process agent mode on Windows
-    /// (claude-code#26244).  Once Claude Code fixes the bug upstream, users can
-    /// disable this with: set -g claude-code-fix-tty off
-    /// Default: on
-    pub claude_code_fix_tty: bool,
     /// claude-code-force-interactive: set CLAUDE_CODE_FORCE_INTERACTIVE=1 in
     /// pane environments so Claude Code treats the session as interactive even
     /// when its own heuristics disagree.  This prevents the non-interactive
@@ -588,6 +584,7 @@ impl AppState {
             key_tables: std::collections::HashMap::new(),
             current_key_table: None,
             control_rx: None,
+            control_tx: None,
             control_port: None,
             session_key: String::new(),
             session_name,
@@ -664,13 +661,12 @@ impl AppState {
             status_lines: 1,
             status_format: Vec::new(),
             window_size: "latest".to_string(),
-            allow_passthrough: "off".to_string(),
+            allow_passthrough: "on".to_string(),
             copy_command: String::new(),
             command_aliases: std::collections::HashMap::new(),
             set_clipboard: "on".to_string(),
             clipboard_osc52: None,
             env_shim: true,
-            claude_code_fix_tty: true,
             claude_code_force_interactive: true,
             last_hover_pos: None,
             status_message: None,
@@ -940,7 +936,8 @@ pub enum CtrlReq {
         command: Vec<String>,
         cwd: Option<String>,
         env: Option<std::collections::HashMap<String, String>>,
-        metadata: Option<(Option<String>, Option<String>)>, // (name, role)
+        metadata: Option<crate::backend::protocol::AgentMetadata>,
+        split_direction: Option<LayoutKind>,
         resp: mpsc::Sender<String>,
     },
     /// Backend `capture` — capture pane content by context ID.
@@ -957,7 +954,13 @@ pub enum CtrlReq {
     /// Backend `kill` — kill a pane by context ID.
     BackendKillPane {
         pane_id: String,
+        grace_ms: Option<u64>,
         resp: mpsc::Sender<()>,
+    },
+    /// Backend `kill_all` — kill all agent panes (leader exit cleanup).
+    BackendKillAll {
+        role: Option<String>,
+        resp: mpsc::Sender<Vec<String>>,
     },
     /// Backend `write` — send text to a pane by context ID.
     BackendSendText {

@@ -33,6 +33,7 @@ pub fn dispatch_rpc(line: &str, tx: &mpsc::Sender<CtrlReq>) -> Option<String> {
         "write" => handle_write(&req.params, tx),
         "capture" => handle_capture(&req.params, tx),
         "kill" => handle_kill(&req.params, tx),
+        "kill_all" => handle_kill_all(&req.params, tx),
         "list" => handle_list(&req.params, tx),
         _ => Err((-32601, format!("Method not found: {}", req.method))),
     };
@@ -82,7 +83,13 @@ fn handle_spawn_agent(
         return Err((-32602, "command must not be empty".into()));
     }
 
-    let metadata = p.metadata.map(|m| (m.name, m.role));
+    let metadata = p.metadata;
+    let split_direction = match p.split_direction.as_deref() {
+        Some("horizontal") => Some(crate::types::LayoutKind::Horizontal),
+        Some("vertical") => Some(crate::types::LayoutKind::Vertical),
+        Some(_) => return Err((-32602, "split_direction must be \"horizontal\" or \"vertical\"".into())),
+        None => None,
+    };
 
     let (resp_tx, resp_rx) = mpsc::channel();
     tx.send(CtrlReq::BackendSpawnAgent {
@@ -90,6 +97,7 @@ fn handle_spawn_agent(
         cwd: p.cwd,
         env: p.env,
         metadata,
+        split_direction,
         resp: resp_tx,
     })
     .map_err(|_| (-32603, "Server channel closed".to_string()))?;
@@ -144,7 +152,7 @@ fn handle_capture(
     tx.send(CtrlReq::BackendCapturePane {
         pane_id: p.context_id,
         lines: p.lines,
-        clean: false,
+        clean: p.clean.unwrap_or(false),
         resp: resp_tx,
     })
     .map_err(|_| (-32603, "Server channel closed".to_string()))?;
@@ -171,6 +179,7 @@ fn handle_kill(
     let (resp_tx, resp_rx) = mpsc::channel();
     tx.send(CtrlReq::BackendKillPane {
         pane_id: p.context_id,
+        grace_ms: p.grace_ms,
         resp: resp_tx,
     })
     .map_err(|_| (-32603, "Server channel closed".to_string()))?;
@@ -179,6 +188,29 @@ fn handle_kill(
     let _ = resp_rx.recv_timeout(std::time::Duration::from_secs(5));
 
     Ok(serde_json::json!({}))
+}
+
+/// Handle `kill_all` — kill all agent-spawned panes, optionally filtered by role.
+fn handle_kill_all(
+    params: &serde_json::Value,
+    tx: &mpsc::Sender<CtrlReq>,
+) -> Result<serde_json::Value, (i32, String)> {
+    let p: KillAllParams = serde_json::from_value(params.clone())
+        .map_err(|e| (-32602, format!("Invalid params: {e}")))?;
+
+    let (resp_tx, resp_rx) = mpsc::channel();
+    tx.send(CtrlReq::BackendKillAll {
+        role: p.role,
+        resp: resp_tx,
+    })
+    .map_err(|_| (-32603, "Server channel closed".to_string()))?;
+
+    let killed = resp_rx
+        .recv_timeout(std::time::Duration::from_secs(10))
+        .map_err(|_| (-32603, "Server response timeout".to_string()))?;
+
+    let result = KillAllResult { killed };
+    serde_json::to_value(result).map_err(|e| (-32603, format!("Internal error: {e}")))
 }
 
 /// Handle `list` — return all active contexts.

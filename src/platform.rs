@@ -1084,6 +1084,21 @@ pub mod mouse_inject {
         }
     }
 
+    /// Send a CTRL_BREAK_EVENT to a process for graceful shutdown.
+    ///
+    /// # Safety
+    /// Caller must ensure `child_pid` is a valid process ID.
+    /// Reuses the `GenerateConsoleCtrlEvent` FFI declared in `send_ctrl_c_event`.
+    pub unsafe fn generate_ctrl_break(child_pid: u32) {
+        const CTRL_BREAK_EVENT: u32 = 1;
+        // GenerateConsoleCtrlEvent is already linked by send_ctrl_c_event above.
+        #[link(name = "kernel32")]
+        extern "system" {
+            fn GenerateConsoleCtrlEvent(ctrl_event: u32, process_group_id: u32) -> i32;
+        }
+        GenerateConsoleCtrlEvent(CTRL_BREAK_EVENT, child_pid);
+    }
+
     /// Inject a modified key event into a child process's console input buffer.
     ///
     /// Uses WriteConsoleInputW with the appropriate control_key_state flags

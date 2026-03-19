@@ -1,5 +1,23 @@
 use serde::{Deserialize, Serialize};
 
+#[test]
+fn test_spawn_agent_with_frontmatter_fields_deserializes() {
+    let json_str = r#"{"id":"1","method":"spawn_agent","params":{
+        "command":["claude","--agent"],
+        "metadata":{
+            "name":"worker-1",
+            "color":"blue",
+            "role":"researcher",
+            "effort":"high",
+            "max_turns":25,
+            "disallowed_tools":["Bash","Write"]
+        }
+    }}"#;
+    let req: RpcRequest = serde_json::from_str(json_str)
+        .expect("spawn_agent with frontmatter must deserialize");
+    assert_eq!(req.method, "spawn_agent");
+}
+
 #[derive(Debug, Deserialize)]
 struct RpcRequest {
     id: Option<serde_json::Value>,
@@ -73,6 +91,14 @@ fn test_all_rpc_methods_deserialize() {
             "kill",
         ),
         (r#"{"id":"6","method":"list","params":{}}"#, "list"),
+        (
+            r#"{"id":"7","method":"kill_all","params":{}}"#,
+            "kill_all",
+        ),
+        (
+            r#"{"id":"8","method":"kill_all","params":{"role":"researcher"}}"#,
+            "kill_all",
+        ),
     ];
     for (json_str, expected_method) in cases {
         let req: RpcRequest = serde_json::from_str(json_str)

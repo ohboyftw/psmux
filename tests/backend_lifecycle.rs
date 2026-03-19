@@ -1,37 +1,5 @@
-use std::sync::mpsc;
-use std::thread;
-
-/// Create a tx/rx pair with a background thread that handles CtrlReq variants
-/// by sending back mock responses. This simulates the server's main loop.
-fn make_mock_server() -> mpsc::Sender<psmux::types::CtrlReq> {
-    let (tx, rx) = mpsc::channel::<psmux::types::CtrlReq>();
-    thread::spawn(move || {
-        while let Ok(req) = rx.recv() {
-            match req {
-                psmux::types::CtrlReq::BackendInitialize { resp } => {
-                    let _ = resp.send("%0".to_string());
-                }
-                psmux::types::CtrlReq::BackendSpawnAgent { resp, .. } => {
-                    let _ = resp.send("%1".to_string());
-                }
-                psmux::types::CtrlReq::BackendCapturePane { resp, .. } => {
-                    let _ = resp.send(String::new());
-                }
-                psmux::types::CtrlReq::BackendListPanes { resp } => {
-                    let _ = resp.send(r#"{"contexts":[]}"#.to_string());
-                }
-                psmux::types::CtrlReq::BackendKillPane { resp, .. } => {
-                    let _ = resp.send(());
-                }
-                psmux::types::CtrlReq::BackendSendText { .. } => {
-                    // Fire-and-forget, no response needed
-                }
-                _ => {}
-            }
-        }
-    });
-    tx
-}
+mod common;
+use common::make_mock_server;
 
 #[test]
 fn test_dispatch_initialize() {
@@ -152,6 +120,20 @@ fn test_dispatch_write_invalid_base64() {
     let parsed: serde_json::Value = serde_json::from_str(&response.unwrap()).unwrap();
     assert!(parsed["error"].is_object());
     assert_eq!(parsed["error"]["code"], -32602);
+}
+
+#[test]
+fn test_dispatch_kill_all() {
+    let tx = make_mock_server();
+    let input = r#"{"id":"7","method":"kill_all","params":{}}"#;
+
+    let response = psmux::backend::dispatcher::dispatch_rpc(input, &tx);
+    assert!(response.is_some());
+
+    let parsed: serde_json::Value = serde_json::from_str(&response.unwrap()).unwrap();
+    assert_eq!(parsed["id"], "7");
+    assert!(parsed["result"]["killed"].is_array());
+    assert_eq!(parsed["result"]["killed"].as_array().unwrap().len(), 2);
 }
 
 #[test]

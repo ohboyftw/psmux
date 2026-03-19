@@ -343,6 +343,19 @@ fn spawn_warm_server(app: &AppState) {
     }
 }
 
+/// Extract the Win32 process ID from a pane by its numeric ID.
+/// Returns None if the pane is not found or the PID cannot be read.
+fn get_pane_process_id(app: &AppState, pane_id: usize) -> Option<u32> {
+    for win in &app.windows {
+        if let Some(path) = crate::tree::find_path_by_id(&win.root, pane_id) {
+            if let Some(p) = crate::tree::active_pane(&win.root, &path) {
+                return p.child.process_id();
+            }
+        }
+    }
+    None
+}
+
 /// Compute the effective display size from all connected clients' terminal sizes.
 /// Returns None if no clients have reported sizes.
 fn compute_effective_client_size(app: &AppState) -> Option<(u16, u16)> {
@@ -492,6 +505,7 @@ pub fn run_server(
     // commands spawned by load_config can connect back to the server.
     let (tx, rx) = mpsc::channel::<CtrlReq>();
     app.control_rx = Some(rx);
+    app.control_tx = Some(tx.clone());
     let listener = TcpListener::bind(("127.0.0.1", 0))?;
     let port = listener.local_addr()?.port();
     app.control_port = Some(port);
@@ -532,7 +546,7 @@ pub fn run_server(
     // Expose the server identity via env var so that child processes spawned
     // by run-shell (from hooks, keybindings, etc.) can find this server when
     // they call `psmux set -g ...` or other CLI commands.
-    env::set_var("PSMUX_TARGET_SESSION", app.port_file_base());
+    crate::util::set_env("PSMUX_TARGET_SESSION", app.port_file_base());
 
     // Try to set file permissions to user-only (Windows)
     #[cfg(windows)]
@@ -2953,7 +2967,7 @@ pub fn run_server(
                             }
                             app.session_name = name;
                             // Update env so run-shell/hooks from this server target the new name
-                            env::set_var("PSMUX_TARGET_SESSION", app.port_file_base());
+                            crate::util::set_env("PSMUX_TARGET_SESSION", app.port_file_base());
                             hook_event = Some("after-rename-session");
                         }
                         CtrlReq::ClaimSession(name, resp) => {
@@ -2983,7 +2997,7 @@ pub fn run_server(
                             }
                             app.session_name = name;
                             // Update env so run-shell/hooks from this server target the new name
-                            env::set_var("PSMUX_TARGET_SESSION", app.port_file_base());
+                            crate::util::set_env("PSMUX_TARGET_SESSION", app.port_file_base());
                             // Re-load user config so the claimed session reflects the
                             // current config file.  The warm server loaded config at
                             // its own startup, but the user may have changed their
@@ -3351,10 +3365,10 @@ pub fn run_server(
                                         app.window_status_separator = " ".to_string();
                                     }
                                     "cursor-style" => {
-                                        std::env::set_var("PSMUX_CURSOR_STYLE", "bar");
+                                        crate::util::set_env("PSMUX_CURSOR_STYLE", "bar");
                                     }
                                     "cursor-blink" => {
-                                        std::env::set_var("PSMUX_CURSOR_BLINK", "1");
+                                        crate::util::set_env("PSMUX_CURSOR_BLINK", "1");
                                     }
                                     _ => {}
                                 }
@@ -3864,7 +3878,7 @@ pub fn run_server(
                         }
                         CtrlReq::SetEnvironment(key, value) => {
                             app.environment.insert(key.clone(), value.clone());
-                            env::set_var(&key, &value);
+                            crate::util::set_env(&key, &value);
                             // Also inject into the waiting warm pane so it has the
                             // latest env when transplanted for split/new-window.
                             if let Some(ref mut wp) = app.warm_pane {
@@ -3876,7 +3890,7 @@ pub fn run_server(
                         }
                         CtrlReq::UnsetEnvironment(key) => {
                             app.environment.remove(&key);
-                            env::remove_var(&key);
+                            crate::util::remove_env(&key);
                             // Clear the var in the waiting warm pane too.
                             if let Some(ref mut wp) = app.warm_pane {
                                 let cmd = format!(
@@ -4340,6 +4354,7 @@ pub fn run_server(
                             cwd,
                             env: extra_env,
                             metadata,
+                            split_direction,
                             resp,
                         } => {
                             // Build command string: join argv into a single
@@ -4368,12 +4383,12 @@ pub fn run_server(
                             if let Some(ref vars) = extra_env {
                                 for (k, v) in vars {
                                     saved_envs.push((k.clone(), env::var(k).ok()));
-                                    env::set_var(k, v);
+                                    crate::util::set_env(k, v);
                                 }
                             }
                             let split_result = split_active_with_command(
                                 &mut app,
-                                LayoutKind::Vertical,
+                                split_direction.unwrap_or(LayoutKind::Vertical),
                                 Some(&cmd_str),
                                 Some(&*pty_system),
                                 start_dir.as_deref(),
@@ -4381,9 +4396,9 @@ pub fn run_server(
                             // Restore stashed env vars
                             for (k, prev) in saved_envs {
                                 if let Some(v) = prev {
-                                    env::set_var(&k, v);
+                                    crate::util::set_env(&k, v);
                                 } else {
-                                    env::remove_var(&k);
+                                    crate::util::remove_env(&k);
                                 }
                             }
                             if let Some(wp) = stashed_warm {
@@ -4397,17 +4412,12 @@ pub fn run_server(
                                     )
                                     .unwrap_or(0);
                                     // Apply metadata to the new pane
-                                    if let Some((name, role)) = metadata {
+                                    if let Some(meta) = metadata {
                                         let win = &mut app.windows[app.active_idx];
                                         if let Some(p) =
                                             active_pane_mut(&mut win.root, &win.active_path)
                                         {
-                                            if let Some(n) = name {
-                                                p.metadata.insert("@agent".into(), n);
-                                            }
-                                            if let Some(r) = role {
-                                                p.metadata.insert("@role".into(), r);
-                                            }
+                                            meta.apply_to(&mut p.metadata);
                                         }
                                     }
                                     resize_all_panes(&mut app);
@@ -4430,8 +4440,8 @@ pub fn run_server(
                         }
                         CtrlReq::BackendCapturePane {
                             pane_id,
-                            lines: _lines,
-                            clean: _clean,
+                            lines,
+                            clean,
                             resp,
                         } => {
                             // Parse "%N" format to get numeric pane ID.
@@ -4466,6 +4476,21 @@ pub fn run_server(
                                     }
                                 }
                             }
+                            // Clean mode: strip trailing blank lines
+                            if clean {
+                                while captured.ends_with("\n\n") {
+                                    captured.pop();
+                                }
+                            }
+                            // Line limiting: return only the last N lines
+                            if let Some(max_lines) = lines {
+                                let max = max_lines as usize;
+                                let all_lines: Vec<&str> = captured.lines().collect();
+                                if all_lines.len() > max {
+                                    captured = all_lines[all_lines.len() - max..].join("\n");
+                                    captured.push('\n');
+                                }
+                            }
                             let _ = resp.send(captured);
                         }
                         CtrlReq::BackendListPanes { resp } => {
@@ -4479,15 +4504,7 @@ pub fn run_server(
                                 ) {
                                     match node {
                                         Node::Leaf(p) => {
-                                            let meta = if p.metadata.is_empty() {
-                                                None
-                                            } else {
-                                                Some(crate::backend::protocol::AgentMetadata {
-                                                    name: p.metadata.get("@agent").cloned(),
-                                                    color: None,
-                                                    role: p.metadata.get("@role").cloned(),
-                                                })
-                                            };
+                                            let meta = crate::backend::protocol::AgentMetadata::from_metadata_map(&p.metadata);
                                             out.push(crate::backend::protocol::ContextInfo {
                                                 context_id: format!("%{}", p.id),
                                                 metadata: meta,
@@ -4507,17 +4524,86 @@ pub fn run_server(
                                 .unwrap_or_else(|_| r#"{"contexts":[]}"#.to_string());
                             let _ = resp.send(json);
                         }
-                        CtrlReq::BackendKillPane { pane_id, resp } => {
+                        CtrlReq::BackendKillPane { pane_id, grace_ms, resp } => {
                             let id = pane_id
                                 .strip_prefix('%')
                                 .and_then(|s| s.parse::<usize>().ok());
                             if let Some(pid) = id {
-                                unzoom_if_zoomed(&mut app);
-                                let _ = kill_pane_by_id(&mut app, pid);
+                                if let Some(grace) = grace_ms {
+                                    // Non-blocking graceful kill: send CTRL_BREAK, then spawn a
+                                    // background thread to force-kill after the grace period.
+                                    if let Some(raw_pid) = get_pane_process_id(&app, pid) {
+                                        // SAFETY: GenerateConsoleCtrlEvent sends CTRL_BREAK to
+                                        // the process group. raw_pid is a valid process ID.
+                                        unsafe {
+                                            crate::platform::mouse_inject::generate_ctrl_break(raw_pid);
+                                        }
+                                    }
+                                    // Spawn background thread for delayed force-kill.
+                                    if let Some(ref ctrl_tx) = app.control_tx {
+                                        let tx_clone = ctrl_tx.clone();
+                                        let pane_id_str = format!("%{}", pid);
+                                        std::thread::spawn(move || {
+                                            std::thread::sleep(std::time::Duration::from_millis(grace));
+                                            let (resp_tx, _) = mpsc::channel();
+                                            let _ = tx_clone.send(CtrlReq::BackendKillPane {
+                                                pane_id: pane_id_str,
+                                                grace_ms: None,
+                                                resp: resp_tx,
+                                            });
+                                        });
+                                    }
+                                } else {
+                                    // Immediate kill (no grace period)
+                                    unzoom_if_zoomed(&mut app);
+                                    let _ = kill_pane_by_id(&mut app, pid);
+                                    resize_all_panes(&mut app);
+                                    meta_dirty = true;
+                                }
+                            }
+                            let _ = resp.send(());
+                        }
+                        CtrlReq::BackendKillAll { role, resp } => {
+                            let mut killed_ids: Vec<String> = Vec::new();
+                            let mut pane_ids_to_kill: Vec<usize> = Vec::new();
+                            for win in &app.windows {
+                                fn collect_agent_panes(
+                                    node: &Node,
+                                    role_filter: &Option<String>,
+                                    out: &mut Vec<usize>,
+                                ) {
+                                    match node {
+                                        Node::Leaf(p) => {
+                                            if p.metadata.contains_key("@agent") {
+                                                if let Some(ref role) = role_filter {
+                                                    if p.metadata.get("@role").map(|r| r == role).unwrap_or(false) {
+                                                        out.push(p.id);
+                                                    }
+                                                } else {
+                                                    out.push(p.id);
+                                                }
+                                            }
+                                        }
+                                        Node::Split { children, .. } => {
+                                            for c in children {
+                                                collect_agent_panes(c, role_filter, out);
+                                            }
+                                        }
+                                    }
+                                }
+                                collect_agent_panes(&win.root, &role, &mut pane_ids_to_kill);
+                            }
+                            unzoom_if_zoomed(&mut app);
+                            for pid in pane_ids_to_kill {
+                                if kill_pane_by_id(&mut app, pid).is_ok() {
+                                    killed_ids.push(format!("%{}", pid));
+                                }
+                            }
+                            if !killed_ids.is_empty() {
                                 resize_all_panes(&mut app);
                                 meta_dirty = true;
                             }
-                            let _ = resp.send(());
+                            let _ = resp.send(killed_ids);
                         }
                         CtrlReq::BackendSendText { pane_id, text } => {
                             let id = pane_id
