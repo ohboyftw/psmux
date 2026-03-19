@@ -1,0 +1,44 @@
+---
+title: "Quality Scores"
+status: active
+owner: "{{OWNER}}"
+last_verified: "{{DATE}}"
+created: "{{DATE}}"
+tags: [quality, tracking, metrics]
+cross_links:
+  - AGENTS.md
+---
+
+# Quality Scores
+
+Per-domain documentation and code quality grades. Updated after significant changes.
+
+## Grading Scale
+
+| Grade | Meaning |
+|-------|---------|
+| A | Well-documented, tested, no known gaps |
+| B | Documented, minor gaps or stale sections |
+| C | Partially documented, significant gaps |
+| D | Minimal documentation, major gaps |
+| F | Undocumented or documentation is actively misleading |
+| — | Ungraded (new domain) |
+
+## Current Scores
+
+| Domain | Doc Quality | Test Coverage | Known Gaps | Last Assessed |
+|--------|------------|---------------|------------|---------------|
+| {{DOMAIN_1}} | — | — | Not yet assessed | {{DATE}} |
+| {{DOMAIN_2}} | — | — | Not yet assessed | {{DATE}} |
+
+## History
+
+Track changes over time to show progress or regression:
+
+### {{DATE}} — Initial Assessment
+
+- All domains ungraded (project init)
+
+### {{NEXT_DATE}} — {{Assessment Title}}
+
+- {{Domain}}: {{old grade}} → {{new grade}} ({{reason}})

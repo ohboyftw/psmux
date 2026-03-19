@@ -1,5 +1,4 @@
-const BASE64: &[u8] =
-    b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/=";
+const BASE64: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/=";
 const CLIPBOARD_SELECTOR: &[u8] = b"cpqs01234567";
 
 pub struct WrappedScreen<CB: crate::callbacks::Callbacks = ()> {
@@ -17,17 +16,9 @@ impl WrappedScreen<()> {
 }
 
 impl<CB: crate::callbacks::Callbacks> WrappedScreen<CB> {
-    pub fn new_with_callbacks(
-        rows: u16,
-        cols: u16,
-        scrollback_len: usize,
-        callbacks: CB,
-    ) -> Self {
+    pub fn new_with_callbacks(rows: u16, cols: u16, scrollback_len: usize, callbacks: CB) -> Self {
         Self {
-            screen: crate::screen::Screen::new(
-                crate::grid::Size { rows, cols },
-                scrollback_len,
-            ),
+            screen: crate::screen::Screen::new(crate::grid::Size { rows, cols }, scrollback_len),
             callbacks,
             dcs_buf: Vec::new(),
             dcs_is_tmux: false,
@@ -79,24 +70,14 @@ impl<CB: crate::callbacks::Callbacks> vte::Perform for WrappedScreen<CB> {
                 b'c' => self.screen.ris(),
                 b'g' => self.callbacks.visual_bell(&mut self.screen),
                 _ => {
-                    self.callbacks.unhandled_escape(
-                        &mut self.screen,
-                        None,
-                        None,
-                        b,
-                    );
+                    self.callbacks
+                        .unhandled_escape(&mut self.screen, None, None, b);
                 }
             }
         }
     }
 
-    fn csi_dispatch(
-        &mut self,
-        params: &vte::Params,
-        intermediates: &[u8],
-        _ignore: bool,
-        c: char,
-    ) {
+    fn csi_dispatch(&mut self, params: &vte::Params, intermediates: &[u8], _ignore: bool, c: char) {
         let unhandled = |screen: &mut crate::screen::Screen| {
             self.callbacks.unhandled_csi(
                 screen,
@@ -117,12 +98,8 @@ impl<CB: crate::callbacks::Callbacks> vte::Perform for WrappedScreen<CB> {
                 'F' => self.screen.cpl(canonicalize_params_1(params, 1)),
                 'G' => self.screen.cha(canonicalize_params_1(params, 1)),
                 'H' | 'f' => self.screen.cup(canonicalize_params_2(params, 1, 1)),
-                'J' => self
-                    .screen
-                    .ed(canonicalize_params_1(params, 0), unhandled),
-                'K' => self
-                    .screen
-                    .el(canonicalize_params_1(params, 0), unhandled),
+                'J' => self.screen.ed(canonicalize_params_1(params, 0), unhandled),
+                'K' => self.screen.el(canonicalize_params_1(params, 0), unhandled),
                 'L' => self.screen.il(canonicalize_params_1(params, 1)),
                 'M' => self.screen.dl(canonicalize_params_1(params, 1)),
                 'P' => self.screen.dch(canonicalize_params_1(params, 1)),
@@ -145,18 +122,15 @@ impl<CB: crate::callbacks::Callbacks> vte::Perform for WrappedScreen<CB> {
                 'u' => self.screen.decrc(),
                 't' => {
                     let mut params_iter = params.iter();
-                    let op =
-                        params_iter.next().and_then(|x| x.first().copied());
+                    let op = params_iter.next().and_then(|x| x.first().copied());
                     if op == Some(8) {
                         let (screen_rows, screen_cols) = self.screen.size();
-                        let rows =
-                            params_iter.next().map_or(screen_rows, |x| {
-                                *x.first().unwrap_or(&screen_rows)
-                            });
-                        let cols =
-                            params_iter.next().map_or(screen_cols, |x| {
-                                *x.first().unwrap_or(&screen_cols)
-                            });
+                        let rows = params_iter
+                            .next()
+                            .map_or(screen_rows, |x| *x.first().unwrap_or(&screen_rows));
+                        let cols = params_iter
+                            .next()
+                            .map_or(screen_cols, |x| *x.first().unwrap_or(&screen_cols));
                         self.callbacks.resize(&mut self.screen, (rows, cols));
                     } else {
                         self.callbacks.unhandled_csi(
@@ -214,53 +188,36 @@ impl<CB: crate::callbacks::Callbacks> vte::Perform for WrappedScreen<CB> {
             [b"0", s] => {
                 self.callbacks.set_window_icon_name(&mut self.screen, s);
                 self.callbacks.set_window_title(&mut self.screen, s);
+                self.screen.set_title(s);
             }
             [b"1", s] => {
                 self.callbacks.set_window_icon_name(&mut self.screen, s);
             }
             [b"2", s] => {
                 self.callbacks.set_window_title(&mut self.screen, s);
+                self.screen.set_title(s);
             }
             [b"7", uri] => {
                 self.screen.set_path(uri);
             }
-            [b"52", ty, data] => {
-                match (
-                    ty.iter().all(|c| CLIPBOARD_SELECTOR.contains(c)),
-                    *data,
-                ) {
-                    (true, b"?") => {
-                        self.callbacks
-                            .paste_from_clipboard(&mut self.screen, ty);
-                    }
-                    (true, data)
-                        if data.iter().all(|c| BASE64.contains(c)) =>
-                    {
-                        self.callbacks.copy_to_clipboard(
-                            &mut self.screen,
-                            ty,
-                            data,
-                        );
-                    }
-                    _ => {
-                        self.callbacks
-                            .unhandled_osc(&mut self.screen, params);
-                    }
+            [b"52", ty, data] => match (ty.iter().all(|c| CLIPBOARD_SELECTOR.contains(c)), *data) {
+                (true, b"?") => {
+                    self.callbacks.paste_from_clipboard(&mut self.screen, ty);
                 }
-            }
+                (true, data) if data.iter().all(|c| BASE64.contains(c)) => {
+                    self.callbacks.copy_to_clipboard(&mut self.screen, ty, data);
+                }
+                _ => {
+                    self.callbacks.unhandled_osc(&mut self.screen, params);
+                }
+            },
             _ => {
                 self.callbacks.unhandled_osc(&mut self.screen, params);
             }
         }
     }
 
-    fn hook(
-        &mut self,
-        _params: &vte::Params,
-        _intermediates: &[u8],
-        _ignore: bool,
-        action: char,
-    ) {
+    fn hook(&mut self, _params: &vte::Params, _intermediates: &[u8], _ignore: bool, action: char) {
         self.dcs_buf.clear();
         self.dcs_is_tmux = false;
         self.dcs_action = action;
@@ -270,10 +227,7 @@ impl<CB: crate::callbacks::Callbacks> vte::Perform for WrappedScreen<CB> {
         self.dcs_buf.push(byte);
         // vte consumes the first printable char as the action in hook(),
         // so for "\x1bPtmux;..." the action is 't' and put receives "mux;...".
-        if self.dcs_action == 't'
-            && self.dcs_buf.len() == 4
-            && &self.dcs_buf[..4] == b"mux;"
-        {
+        if self.dcs_action == 't' && self.dcs_buf.len() == 4 && &self.dcs_buf[..4] == b"mux;" {
             self.dcs_is_tmux = true;
             self.dcs_buf.clear();
         }
@@ -318,11 +272,7 @@ fn canonicalize_params_1(params: &vte::Params, default: u16) -> u16 {
     }
 }
 
-fn canonicalize_params_2(
-    params: &vte::Params,
-    default1: u16,
-    default2: u16,
-) -> (u16, u16) {
+fn canonicalize_params_2(params: &vte::Params, default1: u16, default2: u16) -> (u16, u16) {
     let mut iter = params.iter();
     let first = iter.next().map_or(0, |x| *x.first().unwrap_or(&0));
     let first = if first == 0 { default1 } else { first };
@@ -333,10 +283,7 @@ fn canonicalize_params_2(
     (first, second)
 }
 
-fn canonicalize_params_decstbm(
-    params: &vte::Params,
-    size: crate::grid::Size,
-) -> (u16, u16) {
+fn canonicalize_params_decstbm(params: &vte::Params, size: crate::grid::Size) -> (u16, u16) {
     let mut iter = params.iter();
     let top = iter.next().map_or(0, |x| *x.first().unwrap_or(&0));
     let top = if top == 0 { 1 } else { top };
@@ -367,8 +314,7 @@ mod dcs_tests {
         let callbacks = DcsCapture {
             captured: captured.clone(),
         };
-        let mut parser =
-            crate::Parser::new_with_callbacks(80, 24, 0, callbacks);
+        let mut parser = crate::Parser::new_with_callbacks(80, 24, 0, callbacks);
 
         // DCS tmux passthrough: ESC P tmux; ESC ESC ] 0 ; title BEL ESC backslash
         let input = b"\x1bPtmux;\x1b\x1b]0;My Title\x07\x1b\\";
@@ -387,8 +333,7 @@ mod dcs_tests {
         let callbacks = DcsCapture {
             captured: captured.clone(),
         };
-        let mut parser =
-            crate::Parser::new_with_callbacks(80, 24, 0, callbacks);
+        let mut parser = crate::Parser::new_with_callbacks(80, 24, 0, callbacks);
 
         // Non-tmux DCS (e.g., sixel)
         let input = b"\x1bP0;1;0q\x1b\\";

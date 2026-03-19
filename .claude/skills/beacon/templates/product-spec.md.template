@@ -1,0 +1,57 @@
+---
+title: "{{FEATURE_NAME}}"
+status: draft
+owner: "{{OWNER}}"
+last_verified: "{{DATE}}"
+created: "{{DATE}}"
+tags: [product-spec, {{DOMAIN_TAG}}]
+cross_links: []
+---
+
+# {{FEATURE_NAME}}
+
+## Summary
+
+{{1-2 sentence description of what this feature does and why it matters.}}
+
+## User Story
+
+As a {{user type}}, I want to {{action}} so that {{benefit}}.
+
+## Requirements
+
+### Must Have
+
+- {{Requirement 1}}
+- {{Requirement 2}}
+
+### Should Have
+
+- {{Requirement 3}}
+
+### Won't Have (this version)
+
+- {{Explicitly scoped out item}}
+
+## Design
+
+{{Link to design doc or describe the approach.}}
+See: `docs/design-docs/{{relevant-adr}}.md`
+
+## Technical Notes
+
+- **Affected domains:** {{list}}
+- **Database changes:** {{yes/no — if yes, describe}}
+- **API changes:** {{yes/no — if yes, describe}}
+- **Security considerations:** {{describe or link to SECURITY.md}}
+
+## Acceptance Criteria
+
+- [ ] {{Testable criterion 1}}
+- [ ] {{Testable criterion 2}}
+- [ ] {{Testable criterion 3}}
+
+## Open Questions
+
+- {{Question 1}}
+- {{Question 2}}

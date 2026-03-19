@@ -77,6 +77,13 @@ pub(crate) fn get_option_value(app: &AppState, name: &str) -> String {
                 "off".into()
             }
         }
+        "allow-rename" => {
+            if app.allow_rename {
+                "on".into()
+            } else {
+                "off".into()
+            }
+        }
         "monitor-activity" => {
             if app.monitor_activity {
                 "on".into()
@@ -164,6 +171,9 @@ pub(crate) fn get_option_value(app: &AppState, name: &str) -> String {
             }
         }
         "monitor-silence" => app.monitor_silence.to_string(),
+        "activity-action" => app.activity_action.clone(),
+        "silence-action" => app.silence_action.clone(),
+        "update-environment" => app.update_environment.join(" "),
         "status-left-length" => app.status_left_length.to_string(),
         "status-right-length" => app.status_right_length.to_string(),
         "window-size" => app.window_size.clone(),
@@ -178,13 +188,6 @@ pub(crate) fn get_option_value(app: &AppState, name: &str) -> String {
             .map(|(k, v)| format!("{}={}", k, v))
             .collect::<Vec<_>>()
             .join(","),
-        "claude-code-fix-tty" => {
-            if app.claude_code_fix_tty {
-                "on".into()
-            } else {
-                "off".into()
-            }
-        }
         "claude-code-force-interactive" => {
             if app.claude_code_force_interactive {
                 "on".into()
@@ -238,7 +241,7 @@ pub(crate) fn render_window_options(app: &AppState) -> String {
 }
 
 /// Apply a set-option command. If `quiet` is true, unknown options are silently ignored.
-pub(crate) fn apply_set_option(app: &mut AppState, option: &str, value: &str, quiet: bool) {
+pub(crate) fn apply_set_option(app: &mut AppState, option: &str, value: &str, _quiet: bool) {
     match option {
         "status-left" => {
             app.status_left = value.to_string();
@@ -420,6 +423,18 @@ pub(crate) fn apply_set_option(app: &mut AppState, option: &str, value: &str, qu
                 }
             }
         }
+        "allow-rename" => {
+            app.allow_rename = matches!(value, "on" | "true" | "1");
+        }
+        "activity-action" => {
+            app.activity_action = value.to_string();
+        }
+        "silence-action" => {
+            app.silence_action = value.to_string();
+        }
+        "update-environment" => {
+            app.update_environment = value.split_whitespace().map(|s| s.to_string()).collect();
+        }
         "prediction-dimming" | "dim-predictions" => {
             app.prediction_dimming = !matches!(value, "off" | "false" | "0");
         }
@@ -519,9 +534,6 @@ pub(crate) fn apply_set_option(app: &mut AppState, option: &str, value: &str, qu
                 app.command_aliases.insert(alias, expansion);
             }
         }
-        "claude-code-fix-tty" => {
-            app.claude_code_fix_tty = matches!(value, "on" | "true" | "1");
-        }
         "claude-code-force-interactive" => {
             app.claude_code_force_interactive = matches!(value, "on" | "true" | "1");
         }
@@ -546,13 +558,22 @@ pub(crate) fn apply_set_option(app: &mut AppState, option: &str, value: &str, qu
             if option.starts_with('@') {
                 app.user_options
                     .insert(option.to_string(), value.to_string());
+            } else if option == "default-terminal" {
+                // tmux sets the TERM env var from this option (#137)
+                app.environment
+                    .insert("TERM".to_string(), value.to_string());
+            } else if option.contains('-') {
+                // Options with hyphens (e.g. terminal-overrides, allow-rename)
+                // are tmux config options, NOT environment variables.  Storing
+                // them in app.environment causes PowerShell ParserErrors when
+                // injected via $env:NAME syntax (#137).  Store in user_options.
+                app.user_options
+                    .insert(option.to_string(), value.to_string());
             } else {
-                // Store in environment as a generic option (e.g. default-terminal, terminal-overrides)
+                // Simple names without hyphens are likely real env vars
+                // (set via `set-environment` or plugin compat)
                 app.environment
                     .insert(option.to_string(), value.to_string());
-                if !quiet {
-                    // Still warn for truly unknown options (but store them anyway for plugin compat)
-                }
             }
         }
     }

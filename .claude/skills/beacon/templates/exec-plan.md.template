@@ -1,0 +1,68 @@
+---
+title: "{{PLAN_TITLE}}"
+status: active
+owner: "{{OWNER}}"
+last_verified: "{{DATE}}"
+created: "{{DATE}}"
+tags: [plan, {{DOMAIN_TAG}}]
+cross_links: []
+---
+
+# {{PLAN_TITLE}}
+
+## Objective
+
+{{1-2 sentences describing what this plan achieves.}}
+
+## Success Criteria
+
+- [ ] {{Testable assertion 1}}
+- [ ] {{Testable assertion 2}}
+- [ ] {{Testable assertion 3}}
+
+## Context
+
+**Why now?** {{What triggered this work}}
+**Related work:** {{Links to related plans, specs, or design docs}}
+**Risks:** {{What could go wrong}}
+
+## Steps
+
+### Phase 1: {{Phase name}}
+
+- [ ] Step 1: {{description}}
+- [ ] Step 2: {{description}}
+- [ ] Step 3: {{description}}
+
+### Phase 2: {{Phase name}}
+
+- [ ] Step 4: {{description}}
+- [ ] Step 5: {{description}}
+
+## Decision Log
+
+Record every significant decision as it happens. Format:
+
+| Date | Decision | Rationale | Alternatives considered |
+|------|----------|-----------|------------------------|
+| {{DATE}} | {{what was decided}} | {{why}} | {{what else was considered}} |
+
+## Progress Notes
+
+Append dated entries as work progresses:
+
+### {{DATE}}
+
+- {{What was accomplished}}
+- {{What was learned}}
+- {{What's next}}
+
+## Completion Checklist
+
+Before moving to `completed/`:
+
+- [ ] All success criteria met
+- [ ] Relevant docs updated (check AGENTS.md, ARCHITECTURE.md, domain docs)
+- [ ] New tech debt recorded in `tech-debt-tracker.md` if applicable
+- [ ] Decision log is complete
+- [ ] `docs/PLANS.md` updated

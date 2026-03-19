@@ -22,6 +22,7 @@ use winapi::um::winbase::{
 use winapi::um::wincon::COORD;
 use winapi::um::winnt::HANDLE;
 
+#[allow(clippy::upper_case_acronyms)]
 pub type HPCON = HANDLE;
 
 pub const PSUEDOCONSOLE_INHERIT_CURSOR: DWORD = 0x1;
@@ -81,10 +82,14 @@ fn supports_passthrough_mode() -> bool {
         info.dwOSVersionInfoSize = mem::size_of::<winapi::um::winnt::OSVERSIONINFOW>() as u32;
         // RtlGetVersion is used because GetVersionEx lies on Windows 10+
         // unless the application has a compatibility manifest.
-        type RtlGetVersionFn = unsafe extern "system" fn(*mut winapi::um::winnt::OSVERSIONINFOW) -> i32;
+        type RtlGetVersionFn =
+            unsafe extern "system" fn(*mut winapi::um::winnt::OSVERSIONINFOW) -> i32;
         let ntdll = winapi::um::libloaderapi::GetModuleHandleW(
-            ['n' as u16, 't' as u16, 'd' as u16, 'l' as u16, 'l' as u16, '.' as u16,
-             'd' as u16, 'l' as u16, 'l' as u16, 0].as_ptr()
+            [
+                'n' as u16, 't' as u16, 'd' as u16, 'l' as u16, 'l' as u16, '.' as u16, 'd' as u16,
+                'l' as u16, 'l' as u16, 0,
+            ]
+            .as_ptr(),
         );
         if ntdll.is_null() {
             return false;

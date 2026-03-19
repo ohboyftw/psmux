@@ -1702,30 +1702,32 @@ pub fn parse_modified_special_key(s: &str) -> Option<String> {
     let upper = s.to_uppercase();
     // Extract modifier prefixes and base key name
     let mut rest = upper.as_str();
-    let mut m: u8 = 1;
+    let mut bits: u8 = 0;
     loop {
         if rest.starts_with("C-") {
-            m |= 4;
+            bits |= 4;
             rest = &rest[2..];
         } else if rest.starts_with("M-") {
-            m |= 2;
+            bits |= 2;
             rest = &rest[2..];
         } else if rest.starts_with("S-") {
-            m |= 1;
+            bits |= 1;
             rest = &rest[2..];
         } else {
             break;
         }
     }
-    if m <= 1 {
+    if bits == 0 {
         return None;
     } // no modifiers found
-      // Match the base key name
+    let m = bits + 1; // xterm modifier param = 1 + modifier bits
+                      // Match the base key name
     match rest {
+        "ENTER" | "RETURN" | "CR" => Some(format!("\x1b[13;{}~", m)),
         "TAB" => Some(format!("\x1b[9;{}~", m)),
         "BTAB" | "BACKTAB" => {
-            // Shift is implicit in BackTab; ensure Shift bit is set
-            let sm = m | 1; // set Shift bit
+            // Shift is implicit in BackTab; ensure Shift bit is set in the bitmask
+            let sm = (bits | 1) + 1;
             Some(format!("\x1b[9;{}~", sm))
         }
         "LEFT" => Some(format!("\x1b[1;{}D", m)),
@@ -1854,6 +1856,20 @@ pub fn encode_key_event(key: &KeyEvent) -> Option<Vec<u8>> {
         KeyCode::Enter => {
             let m = modifier_param(key.modifiers);
             if m > 1 {
+                // On Windows, CSI 13;mod~ is non-standard and dropped by ConPTY.
+                // Send ESC+CR (\x1b\r) for Shift/Alt+Enter — the same bytes VS Code's
+                // xterm.js sends.  libuv preserves ESC as Alt prefix, so Node.js apps
+                // (Claude Code) receive \x1b\r and interpret it as Shift+Enter.
+                // Ctrl+Enter and Ctrl+Shift+Enter still use CSI encoding (those are
+                // less common and consumed by other layers).
+                #[cfg(windows)]
+                {
+                    let has_ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
+                    if !has_ctrl {
+                        return Some(b"\x1b\r".to_vec());
+                    }
+                }
+                // Non-Windows or Ctrl combos: xterm modified-Enter: CSI 13 ; mod ~
                 format!("\x1b[13;{}~", m).into_bytes()
             } else {
                 b"\r".to_vec()
@@ -2674,6 +2690,28 @@ pub fn handle_mouse(app: &mut AppState, me: MouseEvent, window_area: Rect) -> io
 /// are tiny and always written in one shot.
 fn write_paste_chunked(writer: &mut dyn std::io::Write, text: &[u8], bracket: bool) {
     const CHUNK: usize = 512;
+    // Normalize line endings to CR for ConPTY.  Clipboard text may arrive
+    // with LF (\n) or CRLF (\r\n), but ConPTY's input parser expects CR
+    // (\r) for Enter.  Bare LF is misinterpreted by PSReadLine, causing
+    // multi-line pastes to appear in reverse order.
+    let text = {
+        let mut out = Vec::with_capacity(text.len());
+        let mut i = 0;
+        while i < text.len() {
+            if text[i] == b'\r' && i + 1 < text.len() && text[i + 1] == b'\n' {
+                out.push(b'\r');
+                i += 2; // CRLF → CR
+            } else if text[i] == b'\n' {
+                out.push(b'\r');
+                i += 1; // LF → CR
+            } else {
+                out.push(text[i]);
+                i += 1;
+            }
+        }
+        out
+    };
+    let text = &text[..];
     if bracket {
         let _ = writer.write_all(b"\x1b[200~");
     }
@@ -3501,6 +3539,35 @@ pub fn send_key_to_active(app: &mut AppState, k: &str) -> io::Result<()> {
                     let _ = p.writer.write_all(&[0x1b, ctrl_char]);
                 }
             }
+            // Modified Enter: on Windows, send ESC+CR (\x1b\r) for Shift/Alt+Enter.
+            // CSI 13;mod~ is non-standard and dropped by ConPTY.  ESC+CR matches
+            // what VS Code xterm.js sends; the round-trip works because libuv
+            // preserves ESC as Alt prefix, so Node.js apps (Claude Code) receive
+            // \x1b\r and interpret it as Shift+Enter.
+            #[cfg(windows)]
+            s if {
+                let u = s.to_uppercase();
+                let r = u
+                    .trim_start_matches("C-")
+                    .trim_start_matches("M-")
+                    .trim_start_matches("S-");
+                r == "ENTER" || r == "RETURN" || r == "CR"
+            } =>
+            {
+                let upper = s.to_uppercase();
+                let has_shift = upper.contains("S-");
+                let has_ctrl = upper.contains("C-");
+                let has_alt = upper.contains("M-");
+                if (has_shift || has_alt) && !has_ctrl {
+                    // Shift+Enter or Alt+Enter: ESC + CR, same as xterm.js
+                    let _ = p.writer.write_all(b"\x1b\r");
+                } else {
+                    // Ctrl+Enter and other combos: fall through to CSI encoding
+                    if let Some(seq) = parse_modified_special_key(s) {
+                        let _ = p.writer.write_all(seq.as_bytes());
+                    }
+                }
+            }
             // Modifier + special key combos: C-Left, S-Right, C-S-Up, C-M-Home, etc.
             s if parse_modified_special_key(s).is_some() => {
                 let seq = parse_modified_special_key(s).unwrap();
@@ -3513,9 +3580,6 @@ pub fn send_key_to_active(app: &mut AppState, k: &str) -> io::Result<()> {
     Ok(())
 }
 
-// ---------------------------------------------------------------------------
-// Unit tests for key encoding — especially the AltGr fix (GitHub issue #15)
-// ---------------------------------------------------------------------------
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -3535,7 +3599,6 @@ mod tests {
 
     #[test]
     fn altgr_backslash_german_layout() {
-        // German: AltGr+ß → '\'   reported as Ctrl+Alt+'\'
         let ev = key(
             KeyCode::Char('\\'),
             KeyModifiers::CONTROL | KeyModifiers::ALT,
@@ -3549,7 +3612,6 @@ mod tests {
 
     #[test]
     fn altgr_at_sign_german_layout() {
-        // German: AltGr+Q → '@'   reported as Ctrl+Alt+'@'
         let ev = key(
             KeyCode::Char('@'),
             KeyModifiers::CONTROL | KeyModifiers::ALT,
@@ -3560,7 +3622,6 @@ mod tests {
 
     #[test]
     fn altgr_open_curly_brace() {
-        // German: AltGr+7 → '{'   reported as Ctrl+Alt+'{'
         let ev = key(
             KeyCode::Char('{'),
             KeyModifiers::CONTROL | KeyModifiers::ALT,
@@ -3571,7 +3632,6 @@ mod tests {
 
     #[test]
     fn altgr_close_curly_brace() {
-        // German: AltGr+0 → '}'
         let ev = key(
             KeyCode::Char('}'),
             KeyModifiers::CONTROL | KeyModifiers::ALT,
@@ -3582,7 +3642,6 @@ mod tests {
 
     #[test]
     fn altgr_open_bracket() {
-        // German: AltGr+8 → '['
         let ev = key(
             KeyCode::Char('['),
             KeyModifiers::CONTROL | KeyModifiers::ALT,
@@ -3593,7 +3652,6 @@ mod tests {
 
     #[test]
     fn altgr_close_bracket() {
-        // German: AltGr+9 → ']'
         let ev = key(
             KeyCode::Char(']'),
             KeyModifiers::CONTROL | KeyModifiers::ALT,
@@ -3604,7 +3662,6 @@ mod tests {
 
     #[test]
     fn altgr_pipe() {
-        // German: AltGr+< → '|'
         let ev = key(
             KeyCode::Char('|'),
             KeyModifiers::CONTROL | KeyModifiers::ALT,
@@ -3615,7 +3672,6 @@ mod tests {
 
     #[test]
     fn altgr_tilde() {
-        // German: AltGr++ → '~'
         let ev = key(
             KeyCode::Char('~'),
             KeyModifiers::CONTROL | KeyModifiers::ALT,
@@ -3626,22 +3682,20 @@ mod tests {
 
     #[test]
     fn altgr_euro_sign() {
-        // German: AltGr+E → '€'   (multi-byte UTF-8)
         let ev = key(
-            KeyCode::Char('€'),
+            KeyCode::Char('\u{20AC}'),
             KeyModifiers::CONTROL | KeyModifiers::ALT,
         );
         let bytes = encode_key_event(&ev).unwrap();
         assert_eq!(
             bytes,
-            "€".as_bytes(),
+            "\u{20AC}".as_bytes(),
             "AltGr+euro must produce UTF-8 euro sign"
         );
     }
 
     #[test]
     fn altgr_dollar_czech_layout() {
-        // Czech: AltGr produces '$'
         let ev = key(
             KeyCode::Char('$'),
             KeyModifiers::CONTROL | KeyModifiers::ALT,
@@ -3659,7 +3713,7 @@ mod tests {
             KeyModifiers::CONTROL | KeyModifiers::ALT,
         );
         let bytes = encode_key_event(&ev).unwrap();
-        assert_eq!(bytes, vec![0x1b, 0x01], "Ctrl+Alt+a → ESC + ^A");
+        assert_eq!(bytes, vec![0x1b, 0x01], "Ctrl+Alt+a -> ESC + ^A");
     }
 
     #[test]
@@ -3669,7 +3723,7 @@ mod tests {
             KeyModifiers::CONTROL | KeyModifiers::ALT,
         );
         let bytes = encode_key_event(&ev).unwrap();
-        assert_eq!(bytes, vec![0x1b, 0x03], "Ctrl+Alt+c → ESC + ^C");
+        assert_eq!(bytes, vec![0x1b, 0x03], "Ctrl+Alt+c -> ESC + ^C");
     }
 
     #[test]
@@ -3679,7 +3733,7 @@ mod tests {
             KeyModifiers::CONTROL | KeyModifiers::ALT,
         );
         let bytes = encode_key_event(&ev).unwrap();
-        assert_eq!(bytes, vec![0x1b, 0x1a], "Ctrl+Alt+z → ESC + ^Z");
+        assert_eq!(bytes, vec![0x1b, 0x1a], "Ctrl+Alt+z -> ESC + ^Z");
     }
 
     // ── Plain characters / other modifier combos (regression checks) ──
@@ -3725,21 +3779,24 @@ mod tests {
     fn shift_enter_produces_modified_sequence() {
         let ev = key(KeyCode::Enter, KeyModifiers::SHIFT);
         let bytes = encode_key_event(&ev).unwrap();
+        // On Windows: ESC+CR; on other platforms: CSI 13;2~
+        #[cfg(windows)]
         assert_eq!(
-            bytes,
-            b"\x1b[13;2~",
-            "Shift+Enter must produce CSI 13;2 ~"
+            bytes, b"\x1b\r",
+            "Shift+Enter on Windows must produce ESC+CR"
         );
+        #[cfg(not(windows))]
+        assert_eq!(bytes, b"\x1b[13;2~", "Shift+Enter must produce CSI 13;2 ~");
     }
 
     #[test]
     fn ctrl_enter_produces_modified_sequence() {
         let ev = key(KeyCode::Enter, KeyModifiers::CONTROL);
         let bytes = encode_key_event(&ev).unwrap();
-        assert_eq!(
-            bytes,
-            b"\x1b[13;5~",
-            "Ctrl+Enter must produce CSI 13;5 ~"
-        );
+        assert_eq!(bytes, b"\x1b[13;5~", "Ctrl+Enter must produce CSI 13;5 ~");
     }
 }
+
+#[cfg(test)]
+#[path = "../tests-rs/test_input.rs"]
+mod tests_ext;

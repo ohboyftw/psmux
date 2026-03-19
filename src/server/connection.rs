@@ -488,6 +488,12 @@ pub(crate) fn handle_connection(
             "zoom-pane" => {
                 let _ = tx.send(CtrlReq::ZoomPane);
             }
+            "prefix-begin" => {
+                let _ = tx.send(CtrlReq::PrefixBegin);
+            }
+            "prefix-end" => {
+                let _ = tx.send(CtrlReq::PrefixEnd);
+            }
             "copy-enter" => {
                 let _ = tx.send(CtrlReq::CopyEnter);
             }
@@ -527,56 +533,56 @@ pub(crate) fn handle_connection(
             "mouse-down" => {
                 if args.len() >= 2 {
                     if let (Ok(x), Ok(y)) = (args[0].parse::<u16>(), args[1].parse::<u16>()) {
-                        let _ = tx.send(CtrlReq::MouseDown(x, y));
+                        let _ = tx.send(CtrlReq::MouseDown(0, x, y));
                     }
                 }
             }
             "mouse-down-right" => {
                 if args.len() >= 2 {
                     if let (Ok(x), Ok(y)) = (args[0].parse::<u16>(), args[1].parse::<u16>()) {
-                        let _ = tx.send(CtrlReq::MouseDownRight(x, y));
+                        let _ = tx.send(CtrlReq::MouseDownRight(0, x, y));
                     }
                 }
             }
             "mouse-down-middle" => {
                 if args.len() >= 2 {
                     if let (Ok(x), Ok(y)) = (args[0].parse::<u16>(), args[1].parse::<u16>()) {
-                        let _ = tx.send(CtrlReq::MouseDownMiddle(x, y));
+                        let _ = tx.send(CtrlReq::MouseDownMiddle(0, x, y));
                     }
                 }
             }
             "mouse-drag" => {
                 if args.len() >= 2 {
                     if let (Ok(x), Ok(y)) = (args[0].parse::<u16>(), args[1].parse::<u16>()) {
-                        let _ = tx.send(CtrlReq::MouseDrag(x, y));
+                        let _ = tx.send(CtrlReq::MouseDrag(0, x, y));
                     }
                 }
             }
             "mouse-up" => {
                 if args.len() >= 2 {
                     if let (Ok(x), Ok(y)) = (args[0].parse::<u16>(), args[1].parse::<u16>()) {
-                        let _ = tx.send(CtrlReq::MouseUp(x, y));
+                        let _ = tx.send(CtrlReq::MouseUp(0, x, y));
                     }
                 }
             }
             "mouse-up-right" => {
                 if args.len() >= 2 {
                     if let (Ok(x), Ok(y)) = (args[0].parse::<u16>(), args[1].parse::<u16>()) {
-                        let _ = tx.send(CtrlReq::MouseUpRight(x, y));
+                        let _ = tx.send(CtrlReq::MouseUpRight(0, x, y));
                     }
                 }
             }
             "mouse-up-middle" => {
                 if args.len() >= 2 {
                     if let (Ok(x), Ok(y)) = (args[0].parse::<u16>(), args[1].parse::<u16>()) {
-                        let _ = tx.send(CtrlReq::MouseUpMiddle(x, y));
+                        let _ = tx.send(CtrlReq::MouseUpMiddle(0, x, y));
                     }
                 }
             }
             "mouse-move" => {
                 if args.len() >= 2 {
                     if let (Ok(x), Ok(y)) = (args[0].parse::<u16>(), args[1].parse::<u16>()) {
-                        let _ = tx.send(CtrlReq::MouseMove(x, y));
+                        let _ = tx.send(CtrlReq::MouseMove(0, x, y));
                     }
                 }
             }
@@ -586,7 +592,7 @@ pub(crate) fn handle_connection(
                     .and_then(|s| s.parse::<u16>().ok())
                     .unwrap_or(0);
                 let y = args.get(1).and_then(|s| s.parse::<u16>().ok()).unwrap_or(0);
-                let _ = tx.send(CtrlReq::ScrollUp(x, y));
+                let _ = tx.send(CtrlReq::ScrollUp(0, x, y));
             }
             "scroll-down" => {
                 let x = args
@@ -594,7 +600,7 @@ pub(crate) fn handle_connection(
                     .and_then(|s| s.parse::<u16>().ok())
                     .unwrap_or(0);
                 let y = args.get(1).and_then(|s| s.parse::<u16>().ok()).unwrap_or(0);
-                let _ = tx.send(CtrlReq::ScrollDown(x, y));
+                let _ = tx.send(CtrlReq::ScrollDown(0, x, y));
             }
             "next-window" | "next" => {
                 let _ = tx.send(CtrlReq::NextWindow);
@@ -858,19 +864,21 @@ pub(crate) fn handle_connection(
                     if wait_ready {
                         // Poll pane readiness: output has stabilised (no new
                         // output for >=500ms after initial burst).
-                        let deadline = timeout_secs.map(|s| {
-                            std::time::Instant::now() + std::time::Duration::from_secs(s)
-                        });
+                        let deadline = timeout_secs
+                            .map(|s| std::time::Instant::now() + std::time::Duration::from_secs(s));
                         let (qtx, qrx) = mpsc::channel::<(u64, u64)>();
                         loop {
                             let qtx2 = qtx.clone();
                             let _ = tx.send(CtrlReq::QueryPaneReady(pid, qtx2));
-                            if let Ok((dv, lot)) = qrx.recv_timeout(std::time::Duration::from_secs(2)) {
+                            if let Ok((dv, lot)) =
+                                qrx.recv_timeout(std::time::Duration::from_secs(2))
+                            {
                                 if dv > 0 && lot > 0 {
                                     let now_ms = std::time::SystemTime::now()
                                         .duration_since(std::time::UNIX_EPOCH)
                                         .unwrap_or_default()
-                                        .as_millis() as u64;
+                                        .as_millis()
+                                        as u64;
                                     if now_ms.saturating_sub(lot) >= 500 {
                                         let _ = write!(write_stream, "0");
                                         let _ = write_stream.flush();
@@ -1073,7 +1081,7 @@ pub(crate) fn handle_connection(
                 // Pass target pane index for PANE_POS_OVERRIDE (#113).
                 let target_pane_idx: Option<usize> = if !pane_is_id { target_pane } else { None };
                 let (rtx, rrx) = mpsc::channel::<String>();
-                let _ = tx.send(CtrlReq::DisplayMessage(rtx, fmt, target_pane_idx));
+                let _ = tx.send(CtrlReq::DisplayMessage(rtx, fmt, target_pane_idx, false));
                 if let Ok(text) = rrx.recv() {
                     if json_mode {
                         let info = crate::util::DisplayMessageJson { message: text };
@@ -1883,7 +1891,7 @@ pub(crate) fn handle_connection(
                     }
                 } else if let Some(fmt_str) = fmt {
                     let (rtx, rrx) = mpsc::channel::<String>();
-                    let _ = tx.send(CtrlReq::DisplayMessage(rtx, fmt_str, None));
+                    let _ = tx.send(CtrlReq::DisplayMessage(rtx, fmt_str, None, false));
                     if let Ok(text) = rrx.recv() {
                         let _ = writeln!(write_stream, "{}", text);
                         let _ = write_stream.flush();

@@ -1,0 +1,82 @@
+# doc-health-ci.yml — GitHub Actions workflow for knowledge base health
+# Copy to .github/workflows/doc-health.yml in your project
+
+name: Knowledge Base Health
+
+on:
+  pull_request:
+    paths:
+      - 'docs/**'
+      - 'AGENTS.md'
+      - 'ARCHITECTURE.md'
+  push:
+    branches: [main]
+    paths:
+      - 'docs/**'
+      - 'AGENTS.md'
+      - 'ARCHITECTURE.md'
+  schedule:
+    # Weekly Monday 9am UTC — catches staleness even without code changes
+    - cron: '0 9 * * 1'
+
+jobs:
+  lint-docs:
+    name: Lint Knowledge Base
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Run doc linter
+        run: |
+          chmod +x scripts/lint-docs.sh
+          bash scripts/lint-docs.sh
+        continue-on-error: false
+
+  check-agents-md:
+    name: Verify AGENTS.md
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check AGENTS.md line count
+        run: |
+          LINES=$(wc -l < AGENTS.md)
+          echo "AGENTS.md: $LINES lines"
+          if [ "$LINES" -gt 100 ]; then
+            echo "::error::AGENTS.md exceeds 100 lines ($LINES). It's a manual, not a map."
+            exit 1
+          fi
+          if [ "$LINES" -gt 80 ]; then
+            echo "::warning::AGENTS.md is $LINES lines. Consider trimming (warn at 80, max 100)."
+          fi
+
+  check-generated-freshness:
+    name: Verify Generated Docs
+    runs-on: ubuntu-latest
+    if: github.event_name != 'schedule'
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check generated docs match sources
+        run: |
+          # Add project-specific checks here
+          # Example: verify db-schema.md matches prisma schema
+          echo "Generated doc freshness check — customize per project"
+          echo "Add checks like:"
+          echo "  - Compare docs/generated/db-schema.md against prisma/schema.prisma"
+          echo "  - Compare docs/generated/api-routes.md against route files"
+
+  report:
+    name: Summary
+    needs: [lint-docs, check-agents-md]
+    runs-on: ubuntu-latest
+    if: always()
+    steps:
+      - name: Report results
+        run: |
+          echo "## Doc Health Report" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Check | Status |" >> $GITHUB_STEP_SUMMARY
+          echo "|-------|--------|" >> $GITHUB_STEP_SUMMARY
+          echo "| Lint | ${{ needs.lint-docs.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| AGENTS.md | ${{ needs.check-agents-md.result }} |" >> $GITHUB_STEP_SUMMARY

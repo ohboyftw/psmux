@@ -50,8 +50,8 @@ use crate::format::{
 };
 use crate::help;
 use crate::input::{
-    find_best_pane_in_direction, move_focus, send_key_to_active, send_paste_to_active,
-    send_text_to_active,
+    find_best_pane_in_direction, find_wrap_target, move_focus, send_key_to_active,
+    send_paste_to_active, send_text_to_active,
 };
 use crate::layout::{
     apply_layout, cycle_layout, cycle_layout_reverse, dump_layout_json, dump_layout_json_fast,
@@ -704,7 +704,7 @@ pub fn run_server(
                     if !env_cmd.is_empty() {
                         env_cmd.push_str("; ");
                     }
-                    env_cmd.push_str(&format!("$env:{}='{}'", key, escaped_val));
+                    env_cmd.push_str(&format!("${{env:{}}}='{}'", key, escaped_val));
                 }
                 if !env_cmd.is_empty() {
                     // Send silently: write the command, then clear the line so
@@ -1291,6 +1291,12 @@ pub fn run_server(
                                         app.last_window_idx = app.active_idx;
                                         app.active_idx = internal_idx;
                                     });
+                                    // Clear activity/bell/silence flags on the newly-focused window
+                                    if let Some(win) = app.windows.get_mut(internal_idx) {
+                                        win.activity_flag = false;
+                                        win.bell_flag = false;
+                                        win.silence_flag = false;
+                                    }
                                     // Lazily resize panes in the newly-focused window
                                     resize_all_panes(&mut app);
                                 }
@@ -1385,10 +1391,28 @@ pub fn run_server(
                             app.attached_clients = app.attached_clients.saturating_add(1);
                             app.latest_client_id = Some(cid);
                             hook_event = Some("client-attached");
+                            // update-environment: refresh env vars from the attaching client's environment
+                            let update_vars = app.update_environment.clone();
+                            for var_spec in &update_vars {
+                                let remove = var_spec.starts_with('-');
+                                let name = if remove {
+                                    &var_spec[1..]
+                                } else {
+                                    var_spec.as_str()
+                                };
+                                if remove {
+                                    app.environment.remove(name);
+                                } else if let Ok(val) = std::env::var(name) {
+                                    app.environment.insert(name.to_string(), val);
+                                } else {
+                                    app.environment.remove(name);
+                                }
+                            }
                         }
                         CtrlReq::ClientDetach(cid) => {
                             app.attached_clients = app.attached_clients.saturating_sub(1);
                             app.client_sizes.remove(&cid);
+                            app.client_prefix_active = false;
                             if app.latest_client_id == Some(cid) {
                                 app.latest_client_id = None;
                             }
@@ -1427,11 +1451,16 @@ pub fn run_server(
                             let _ = resp.send(json);
                         }
                         CtrlReq::DumpState(resp, allow_nc) => {
-                            // ── Automatic rename: resolve foreground process ──
+                            // ── Activity / bell / silence detection ──
+                            helpers::check_window_activity(&mut app);
+
+                            // ── Automatic rename / allow-rename: resolve window names ──
                             {
                                 let in_copy =
                                     matches!(app.mode, Mode::CopyMode | Mode::CopySearch { .. });
-                                if app.automatic_rename && !in_copy {
+                                let auto_rename = app.automatic_rename;
+                                let allow_rename = app.allow_rename;
+                                if (auto_rename || allow_rename) && !in_copy {
                                     for win in app.windows.iter_mut() {
                                         if win.manual_rename {
                                             continue;
@@ -1453,11 +1482,28 @@ pub fn run_server(
                                                         &*p.child,
                                                     );
                                             }
-                                            let new_name = if let Some(pid) = p.child_pid {
-                                                crate::platform::process_info::get_foreground_process_name(pid)
-                                            .unwrap_or_else(|| "shell".into())
-                                            } else if !p.title.is_empty() {
-                                                p.title.clone()
+                                            let new_name = if auto_rename {
+                                                // automatic-rename: use foreground process name
+                                                if let Some(pid) = p.child_pid {
+                                                    crate::platform::process_info::get_foreground_process_name(pid)
+                                                        .unwrap_or_else(|| "shell".into())
+                                                } else if allow_rename && !p.title.is_empty() {
+                                                    p.title.clone()
+                                                } else {
+                                                    continue;
+                                                }
+                                            } else if allow_rename {
+                                                // allow-rename only: use OSC title from child
+                                                if let Ok(parser) = p.term.lock() {
+                                                    let title = parser.screen().title();
+                                                    if !title.is_empty() {
+                                                        title.to_string()
+                                                    } else {
+                                                        continue;
+                                                    }
+                                                } else {
+                                                    continue;
+                                                }
                                             } else {
                                                 continue;
                                             };
@@ -1634,6 +1680,14 @@ pub fn run_server(
                             toggle_zoom(&mut app);
                             hook_event = Some("after-resize-pane");
                         }
+                        CtrlReq::PrefixBegin => {
+                            app.client_prefix_active = true;
+                            state_dirty = true;
+                        }
+                        CtrlReq::PrefixEnd => {
+                            app.client_prefix_active = false;
+                            state_dirty = true;
+                        }
                         CtrlReq::CopyEnter => {
                             enter_copy_mode(&mut app);
                         }
@@ -1720,7 +1774,7 @@ pub fn run_server(
                             resize_all_panes(&mut app);
                             meta_dirty = true;
                         }
-                        CtrlReq::MouseDown(x, y) => {
+                        CtrlReq::MouseDown(_, x, y) => {
                             if app.mouse_enabled {
                                 remote_mouse_down(&mut app, x, y);
                                 state_dirty = true;
@@ -1728,63 +1782,63 @@ pub fn run_server(
                                 echo_pending_until = Some(Instant::now());
                             }
                         }
-                        CtrlReq::MouseDownRight(x, y) => {
+                        CtrlReq::MouseDownRight(_, x, y) => {
                             if app.mouse_enabled {
                                 remote_mouse_button(&mut app, x, y, 2, true);
                                 state_dirty = true;
                                 echo_pending_until = Some(Instant::now());
                             }
                         }
-                        CtrlReq::MouseDownMiddle(x, y) => {
+                        CtrlReq::MouseDownMiddle(_, x, y) => {
                             if app.mouse_enabled {
                                 remote_mouse_button(&mut app, x, y, 1, true);
                                 state_dirty = true;
                                 echo_pending_until = Some(Instant::now());
                             }
                         }
-                        CtrlReq::MouseDrag(x, y) => {
+                        CtrlReq::MouseDrag(_, x, y) => {
                             if app.mouse_enabled {
                                 remote_mouse_drag(&mut app, x, y);
                                 state_dirty = true;
                                 echo_pending_until = Some(Instant::now());
                             }
                         }
-                        CtrlReq::MouseUp(x, y) => {
+                        CtrlReq::MouseUp(_, x, y) => {
                             if app.mouse_enabled {
                                 remote_mouse_up(&mut app, x, y);
                                 state_dirty = true;
                                 echo_pending_until = Some(Instant::now());
                             }
                         }
-                        CtrlReq::MouseUpRight(x, y) => {
+                        CtrlReq::MouseUpRight(_, x, y) => {
                             if app.mouse_enabled {
                                 remote_mouse_button(&mut app, x, y, 2, false);
                                 state_dirty = true;
                                 echo_pending_until = Some(Instant::now());
                             }
                         }
-                        CtrlReq::MouseUpMiddle(x, y) => {
+                        CtrlReq::MouseUpMiddle(_, x, y) => {
                             if app.mouse_enabled {
                                 remote_mouse_button(&mut app, x, y, 1, false);
                                 state_dirty = true;
                                 echo_pending_until = Some(Instant::now());
                             }
                         }
-                        CtrlReq::MouseMove(x, y) => {
+                        CtrlReq::MouseMove(_, x, y) => {
                             if app.mouse_enabled {
                                 remote_mouse_motion(&mut app, x, y);
                                 state_dirty = true;
                                 echo_pending_until = Some(Instant::now());
                             }
                         }
-                        CtrlReq::ScrollUp(x, y) => {
+                        CtrlReq::ScrollUp(_, x, y) => {
                             if app.mouse_enabled {
                                 remote_scroll_up(&mut app, x, y);
                                 state_dirty = true;
                                 echo_pending_until = Some(Instant::now());
                             }
                         }
-                        CtrlReq::ScrollDown(x, y) => {
+                        CtrlReq::ScrollDown(_, x, y) => {
                             if app.mouse_enabled {
                                 remote_scroll_down(&mut app, x, y);
                                 state_dirty = true;
@@ -2458,8 +2512,8 @@ pub fn run_server(
                                     };
                                     let was_zoomed = unzoom_if_zoomed(&mut app);
                                     if was_zoomed {
-                                        // Zoom-aware: check for direct neighbor (no wrapping).
-                                        // Only navigate if there's an actual neighbor in that direction.
+                                        // Zoom-aware: check for direct neighbor or wrap target (#134).
+                                        // Navigate if there's any reachable pane in that direction.
                                         let win = &app.windows[app.active_idx];
                                         let mut rects: Vec<(Vec<usize>, ratatui::layout::Rect)> =
                                             Vec::new();
@@ -2471,7 +2525,7 @@ pub fn run_server(
                                         let active_idx = rects
                                             .iter()
                                             .position(|(path, _)| *path == win.active_path);
-                                        let has_neighbor = if let Some(ai) = active_idx {
+                                        let has_target = if let Some(ai) = active_idx {
                                             let (_, arect) = &rects[ai];
                                             find_best_pane_in_direction(
                                                 &rects,
@@ -2481,11 +2535,21 @@ pub fn run_server(
                                                 &[],
                                                 &[],
                                             )
+                                            .or_else(|| {
+                                                find_wrap_target(
+                                                    &rects,
+                                                    ai,
+                                                    arect,
+                                                    focus_dir,
+                                                    &[],
+                                                    &[],
+                                                )
+                                            })
                                             .is_some()
                                         } else {
                                             false
                                         };
-                                        if has_neighbor {
+                                        if has_target {
                                             let old_path =
                                                 app.windows[app.active_idx].active_path.clone();
                                             switch_with_copy_save(&mut app, |app| {
@@ -2493,7 +2557,7 @@ pub fn run_server(
                                             });
                                             app.last_pane_path = old_path;
                                         } else {
-                                            // No direct neighbor — re-zoom
+                                            // No reachable pane (single-pane window) — re-zoom
                                             toggle_zoom(&mut app);
                                         }
                                     } else {
@@ -2945,10 +3009,15 @@ pub fn run_server(
                             let mut dv = 0u64;
                             let mut lot = 0u64;
                             for win in app.windows.iter() {
-                                if let Some(path) = crate::tree::find_path_by_id(&win.root, pane_id) {
+                                if let Some(path) = crate::tree::find_path_by_id(&win.root, pane_id)
+                                {
                                     if let Some(p) = crate::tree::active_pane(&win.root, &path) {
-                                        dv = p.data_version.load(std::sync::atomic::Ordering::Acquire);
-                                        lot = p.last_output_time.load(std::sync::atomic::Ordering::Acquire);
+                                        dv = p
+                                            .data_version
+                                            .load(std::sync::atomic::Ordering::Acquire);
+                                        lot = p
+                                            .last_output_time
+                                            .load(std::sync::atomic::Ordering::Acquire);
                                     }
                                     break;
                                 }
@@ -3113,7 +3182,7 @@ pub fn run_server(
                                 app.paste_buffers.remove(0);
                             }
                         }
-                        CtrlReq::DisplayMessage(resp, fmt, target_pane_idx) => {
+                        CtrlReq::DisplayMessage(resp, fmt, target_pane_idx, _) => {
                             let result = if let Some(pane_idx) = target_pane_idx {
                                 // -t targeting: evaluate format for the specific pane
                                 // using PANE_POS_OVERRIDE so #{pane_active} reflects
@@ -3897,7 +3966,7 @@ pub fn run_server(
                             // latest env when transplanted for split/new-window.
                             if let Some(ref mut wp) = app.warm_pane {
                                 let escaped = value.replace('\'', "''");
-                                let cmd = format!("$env:{}='{}'\r\n", key, escaped);
+                                let cmd = format!("${{env:{}}}='{}'\r\n", key, escaped);
                                 use std::io::Write as _;
                                 let _ = wp.writer.write_all(cmd.as_bytes());
                             }
@@ -4539,7 +4608,11 @@ pub fn run_server(
                                 .unwrap_or_else(|_| r#"{"contexts":[]}"#.to_string());
                             let _ = resp.send(json);
                         }
-                        CtrlReq::BackendKillPane { pane_id, grace_ms, resp } => {
+                        CtrlReq::BackendKillPane {
+                            pane_id,
+                            grace_ms,
+                            resp,
+                        } => {
                             let id = pane_id
                                 .strip_prefix('%')
                                 .and_then(|s| s.parse::<usize>().ok());
@@ -4551,7 +4624,9 @@ pub fn run_server(
                                         // SAFETY: GenerateConsoleCtrlEvent sends CTRL_BREAK to
                                         // the process group. raw_pid is a valid process ID.
                                         unsafe {
-                                            crate::platform::mouse_inject::generate_ctrl_break(raw_pid);
+                                            crate::platform::mouse_inject::generate_ctrl_break(
+                                                raw_pid,
+                                            );
                                         }
                                     }
                                     // Spawn background thread for delayed force-kill.
@@ -4559,7 +4634,9 @@ pub fn run_server(
                                         let tx_clone = ctrl_tx.clone();
                                         let pane_id_str = format!("%{}", pid);
                                         std::thread::spawn(move || {
-                                            std::thread::sleep(std::time::Duration::from_millis(grace));
+                                            std::thread::sleep(std::time::Duration::from_millis(
+                                                grace,
+                                            ));
                                             let (resp_tx, _) = mpsc::channel();
                                             let _ = tx_clone.send(CtrlReq::BackendKillPane {
                                                 pane_id: pane_id_str,
@@ -4591,7 +4668,11 @@ pub fn run_server(
                                         Node::Leaf(p) => {
                                             if p.metadata.contains_key("@agent") {
                                                 if let Some(ref role) = role_filter {
-                                                    if p.metadata.get("@role").map(|r| r == role).unwrap_or(false) {
+                                                    if p.metadata
+                                                        .get("@role")
+                                                        .map(|r| r == role)
+                                                        .unwrap_or(false)
+                                                    {
                                                         out.push(p.id);
                                                     }
                                                 } else {

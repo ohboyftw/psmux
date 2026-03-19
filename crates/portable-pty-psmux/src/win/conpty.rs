@@ -32,10 +32,12 @@ fn create_pipe_with_buffer(size: u32) -> anyhow::Result<(FileDescriptor, FileDes
     if unsafe { CreatePipe(&mut read, &mut write, &mut sa, size) } == 0 {
         return Err(std::io::Error::last_os_error().into());
     }
-    Ok(unsafe {(
-        FileDescriptor::from_raw_handle(read as _),
-        FileDescriptor::from_raw_handle(write as _),
-    )})
+    Ok(unsafe {
+        (
+            FileDescriptor::from_raw_handle(read as _),
+            FileDescriptor::from_raw_handle(write as _),
+        )
+    })
 }
 
 #[derive(Default)]
@@ -124,7 +126,7 @@ impl MasterPty for ConPtyMasterPty {
 
     fn get_size(&self) -> Result<PtySize, Error> {
         let inner = self.inner.lock().unwrap();
-        Ok(inner.size.clone())
+        Ok(inner.size)
     }
 
     fn try_clone_reader(&self) -> anyhow::Result<Box<dyn std::io::Read + Send>> {

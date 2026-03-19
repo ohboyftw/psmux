@@ -154,7 +154,6 @@ psmux split-window -- "C:/Program Files/Git/bin/bash.exe"
 | `cursor-style` | Str | | Cursor shape: `block`, `underline`, or `bar` |
 | `cursor-blink` | Bool | `off` | Cursor blinking |
 | `env-shim` | Bool | `on` | Inject Unix-compatible `env` function in PowerShell panes |
-| `claude-code-fix-tty` | Bool | `on` | Patch Node.js process.stdout.isTTY for Claude Code |
 | `claude-code-force-interactive` | Bool | `on` | Set CLAUDE_CODE_FORCE_INTERACTIVE=1 in panes |
 
 Style format: `"fg=colour,bg=colour,bold,dim,underscore,italics,reverse,strikethrough"`

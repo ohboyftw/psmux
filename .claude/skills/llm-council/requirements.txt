@@ -1,0 +1,8 @@
+# Core
+mcp==1.4.1
+httpx==0.28.1
+
+# Optional: Native SDKs (falls back to httpx if not installed)
+# anthropic==0.75.0
+# openai==2.20.0
+# google-genai==1.57.0

@@ -86,6 +86,9 @@ pub struct Pane {
     /// Last cursor shape requested by the child process via DECSCUSR (`\x1b[N q`).
     /// 0 = no override (use PSMUX_CURSOR_STYLE default), 1-6 = DECSCUSR values.
     pub cursor_shape: std::sync::Arc<std::sync::atomic::AtomicU8>,
+    /// Set by the PTY reader thread when a BEL character (\x07) is detected.
+    /// Consumed by the server loop to set the window's bell_flag.
+    pub bell_pending: std::sync::Arc<std::sync::atomic::AtomicBool>,
     /// Per-pane copy mode state (tmux-style pane-local copy mode).
     /// Some(_) when this pane is in copy mode, None otherwise.
     pub copy_state: Option<CopyModeState>,
@@ -116,6 +119,7 @@ pub struct WarmPane {
     pub term: Arc<Mutex<vt100::Parser>>,
     pub data_version: std::sync::Arc<std::sync::atomic::AtomicU64>,
     pub cursor_shape: std::sync::Arc<std::sync::atomic::AtomicU8>,
+    pub bell_pending: std::sync::Arc<std::sync::atomic::AtomicBool>,
     pub child_pid: Option<u32>,
     pub pane_id: usize,
     pub rows: u16,
@@ -304,7 +308,7 @@ pub struct CopyModeState {
     pub search_input_forward: bool,
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub enum FocusDir {
     Left,
     Right,
@@ -383,6 +387,8 @@ pub struct AppState {
     pub next_win_id: usize,
     pub next_pane_id: usize,
     pub zoom_saved: Option<Vec<(Vec<usize>, Vec<u16>)>>,
+    /// Whether the attached client is currently in prefix mode (for `client_prefix` format var).
+    pub client_prefix_active: bool,
     pub sync_input: bool,
     /// Hooks: map of hook name to list of commands
     pub hooks: std::collections::HashMap<String, Vec<String>>,
@@ -422,9 +428,15 @@ pub struct AppState {
     pub renumber_windows: bool,
     /// automatic-rename: update window name from active pane's running command
     pub automatic_rename: bool,
+    /// allow-rename: allow programs to set window title via escape sequences
+    pub allow_rename: bool,
     /// monitor-activity / visual-activity: stored for compat
     pub monitor_activity: bool,
     pub visual_activity: bool,
+    /// activity-action: what to do on activity ("any", "none", "current", "other")
+    pub activity_action: String,
+    /// silence-action: what to do on silence ("any", "none", "current", "other")
+    pub silence_action: String,
     /// remain-on-exit: keep panes open after process exits
     pub remain_on_exit: bool,
     /// destroy-unattached: exit server when no clients remain attached
@@ -437,6 +449,8 @@ pub struct AppState {
     pub set_titles: bool,
     /// set-titles-string: format for terminal title
     pub set_titles_string: String,
+    /// update-environment: list of env var names to update from client on attach
+    pub update_environment: Vec<String>,
     /// Environment variables set via set-environment
     pub environment: std::collections::HashMap<String, String>,
     /// User/plugin options (@-prefixed, tmux convention).
@@ -605,6 +619,7 @@ impl AppState {
             next_win_id: 1,
             next_pane_id: 1,
             zoom_saved: None,
+            client_prefix_active: false,
             sync_input: false,
             hooks: std::collections::HashMap::new(),
             wait_channels: std::collections::HashMap::new(),
@@ -625,14 +640,27 @@ impl AppState {
             word_separators: " -_@".to_string(),
             renumber_windows: false,
             automatic_rename: true,
+            allow_rename: true,
             monitor_activity: false,
             visual_activity: false,
+            activity_action: "other".to_string(),
+            silence_action: "other".to_string(),
             remain_on_exit: false,
             destroy_unattached: false,
             exit_empty: true,
             aggressive_resize: false,
             set_titles: false,
             set_titles_string: String::new(),
+            update_environment: vec![
+                "DISPLAY".to_string(),
+                "KRB5CCNAME".to_string(),
+                "SSH_ASKPASS".to_string(),
+                "SSH_AUTH_SOCK".to_string(),
+                "SSH_AGENT_PID".to_string(),
+                "SSH_CONNECTION".to_string(),
+                "WINDOWID".to_string(),
+                "XAUTHORITY".to_string(),
+            ],
             environment: std::collections::HashMap::new(),
             user_options: std::collections::HashMap::new(),
             pane_border_style: String::new(),
@@ -787,6 +815,8 @@ pub enum CtrlReq {
     SendKey(String),
     SendPaste(String),
     ZoomPane,
+    PrefixBegin,
+    PrefixEnd,
     CopyEnter,
     CopyEnterPageUp,
     CopyMove(i16, i16),
@@ -796,16 +826,16 @@ pub enum CtrlReq {
     ClientSize(u64, u16, u16),
     FocusPaneCmd(usize),
     FocusWindowCmd(usize),
-    MouseDown(u16, u16),
-    MouseDownRight(u16, u16),
-    MouseDownMiddle(u16, u16),
-    MouseDrag(u16, u16),
-    MouseUp(u16, u16),
-    MouseUpRight(u16, u16),
-    MouseUpMiddle(u16, u16),
-    MouseMove(u16, u16),
-    ScrollUp(u16, u16),
-    ScrollDown(u16, u16),
+    MouseDown(u64, u16, u16),
+    MouseDownRight(u64, u16, u16),
+    MouseDownMiddle(u64, u16, u16),
+    MouseDrag(u64, u16, u16),
+    MouseUp(u64, u16, u16),
+    MouseUpRight(u64, u16, u16),
+    MouseUpMiddle(u64, u16, u16),
+    MouseMove(u64, u16, u16),
+    ScrollUp(u64, u16, u16),
+    ScrollDown(u64, u16, u16),
     NextWindow,
     PrevWindow,
     RenameWindow(String),
@@ -848,7 +878,7 @@ pub enum CtrlReq {
     ShowBuffer(mpsc::Sender<String>),
     ShowBufferAt(mpsc::Sender<String>, usize),
     DeleteBuffer,
-    DisplayMessage(mpsc::Sender<String>, String, Option<usize>), // resp, format, target_pane_idx
+    DisplayMessage(mpsc::Sender<String>, String, Option<usize>, bool), // resp, format, target_pane_idx, set_status_bar
     LastWindow,
     LastPane,
     RotateWindow(bool),

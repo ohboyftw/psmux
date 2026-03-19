@@ -1,0 +1,58 @@
+[build-system]
+requires = ["setuptools>=68.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "llm-council"
+version = "1.0.0"
+description = "Multi-LLM code review ensemble — fans out to 5+ models, synthesizes consensus, benchmarks every layer"
+readme = "README.md"
+license = {text = "MIT"}
+requires-python = ">=3.11"
+authors = [
+    {name = "Aravind Reddy", email = "aravind@ohboy.dev"},
+]
+keywords = ["code-review", "llm", "multi-model", "ensemble", "mcp", "claude", "openai", "gemini"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Software Development :: Quality Assurance",
+    "Topic :: Software Development :: Testing",
+]
+
+dependencies = [
+    "httpx>=0.28.0",
+]
+
+[project.optional-dependencies]
+mcp = ["mcp>=1.4.0"]
+anthropic = ["anthropic>=0.75.0"]
+openai = ["openai>=2.20.0"]
+google = ["google-genai>=1.57.0"]
+all-providers = [
+    "anthropic>=0.75.0",
+    "openai>=2.20.0",
+    "google-genai>=1.57.0",
+]
+all = [
+    "mcp>=1.4.0",
+    "anthropic>=0.75.0",
+    "openai>=2.20.0",
+    "google-genai>=1.57.0",
+]
+
+[project.scripts]
+llm-council = "council:main"
+
+[project.urls]
+Homepage = "https://github.com/aravindreddy/llm-council"
+Repository = "https://github.com/aravindreddy/llm-council"
+Issues = "https://github.com/aravindreddy/llm-council/issues"
+
+[tool.setuptools]
+py-modules = ["council", "evaluate"]

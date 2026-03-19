@@ -39,9 +39,8 @@ psmux automatically sets these environment variables in every child pane:
 | `TMUX` | `/tmp/psmux-{pid}/default,{port},0` | Claude Code detects tmux backend |
 | `TMUX_PANE` | `%0`, `%1`, etc. | Pane identifier |
 | `CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS` | `1` | Enables agent teams feature |
-| `PSMUX_CLAUDE_TEAMMATE_MODE` | `tmux` | Injects `--teammate-mode tmux` |
 
-Claude Code sees `$TMUX` is set, finds `tmux` on PATH (psmux aliases as `tmux`), and uses the tmux backend to spawn teammates in split panes.
+Claude Code sees `$TMUX` is set, finds `tmux` on PATH (psmux aliases as `tmux`), and uses the tmux backend to spawn teammates in split panes. Claude Code reads `teammateMode: "tmux"` from its own `settings.json` and auto-detects `$TMUX` — no injection needed from psmux.
 
 ## Features for Agent Teams
 

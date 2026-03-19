@@ -4,6 +4,28 @@ use serde::{Deserialize, Serialize};
 
 use crate::types::{AppState, Node};
 
+/// Safe wrapper around `std::env::set_var` which became `unsafe` in Rust 1.83.
+///
+/// # Safety rationale
+/// psmux is a single-threaded application (server and client loops run on one
+/// thread each, and env vars are only mutated from the main thread of each
+/// binary invocation).  No concurrent `env::var` reads race with these writes.
+#[inline]
+pub fn set_env(key: impl AsRef<std::ffi::OsStr>, value: impl AsRef<std::ffi::OsStr>) {
+    // SAFETY: see doc comment above — no concurrent env readers.
+    unsafe {
+        std::env::set_var(key, value);
+    }
+}
+
+#[inline]
+pub fn remove_env(key: impl AsRef<std::ffi::OsStr>) {
+    // SAFETY: see doc comment above — no concurrent env readers.
+    unsafe {
+        std::env::remove_var(key);
+    }
+}
+
 pub fn infer_title_from_prompt(screen: &vt100::Screen, rows: u16, cols: u16) -> Option<String> {
     // Scan from cursor row (most likely prompt location) then fall back to last non-empty row
     let cursor_row = screen.cursor_position().0;

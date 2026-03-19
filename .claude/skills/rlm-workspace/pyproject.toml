@@ -1,0 +1,15 @@
+[project]
+name = "rlm-workspace"
+version = "2.0.0"
+description = "MCP server providing a sandboxed Python REPL for large-context code exploration"
+requires-python = ">=3.11"
+dependencies = [
+    "mcp==1.4.1",
+    "pyyaml==6.0.2",
+]
+
+[project.optional-dependencies]
+autonomous = ["rlms"]
+
+[project.scripts]
+rlm-workspace = "mcp_server:mcp.run"

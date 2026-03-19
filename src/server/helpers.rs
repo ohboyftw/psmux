@@ -129,6 +129,16 @@ pub(crate) fn combined_data_version(app: &AppState) -> u64 {
         _ => 10,
     };
     v = v.wrapping_add(mode_tag.wrapping_mul(0x1_0000_0000));
+    // Include zoom state so toggling zoom always invalidates the cached
+    // frame, even when no PTY data has changed (issue #125).
+    if app.zoom_saved.is_some() {
+        v = v.wrapping_add(0x8000_0000_0000);
+    }
+    // Include client prefix state so the status bar re-renders
+    // immediately when the prefix key is pressed/released (issue #126).
+    if app.client_prefix_active {
+        v = v.wrapping_add(0x4000_0000_0000);
+    }
     v
 }
 
@@ -151,23 +161,82 @@ pub(crate) fn window_data_version(win: &Window) -> u64 {
     v
 }
 
-/// Check non-active windows for output activity and set their activity_flag
+/// Check non-active windows for output activity and set their activity_flag.
+/// Also checks bell_pending on all panes and sets window bell_flag,
+/// and checks monitor-silence timeout to set silence_flag.
 pub(crate) fn check_window_activity(app: &mut AppState) {
-    if !app.monitor_activity {
-        return;
-    }
     let active = app.active_idx;
+    let monitor_silence_secs = app.monitor_silence;
+    let bell_action = app.bell_action.clone();
+
     for (i, win) in app.windows.iter_mut().enumerate() {
+        // ── Bell detection: check all panes for pending bells ──
+        let has_bell = check_pane_bells(&win.root);
+        if has_bell && i != active {
+            // Apply bell-action: "any" = always, "current" = only active (skip),
+            // "other" = only non-active (this path), "none" = never
+            match bell_action.as_str() {
+                "any" | "other" => {
+                    win.bell_flag = true;
+                }
+                _ => {} // "none" or "current" — don't flag non-active windows
+            }
+        } else if has_bell && i == active {
+            match bell_action.as_str() {
+                "any" | "current" => {
+                    win.bell_flag = true;
+                }
+                _ => {}
+            }
+        }
+
+        // ── Activity detection ──
         if i == active {
-            // Active window: clear flag, update version
+            // Active window: clear activity flag, update version
             win.activity_flag = false;
             win.last_seen_version = window_data_version(win);
+            // Update last_output_time for active window too
+            let cur = window_data_version(win);
+            if cur != win.last_seen_version {
+                win.last_output_time = std::time::Instant::now();
+            }
             continue;
         }
         let cur = window_data_version(win);
         if cur != win.last_seen_version {
-            win.activity_flag = true;
+            if app.monitor_activity {
+                win.activity_flag = true;
+            }
+            win.last_output_time = std::time::Instant::now();
+            win.silence_flag = false; // Reset silence on new output
             win.last_seen_version = cur;
+        }
+
+        // ── Silence detection ──
+        if monitor_silence_secs > 0 {
+            let elapsed = win.last_output_time.elapsed().as_secs();
+            if elapsed >= monitor_silence_secs && !win.silence_flag {
+                win.silence_flag = true;
+            }
+        }
+    }
+}
+
+/// Walk a pane tree and check/consume bell_pending flags.
+/// Returns true if any pane had a pending bell.
+fn check_pane_bells(node: &Node) -> bool {
+    match node {
+        Node::Leaf(p) => p
+            .bell_pending
+            .swap(false, std::sync::atomic::Ordering::AcqRel),
+        Node::Split { children, .. } => {
+            let mut any = false;
+            for c in children {
+                if check_pane_bells(c) {
+                    any = true;
+                }
+            }
+            any
         }
     }
 }

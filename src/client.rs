@@ -426,6 +426,13 @@ pub fn run_remote(
     // Set to true when Ctrl+V Release is seen — confirms the burst was a paste.
     #[cfg(windows)]
     let mut paste_confirmed: bool = false;
+    // Buffer size at previous stage2 timeout check — for growth detection.
+    #[cfg(windows)]
+    let mut paste_stage2_last_len: usize = 0;
+    // Suppression window: after right-click copy, discard text key events
+    // for a short period to prevent VS Code ConPTY duplicate injection.
+    #[cfg(windows)]
+    let mut paste_suppress_until: Option<Instant> = None;
 
     // list-keys overlay state (C-b ?)
     let mut keys_viewer = false;
@@ -809,11 +816,27 @@ pub fn run_remote(
                         // because IME routinely generates 3+ chars in <20ms and would
                         // trigger a false-positive 300ms delay (fixes #91).
                         paste_stage2 = true;
+                        paste_stage2_last_len = paste_pend.len();
                         if input_log_enabled() {
                             input_log(
                                 "paste",
                                 &format!(
                                     "stage2: {} chars in 20ms, waiting for Ctrl+V Release",
+                                    paste_pend.len()
+                                ),
+                            );
+                        }
+                    } else if paste_pend.len() >= 20 && has_non_ascii {
+                        // ≥20 non-ASCII chars in 20ms — almost certainly a paste
+                        // containing Unicode content (em-dashes, CJK, etc.), not
+                        // IME composition (which rarely exceeds a few chars).
+                        paste_stage2 = true;
+                        paste_stage2_last_len = paste_pend.len();
+                        if input_log_enabled() {
+                            input_log(
+                                "paste",
+                                &format!(
+                                    "stage2 (large non-ASCII): {} chars in 20ms",
                                     paste_pend.len()
                                 ),
                             );
@@ -889,25 +912,32 @@ pub fn run_remote(
                         paste_pend_start = None;
                     }
                 } else if paste_stage2 && elapsed > Duration::from_millis(300) {
-                    // Stage 2 timeout — no Ctrl+V Release arrived.  Since we
-                    // accumulated ≥3 chars in <20ms this is almost certainly a
-                    // paste.  Send as send-paste so the server wraps it in
-                    // bracketed paste sequences and child apps (nvim, etc.) can
-                    // distinguish paste from typed input (fixes autoindent).
-                    if input_log_enabled() {
-                        input_log(
-                            "paste",
-                            &format!(
-                                "stage2 timeout, sending {} chars as send-paste",
-                                paste_pend.len()
-                            ),
-                        );
+                    // Stage 2 timeout — no Ctrl+V Release arrived.
+                    // Growth detection: if the buffer grew since last check,
+                    // ConPTY is still injecting characters (large paste).
+                    // Extend the window instead of splitting the paste.
+                    if paste_pend.len() > paste_stage2_last_len {
+                        paste_stage2_last_len = paste_pend.len();
+                        paste_pend_start = Some(Instant::now() - Duration::from_millis(280));
+                    } else {
+                        // Buffer stopped growing — send accumulated chars as
+                        // send-paste so the server wraps in bracketed paste.
+                        if input_log_enabled() {
+                            input_log(
+                                "paste",
+                                &format!(
+                                    "stage2 timeout, sending {} chars as send-paste",
+                                    paste_pend.len()
+                                ),
+                            );
+                        }
+                        let encoded = base64_encode(&paste_pend);
+                        cmd_batch.push(format!("send-paste {}\n", encoded));
+                        paste_pend.clear();
+                        paste_pend_start = None;
+                        paste_stage2 = false;
+                        paste_stage2_last_len = 0;
                     }
-                    let encoded = base64_encode(&paste_pend);
-                    cmd_batch.push(format!("send-paste {}\n", encoded));
-                    paste_pend.clear();
-                    paste_pend_start = None;
-                    paste_stage2 = false;
                 }
             }
         }
@@ -969,9 +999,15 @@ pub fn run_remote(
                         }
                         paste_confirmed = true;
                     }
-                    Event::Key(key)
+                    Event::Key(mut key)
                         if key.kind == KeyEventKind::Press || key.kind == KeyEventKind::Repeat =>
                     {
+                        // On Windows, VS Code's xterm.js sends ESC+CR for
+                        // Shift+Enter.  ConPTY interprets the ESC as Alt, so
+                        // crossterm reports Alt+Enter.  Poll the physical
+                        // keyboard to detect the real modifier.
+                        #[cfg(windows)]
+                        crate::platform::augment_enter_shift(&mut key);
                         // Flush pending paste buffer before processing any non-bufferable key.
                         // Bufferable keys are: plain Char, Space, Enter (if pend non-empty), Tab (if pend non-empty).
                         #[cfg(windows)]
@@ -1022,6 +1058,7 @@ pub fn run_remote(
                         {
                             prefix_armed = false;
                             prefix_repeating = false;
+                            cmd_batch.push("prefix-end\n".into());
                         }
 
                         // Overlay Esc must be checked BEFORE selection-Esc so that
@@ -1180,6 +1217,7 @@ pub fn run_remote(
                             prefix_armed = true;
                             prefix_armed_at = Instant::now();
                             prefix_repeating = false;
+                            cmd_batch.push("prefix-begin\n".into());
                         }
                         // Check root-table bindings (bind-key -n / bind-key -T root)
                         // These fire without prefix, before keys are forwarded to PTY
@@ -1726,6 +1764,7 @@ pub fn run_remote(
                             } else {
                                 prefix_armed = false;
                                 prefix_repeating = false;
+                                cmd_batch.push("prefix-end\n".into());
                             }
                         } else {
                             match key.code {
@@ -2019,9 +2058,20 @@ pub fn run_remote(
                                 KeyCode::Char(c) => {
                                     #[cfg(windows)]
                                     {
-                                        paste_pend.push(c);
-                                        if paste_pend_start.is_none() {
-                                            paste_pend_start = Some(Instant::now());
+                                        // Suppress text key events during the post-copy
+                                        // suppression window (VS Code ConPTY duplicate).
+                                        let suppressed = paste_suppress_until
+                                            .is_some_and(|t| Instant::now() < t);
+                                        if suppressed {
+                                            if input_log_enabled() {
+                                                input_log("paste", &format!("suppressed char '{}' during paste suppress window", c));
+                                            }
+                                        } else {
+                                            paste_suppress_until = None;
+                                            paste_pend.push(c);
+                                            if paste_pend_start.is_none() {
+                                                paste_pend_start = Some(Instant::now());
+                                            }
                                         }
                                     }
                                     #[cfg(not(windows))]
@@ -2040,12 +2090,18 @@ pub fn run_remote(
                                         if !paste_pend.is_empty() {
                                             paste_pend.push('\n');
                                         } else {
-                                            cmd_batch.push("send-key enter\n".into());
+                                            cmd_batch.push(format!(
+                                                "send-key {}\n",
+                                                modified_key_name("Enter", key.modifiers)
+                                            ));
                                         }
                                     }
                                     #[cfg(not(windows))]
                                     {
-                                        cmd_batch.push("send-key enter\n".into());
+                                        cmd_batch.push(format!(
+                                            "send-key {}\n",
+                                            modified_key_name("Enter", key.modifiers)
+                                        ));
                                     }
                                 }
                                 KeyCode::Tab => {
@@ -2255,6 +2311,10 @@ pub fn run_remote(
                                     rsel_end = None;
                                     rsel_dragged = false;
                                     selection_changed = true;
+                                    // Suppress text key events that VS Code's ConPTY
+                                    // injects after a right-click copy action.
+                                    paste_suppress_until =
+                                        Some(Instant::now() + Duration::from_secs(2));
                                 } else {
                                     // No selection, no TUI — paste from clipboard (pwsh-style)
                                     rsel_start = None;
@@ -3927,98 +3987,5 @@ fn paste_buffer_has_non_ascii(buf: &str) -> bool {
 }
 
 #[cfg(test)]
-mod tests {
-    #[cfg(windows)]
-    use super::*;
-
-    #[cfg(windows)]
-    #[test]
-    fn ime_detection_ascii_only() {
-        // Pure ASCII text should NOT be detected as IME input
-        assert!(!paste_buffer_has_non_ascii("abc"));
-        assert!(!paste_buffer_has_non_ascii("hello world"));
-        assert!(!paste_buffer_has_non_ascii("12345"));
-        assert!(!paste_buffer_has_non_ascii(""));
-    }
-
-    #[cfg(windows)]
-    #[test]
-    fn ime_detection_japanese() {
-        // Japanese IME input should be detected as non-ASCII
-        assert!(paste_buffer_has_non_ascii("日本語"));
-        assert!(paste_buffer_has_non_ascii("にほんご"));
-        assert!(paste_buffer_has_non_ascii("abc日本語"));
-    }
-
-    #[cfg(windows)]
-    #[test]
-    fn ime_detection_chinese() {
-        assert!(paste_buffer_has_non_ascii("中文"));
-        assert!(paste_buffer_has_non_ascii("你好世界"));
-    }
-
-    #[cfg(windows)]
-    #[test]
-    fn ime_detection_korean() {
-        assert!(paste_buffer_has_non_ascii("한국어"));
-    }
-
-    #[cfg(windows)]
-    #[test]
-    fn ime_detection_mixed() {
-        // Mixed ASCII + CJK should be detected as non-ASCII
-        assert!(paste_buffer_has_non_ascii("hello世界"));
-        assert!(paste_buffer_has_non_ascii("a日b"));
-    }
-
-    #[cfg(windows)]
-    #[test]
-    fn flush_paste_pend_ascii_sends_as_paste() {
-        // ASCII buffer with ≥3 chars should send as send-paste (paste detection intact)
-        let mut buf = String::from("abcdef");
-        let mut start: Option<std::time::Instant> = Some(std::time::Instant::now());
-        let mut stage2 = true;
-        let mut cmds: Vec<String> = Vec::new();
-        flush_paste_pend_as_text(&mut buf, &mut start, &mut stage2, &mut cmds);
-        assert_eq!(cmds.len(), 1);
-        assert!(cmds[0].starts_with("send-paste "));
-    }
-
-    #[cfg(windows)]
-    #[test]
-    fn flush_paste_pend_cjk_sends_as_text() {
-        // Non-ASCII buffer should NEVER send as send-paste, even with ≥3 chars.
-        // This is the core fix for issue #91.
-        let mut buf = String::from("日本語テスト");
-        let mut start: Option<std::time::Instant> = Some(std::time::Instant::now());
-        let mut stage2 = false;
-        let mut cmds: Vec<String> = Vec::new();
-        flush_paste_pend_as_text(&mut buf, &mut start, &mut stage2, &mut cmds);
-        // Each character should be sent as individual send-text
-        assert!(
-            cmds.len() > 1,
-            "CJK should be sent as individual send-text commands"
-        );
-        for cmd in &cmds {
-            assert!(
-                cmd.starts_with("send-text "),
-                "CJK char should be send-text, got: {}",
-                cmd
-            );
-        }
-    }
-
-    #[cfg(windows)]
-    #[test]
-    fn flush_paste_pend_short_ascii_sends_as_text() {
-        // <3 ASCII chars should be sent as individual keystrokes
-        let mut buf = String::from("ab");
-        let mut start: Option<std::time::Instant> = Some(std::time::Instant::now());
-        let mut stage2 = false;
-        let mut cmds: Vec<String> = Vec::new();
-        flush_paste_pend_as_text(&mut buf, &mut start, &mut stage2, &mut cmds);
-        assert_eq!(cmds.len(), 2);
-        assert!(cmds[0].starts_with("send-text "));
-        assert!(cmds[1].starts_with("send-text "));
-    }
-}
+#[path = "../tests-rs/test_client.rs"]
+mod tests;

@@ -13,8 +13,8 @@ fn test_spawn_agent_with_frontmatter_fields_deserializes() {
             "disallowed_tools":["Bash","Write"]
         }
     }}"#;
-    let req: RpcRequest = serde_json::from_str(json_str)
-        .expect("spawn_agent with frontmatter must deserialize");
+    let req: RpcRequest =
+        serde_json::from_str(json_str).expect("spawn_agent with frontmatter must deserialize");
     assert_eq!(req.method, "spawn_agent");
 }
 
@@ -91,10 +91,7 @@ fn test_all_rpc_methods_deserialize() {
             "kill",
         ),
         (r#"{"id":"6","method":"list","params":{}}"#, "list"),
-        (
-            r#"{"id":"7","method":"kill_all","params":{}}"#,
-            "kill_all",
-        ),
+        (r#"{"id":"7","method":"kill_all","params":{}}"#, "kill_all"),
         (
             r#"{"id":"8","method":"kill_all","params":{"role":"researcher"}}"#,
             "kill_all",

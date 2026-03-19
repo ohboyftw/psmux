@@ -1175,6 +1175,10 @@ pub fn respawn_active_pane(
         owned_pty = native_pty_system();
         &*owned_pty
     };
+    // Expand format variables like #{pane_current_path} at spawn time (#111).
+    // Must happen before the mutable borrow of app.windows below.
+    let expanded_shell = crate::format::expand_format(&app.default_shell, app);
+
     let win = &mut app.windows[app.active_idx];
     let Some(pane) = active_pane_mut(&mut win.root, &win.active_path) else {
         return Ok(());
@@ -1190,8 +1194,8 @@ pub fn respawn_active_pane(
     let pair = pty_system
         .openpty(size)
         .map_err(|e| io::Error::other(format!("openpty error: {e}")))?;
-    let mut shell_cmd = if !app.default_shell.is_empty() {
-        build_default_shell(&app.default_shell, app.env_shim)
+    let mut shell_cmd = if !expanded_shell.is_empty() {
+        build_default_shell(&expanded_shell, app.env_shim)
     } else {
         detect_shell()
     };
@@ -1230,7 +1234,17 @@ pub fn respawn_active_pane(
     ));
     let cs_writer = cursor_shape.clone();
 
-    crate::pane::spawn_reader_thread(reader, term_reader, dv_writer, cs_writer, Some(lot_writer));
+    let bell_pending = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let bell_writer = bell_pending.clone();
+
+    crate::pane::spawn_reader_thread(
+        reader,
+        term_reader,
+        dv_writer,
+        cs_writer,
+        Some(lot_writer),
+        bell_writer,
+    );
 
     let mut pty_writer = pair
         .master
@@ -1245,6 +1259,7 @@ pub fn respawn_active_pane(
     pane.data_version = data_version;
     pane.last_output_time = last_output_time;
     pane.cursor_shape = cursor_shape;
+    pane.bell_pending = bell_pending;
     pane.child_pid = None;
     pane.vt_bridge_cache = None;
     pane.vti_mode_cache = None;

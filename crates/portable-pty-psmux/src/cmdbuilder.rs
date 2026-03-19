@@ -1,6 +1,6 @@
 #[cfg(unix)]
 use anyhow::Context;
-#[cfg(feature = "serde_support")]
+#[cfg(feature = "serde")]
 use serde_derive::*;
 use std::collections::BTreeMap;
 use std::ffi::{OsStr, OsString};
@@ -12,7 +12,7 @@ use std::path::Path;
 
 /// Used to deal with Windows having case-insensitive environment variables.
 #[derive(Clone, Debug, PartialEq, PartialOrd)]
-#[cfg_attr(feature = "serde_support", derive(Serialize, Deserialize))]
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 struct EnvEntry {
     /// Whether or not this environment variable came from the base environment,
     /// as opposed to having been explicitly set by the caller.
@@ -138,56 +138,52 @@ fn get_base_env() -> BTreeMap<OsString, EnvEntry> {
         if let Ok(sys_env) = RegKey::predef(HKEY_LOCAL_MACHINE)
             .open_subkey("System\\CurrentControlSet\\Control\\Session Manager\\Environment")
         {
-            for res in sys_env.enum_values() {
-                if let Ok((name, value)) = res {
-                    if name.to_ascii_lowercase() == "username" {
-                        continue;
-                    }
-                    if let Ok(value) = reg_value_to_string(&value) {
-                        log::trace!("adding SYS env: {:?} {:?}", name, value);
-                        env.insert(
-                            EnvEntry::map_key(name.clone().into()),
-                            EnvEntry {
-                                is_from_base_env: true,
-                                preferred_key: name.into(),
-                                value,
-                            },
-                        );
-                    }
+            for (name, value) in sys_env.enum_values().flatten() {
+                if name.eq_ignore_ascii_case("username") {
+                    continue;
+                }
+                if let Ok(value) = reg_value_to_string(&value) {
+                    log::trace!("adding SYS env: {:?} {:?}", name, value);
+                    env.insert(
+                        EnvEntry::map_key(name.clone().into()),
+                        EnvEntry {
+                            is_from_base_env: true,
+                            preferred_key: name.into(),
+                            value,
+                        },
+                    );
                 }
             }
         }
 
         if let Ok(sys_env) = RegKey::predef(HKEY_CURRENT_USER).open_subkey("Environment") {
-            for res in sys_env.enum_values() {
-                if let Ok((name, value)) = res {
-                    if let Ok(value) = reg_value_to_string(&value) {
-                        // Merge the system and user paths together
-                        let value = if name.to_ascii_lowercase() == "path" {
-                            match env.get(&EnvEntry::map_key(name.clone().into())) {
-                                Some(entry) => {
-                                    let mut result = OsString::new();
-                                    result.push(&entry.value);
-                                    result.push(";");
-                                    result.push(&value);
-                                    result
-                                }
-                                None => value,
+            for (name, value) in sys_env.enum_values().flatten() {
+                if let Ok(value) = reg_value_to_string(&value) {
+                    // Merge the system and user paths together
+                    let value = if name.eq_ignore_ascii_case("path") {
+                        match env.get(&EnvEntry::map_key(name.clone().into())) {
+                            Some(entry) => {
+                                let mut result = OsString::new();
+                                result.push(&entry.value);
+                                result.push(";");
+                                result.push(&value);
+                                result
                             }
-                        } else {
-                            value
-                        };
+                            None => value,
+                        }
+                    } else {
+                        value
+                    };
 
-                        log::trace!("adding USER env: {:?} {:?}", name, value);
-                        env.insert(
-                            EnvEntry::map_key(name.clone().into()),
-                            EnvEntry {
-                                is_from_base_env: true,
-                                preferred_key: name.into(),
-                                value,
-                            },
-                        );
-                    }
+                    log::trace!("adding USER env: {:?} {:?}", name, value);
+                    env.insert(
+                        EnvEntry::map_key(name.clone().into()),
+                        EnvEntry {
+                            is_from_base_env: true,
+                            preferred_key: name.into(),
+                            value,
+                        },
+                    );
                 }
             }
         }
@@ -199,7 +195,7 @@ fn get_base_env() -> BTreeMap<OsString, EnvEntry> {
 /// `CommandBuilder` is used to prepare a command to be spawned into a pty.
 /// The interface is intentionally similar to that of `std::process::Command`.
 #[derive(Clone, Debug, PartialEq)]
-#[cfg_attr(feature = "serde_support", derive(Serialize, Deserialize))]
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 pub struct CommandBuilder {
     args: Vec<OsString>,
     envs: BTreeMap<OsString, EnvEntry>,
@@ -308,7 +304,7 @@ impl CommandBuilder {
             EnvEntry {
                 is_from_base_env: false,
                 preferred_key: key,
-                value: value,
+                value,
             },
         );
     }
@@ -583,7 +579,7 @@ impl CommandBuilder {
             let extensions = self.get_env("PATHEXT").unwrap_or(OsStr::new(".EXE"));
             for path in std::env::split_paths(&path) {
                 // Check for exactly the user's string in this path dir
-                let candidate = path.join(&exe);
+                let candidate = path.join(exe);
                 if candidate.exists() {
                     return candidate.into_os_string();
                 }
@@ -595,7 +591,7 @@ impl CommandBuilder {
                     // PATHEXT includes the leading `.`, but `with_extension`
                     // doesn't want that
                     let ext = ext.to_str().expect("PATHEXT entries must be utf8");
-                    let path = path.join(&exe).with_extension(&ext[1..]);
+                    let path = path.join(exe).with_extension(&ext[1..]);
                     if path.exists() {
                         return path.into_os_string();
                     }
@@ -755,69 +751,5 @@ fn is_cwd_relative_path<P: AsRef<Path>>(p: P) -> bool {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[cfg(unix)]
-    #[test]
-    fn test_cwd_relative() {
-        assert!(is_cwd_relative_path("."));
-        assert!(is_cwd_relative_path("./foo"));
-        assert!(is_cwd_relative_path("../foo"));
-        assert!(!is_cwd_relative_path("foo"));
-        assert!(!is_cwd_relative_path("/foo"));
-    }
-
-    #[test]
-    fn test_env() {
-        let mut cmd = CommandBuilder::new("dummy");
-        let package_authors = cmd.get_env("CARGO_PKG_AUTHORS");
-        println!("package_authors: {:?}", package_authors);
-        assert!(package_authors == Some(OsStr::new("Wez Furlong")));
-
-        cmd.env("foo key", "foo value");
-        cmd.env("bar key", "bar value");
-
-        let iterated_envs = cmd.iter_extra_env_as_str().collect::<Vec<_>>();
-        println!("iterated_envs: {:?}", iterated_envs);
-        assert!(iterated_envs == vec![("bar key", "bar value"), ("foo key", "foo value")]);
-
-        {
-            let mut cmd = cmd.clone();
-            cmd.env_remove("foo key");
-
-            let iterated_envs = cmd.iter_extra_env_as_str().collect::<Vec<_>>();
-            println!("iterated_envs: {:?}", iterated_envs);
-            assert!(iterated_envs == vec![("bar key", "bar value")]);
-        }
-
-        {
-            let mut cmd = cmd.clone();
-            cmd.env_remove("bar key");
-
-            let iterated_envs = cmd.iter_extra_env_as_str().collect::<Vec<_>>();
-            println!("iterated_envs: {:?}", iterated_envs);
-            assert!(iterated_envs == vec![("foo key", "foo value")]);
-        }
-
-        {
-            let mut cmd = cmd.clone();
-            cmd.env_clear();
-
-            let iterated_envs = cmd.iter_extra_env_as_str().collect::<Vec<_>>();
-            println!("iterated_envs: {:?}", iterated_envs);
-            assert!(iterated_envs.is_empty());
-        }
-    }
-
-    #[cfg(windows)]
-    #[test]
-    fn test_env_case_insensitive_override() {
-        let mut cmd = CommandBuilder::new("dummy");
-        cmd.env("Cargo_Pkg_Authors", "Not Wez");
-        assert!(cmd.get_env("cargo_pkg_authors") == Some(OsStr::new("Not Wez")));
-
-        cmd.env_remove("cARGO_pKG_aUTHORS");
-        assert!(cmd.get_env("CARGO_PKG_AUTHORS").is_none());
-    }
-}
+#[path = "../../../tests-rs/test_cmdbuilder.rs"]
+mod tests;

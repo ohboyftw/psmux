@@ -30,37 +30,20 @@ When a pane spawns inside psmux, several environment variables are set automatic
 |----------|-------|---------|
 | `TMUX` | `/tmp/psmux-{pid}/...` | Tells Claude Code it's inside tmux |
 | `CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS` | `1` | Enables the agent teams feature gate |
-| `PSMUX_CLAUDE_TEAMMATE_MODE` | `tmux` | Triggers the `--teammate-mode tmux` CLI injection |
 
-Claude Code detects the `TMUX` environment variable, recognizes it's inside a tmux-compatible multiplexer, and uses the **TmuxBackend** to spawn teammate agents via `split-window` and `send-keys` — the same mechanism it uses on Linux/macOS tmux.
+Claude Code detects the `TMUX` environment variable, recognizes it's inside a tmux-compatible multiplexer, and uses the **TmuxBackend** to spawn teammate agents via `split-window` and `send-keys` — the same mechanism it uses on Linux/macOS tmux. Claude Code reads `teammateMode: "tmux"` from its own `settings.json` and auto-detects `$TMUX` — no injection from psmux is needed.
 
-### The Two Things psmux Fixes
+### What psmux Does
 
-Claude Code's standalone binary (the Bun SFE `claude.exe`) has two issues on Windows that psmux works around:
+Claude Code's standalone binary (the Bun SFE `claude.exe`) requires the agent teams feature gate to be enabled:
 
 1. **Agent teams feature gate**: The entire teammate tool-set (spawnTeam, spawnTeammate) is gated behind `CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1`. Without this env var, Claude only has the in-process "Agent" tool and never creates separate panes. psmux sets this automatically.
 
-2. **`teammateMode` config ignored**: The standalone binary ignores `teammateMode: "tmux"` from `~/.claude/settings.json`. psmux injects `--teammate-mode tmux` via a PowerShell wrapper function that's loaded in every pane.
+2. **`teammateMode` auto-detection**: Claude Code reads `teammateMode` from its own `settings.json` and auto-detects `$TMUX`. No injection from psmux is needed.
 
-## Configuration Options
+## Configuration
 
-These options can be set in `~/.psmux.conf` or at runtime:
-
-```tmux
-# Auto-inject --teammate-mode tmux for Claude Code (default: on)
-set -g claude-code-fix-tty on
-
-# Disable the Claude Code teammate-mode workaround
-set -g claude-code-fix-tty off
-```
-
-### What each option controls
-
-| Option | Default | Description |
-|--------|---------|-------------|
-| `claude-code-fix-tty` | `on` | Sets `PSMUX_CLAUDE_TEAMMATE_MODE=tmux` and defines a `claude` wrapper function that injects `--teammate-mode tmux` into every `claude` invocation |
-
-The `CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1` env var is always set (not gated by any option) since it's required for the feature to work at all.
+The `CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1` env var is always set automatically by psmux since it's required for the feature to work at all. No additional psmux configuration is needed for agent teams.
 
 ## Two Agent Systems in Claude Code
 
@@ -72,7 +55,7 @@ The **teammate system** spawns agents in visible tmux panes. This is the system 
 
 - Triggered when the model passes `team_name` + `name` to the subagent tool
 - Gated by `CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1` (psmux sets this)
-- Controlled by `--teammate-mode tmux` (psmux injects this)
+- Controlled by `teammateMode: "tmux"` in Claude Code's `settings.json`
 - Each agent gets its own pane with full terminal visibility
 - Lower-tier models (Haiku, Sonnet) tend to prefer this path
 
@@ -132,23 +115,13 @@ To confirm everything is configured correctly inside a psmux pane:
 # Check environment variables
 Write-Host "TMUX: $env:TMUX"
 Write-Host "AGENT_TEAMS: $env:CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS"
-Write-Host "TEAMMATE_MODE: $env:PSMUX_CLAUDE_TEAMMATE_MODE"
 ```
 
 Expected output:
 ```
 TMUX: /tmp/psmux-{pid}/default,{port},0
 AGENT_TEAMS: 1
-TEAMMATE_MODE: tmux
 ```
-
-You can also verify the `claude` wrapper is active:
-
-```powershell
-Get-Command claude | Format-List
-```
-
-If the wrapper is active, this shows a `Function` (not an `Application`). The wrapper auto-injects `--teammate-mode tmux` when calling `claude.exe`.
 
 ## Troubleshooting
 
@@ -157,7 +130,6 @@ If the wrapper is active, this shows a `Function` (not an `Application`). The wr
 1. **Check you're in interactive mode** — not using `-p` or `--print`
 2. **Verify env vars** — run the verification commands above
 3. **Check debug log** — start Claude with `--debug-file $env:TEMP\claude_debug.log` and look for:
-   - `[TeammateModeSnapshot] Captured from CLI override: tmux` — teammate mode is set
    - `[BackendRegistry] isInProcessEnabled: false` — tmux panes will be used
    - `[BackendRegistry] isInProcessEnabled: true (non-interactive session)` — you're in pipe mode
 
@@ -174,13 +146,6 @@ This is expected behavior. Opus prefers `isolation: "worktree"` over the teammat
 Make sure `claude.exe` is on your PATH. Install via:
 ```powershell
 npm install -g @anthropic-ai/claude-code
-```
-
-### Wrapper not injecting `--teammate-mode`
-
-The wrapper is only defined when `claude-code-fix-tty` is `on` (default). Check:
-```powershell
-tmux show-options -g claude-code-fix-tty
 ```
 
 ## Technical Details

@@ -1,0 +1,8 @@
+{
+  "name": "sisyphus",
+  "description": "Iterative self-referential AI development loops. Claude works on the same task repeatedly until completion, with stop hook interception and configurable exit conditions.",
+  "version": "1.0.0",
+  "author": {
+    "name": "Aravind / OhboyConsultancy FZ LLC"
+  }
+}

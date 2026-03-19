@@ -1,0 +1,77 @@
+---
+title: "Architecture Overview"
+status: active
+owner: "{{OWNER}}"
+last_verified: "{{DATE}}"
+created: "{{DATE}}"
+tags: [architecture, system-design, domains]
+cross_links:
+  - AGENTS.md
+  - docs/design-docs/core-beliefs.md
+---
+
+# Architecture Overview
+
+## System Context
+
+{{ONE_PARAGRAPH_DESCRIPTION}}
+
+## Domain Map
+
+```
+{{PROJECT_NAME}}/
+├── {{DOMAIN_1}}/          # {{BRIEF_DESCRIPTION}}
+│   ├── {{SUBDOMAIN_A}}/
+│   └── {{SUBDOMAIN_B}}/
+├── {{DOMAIN_2}}/          # {{BRIEF_DESCRIPTION}}
+└── {{SHARED}}/            # {{BRIEF_DESCRIPTION}}
+```
+
+## Package Layering
+
+Dependencies flow downward. Nothing below may import from above.
+
+```
+┌─────────────────────────┐
+│     Presentation        │  UI, CLI, API handlers
+├─────────────────────────┤
+│     Application         │  Use cases, orchestration
+├─────────────────────────┤
+│     Domain              │  Business logic, entities
+├─────────────────────────┤
+│     Infrastructure      │  DB, external services, I/O
+└─────────────────────────┘
+```
+
+> Customize layers to match your actual project structure.
+
+## Key Boundaries
+
+| Boundary | Left side | Right side | Interface |
+|----------|-----------|------------|-----------|
+| {{BOUNDARY_1}} | {{MODULE_A}} | {{MODULE_B}} | {{API/EVENT/etc}} |
+
+## Data Flow
+
+{{DESCRIBE_PRIMARY_DATA_FLOW}}
+
+## Technology Stack
+
+| Layer | Technology | Notes |
+|-------|-----------|-------|
+| Runtime | {{e.g., Node.js 20}} | |
+| Framework | {{e.g., Next.js 14}} | |
+| Database | {{e.g., PostgreSQL 16}} | |
+| ORM | {{e.g., Prisma}} | |
+| Deployment | {{e.g., Docker + Railway}} | |
+
+## Cross-Cutting Concerns
+
+- **Auth**: {{describe or link to docs/SECURITY.md}}
+- **Logging**: {{describe or link to docs/RELIABILITY.md}}
+- **Error handling**: {{describe or link to docs/RELIABILITY.md}}
+
+---
+
+*For design decisions and rationale, see `docs/design-docs/`.*
+*For domain-specific details, see the domain doc linked in AGENTS.md.*

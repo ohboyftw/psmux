@@ -293,7 +293,7 @@ pub fn parse_config_line(app: &mut AppState, line: &str) {
     } else if l.starts_with("if-shell ") || l.starts_with("if ") {
         parse_if_shell(app, l);
     } else if l.starts_with("set-hook ") {
-        // Parse set-hook: set-hook [-g] [-u] hook-name command
+        // Parse set-hook: set-hook [-g] [-u] hook-name [command]
         // -gu or -u: unset (remove) the hook for the given event
         let parts: Vec<&str> = l.split_whitespace().collect();
         let mut i = 1;
@@ -307,8 +307,7 @@ pub fn parse_config_line(app: &mut AppState, line: &str) {
         if unset {
             // set-hook -gu hook-name — remove the hook
             if i < parts.len() {
-                let hook = parts[i].to_string();
-                app.hooks.remove(&hook);
+                app.hooks.remove(parts[i]);
             }
         } else if i + 1 < parts.len() {
             let hook = parts[i].to_string();
@@ -329,7 +328,8 @@ pub fn parse_config_line(app: &mut AppState, line: &str) {
                     cmd
                 }
             };
-            // Replace semantics: only one command per hook event
+            // Replace (not append) to match tmux – prevents duplicates on
+            // config reload (issue #133).
             app.hooks.insert(hook, vec![cmd]);
         }
     } else if l.starts_with("set-environment ") || l.starts_with("setenv ") {
@@ -586,7 +586,7 @@ pub fn parse_option_value(app: &mut AppState, rest: &str, _is_global: bool) {
             app.set_titles_string = value.to_string();
         }
         "status-keys" => {
-            app.environment.insert(key.to_string(), value.to_string());
+            app.user_options.insert(key.to_string(), value.to_string());
         }
         "pane-border-style" => {
             app.pane_border_style = value.to_string();
@@ -610,16 +610,18 @@ pub fn parse_option_value(app: &mut AppState, rest: &str, _is_global: bool) {
             app.sync_input = matches!(value, "on" | "true" | "1");
         }
         "allow-rename" => {
-            app.environment.insert(key.to_string(), value.to_string());
+            app.allow_rename = matches!(value, "on" | "true" | "1");
         }
-        "terminal-overrides" => {
-            app.environment.insert(key.to_string(), value.to_string());
+        "terminal-overrides" => { /* tmux terminfo override — accepted for compatibility, no-op on Windows */
         }
         "default-terminal" => {
-            app.environment.insert(key.to_string(), value.to_string());
+            // tmux sets the TERM env var from this option (#137)
+            app.environment
+                .insert("TERM".to_string(), value.to_string());
         }
         "update-environment" => {
-            app.environment.insert(key.to_string(), value.to_string());
+            // tmux: space-separated list of env var names to update from client on attach
+            app.update_environment = value.split_whitespace().map(|s| s.to_string()).collect();
         }
         "bell-action" => {
             app.bell_action = value.to_string();
@@ -628,10 +630,10 @@ pub fn parse_option_value(app: &mut AppState, rest: &str, _is_global: bool) {
             app.visual_bell = matches!(value, "on" | "true" | "1");
         }
         "activity-action" => {
-            app.environment.insert(key.to_string(), value.to_string());
+            app.activity_action = value.to_string();
         }
         "silence-action" => {
-            app.environment.insert(key.to_string(), value.to_string());
+            app.silence_action = value.to_string();
         }
         "monitor-silence" => {
             if let Ok(n) = value.parse::<u64>() {
@@ -669,22 +671,22 @@ pub fn parse_option_value(app: &mut AppState, rest: &str, _is_global: bool) {
             app.status_right_style = value.to_string();
         }
         "clock-mode-colour" | "clock-mode-style" => {
-            app.environment.insert(key.to_string(), value.to_string());
+            app.user_options.insert(key.to_string(), value.to_string());
         }
         "pane-border-format" | "pane-border-status" => {
-            app.environment.insert(key.to_string(), value.to_string());
+            app.user_options.insert(key.to_string(), value.to_string());
         }
         "popup-style" | "popup-border-style" | "popup-border-lines" => {
-            app.environment.insert(key.to_string(), value.to_string());
+            app.user_options.insert(key.to_string(), value.to_string());
         }
         "window-style" | "window-active-style" => {
-            app.environment.insert(key.to_string(), value.to_string());
+            app.user_options.insert(key.to_string(), value.to_string());
         }
         "wrap-search" => {
-            app.environment.insert(key.to_string(), value.to_string());
+            app.user_options.insert(key.to_string(), value.to_string());
         }
         "lock-after-time" | "lock-command" => {
-            app.environment.insert(key.to_string(), value.to_string());
+            app.user_options.insert(key.to_string(), value.to_string());
         }
         "main-pane-width" => {
             if let Ok(n) = value.parse::<u16>() {
@@ -746,6 +748,11 @@ pub fn parse_option_value(app: &mut AppState, rest: &str, _is_global: bool) {
             // so they don't leak into child shells (#105).
             if key.starts_with('@') {
                 app.user_options.insert(key.to_string(), value.to_string());
+            } else if key.contains('-') {
+                // Options with hyphens are tmux config options, NOT environment
+                // variables.  Storing them in environment causes PowerShell
+                // ParserErrors when injected via $env:NAME syntax (#137).
+                app.user_options.insert(key.to_string(), value.to_string());
             } else {
                 app.environment.insert(key.to_string(), value.to_string());
             }
@@ -764,17 +771,33 @@ pub fn parse_option_value(app: &mut AppState, rest: &str, _is_global: bool) {
                     let home = env::var("USERPROFILE")
                         .or_else(|_| env::var("HOME"))
                         .unwrap_or_default();
+                    let xdg_config = env::var("XDG_CONFIG_HOME")
+                        .unwrap_or_else(|_| format!("{}\\.config", home));
                     let candidates = [
+                        // Classic paths: ~/.psmux/plugins/
                         format!(
                             "{}\\.psmux\\plugins\\{}\\plugin.conf",
                             home,
                             value.replace('/', "\\")
                         ),
                         format!("{}\\.psmux\\plugins\\{}\\plugin.conf", home, plugin_name),
-                        // Common layout: plugins installed under psmux-plugins/ subdirectory
                         format!(
                             "{}\\.psmux\\plugins\\psmux-plugins\\{}\\plugin.conf",
                             home, plugin_name
+                        ),
+                        // XDG paths: ~/.config/psmux/plugins/
+                        format!(
+                            "{}\\psmux\\plugins\\{}\\plugin.conf",
+                            xdg_config,
+                            value.replace('/', "\\")
+                        ),
+                        format!(
+                            "{}\\psmux\\plugins\\{}\\plugin.conf",
+                            xdg_config, plugin_name
+                        ),
+                        format!(
+                            "{}\\psmux\\plugins\\psmux-plugins\\{}\\plugin.conf",
+                            xdg_config, plugin_name
                         ),
                     ];
                     let mut found = false;
@@ -793,6 +816,7 @@ pub fn parse_option_value(app: &mut AppState, rest: &str, _is_global: bool) {
                     // If no plugin.conf, try .ps1 entry scripts
                     if !found {
                         let ps1_candidates = [
+                            // Classic paths
                             format!(
                                 "{}\\.psmux\\plugins\\{}\\{}.ps1",
                                 home,
@@ -806,6 +830,21 @@ pub fn parse_option_value(app: &mut AppState, rest: &str, _is_global: bool) {
                             format!(
                                 "{}\\.psmux\\plugins\\psmux-plugins\\{}\\{}.ps1",
                                 home, plugin_name, plugin_name
+                            ),
+                            // XDG paths
+                            format!(
+                                "{}\\psmux\\plugins\\{}\\{}.ps1",
+                                xdg_config,
+                                value.replace('/', "\\"),
+                                plugin_name
+                            ),
+                            format!(
+                                "{}\\psmux\\plugins\\{}\\{}.ps1",
+                                xdg_config, plugin_name, plugin_name
+                            ),
+                            format!(
+                                "{}\\psmux\\plugins\\psmux-plugins\\{}\\{}.ps1",
+                                xdg_config, plugin_name, plugin_name
                             ),
                         ];
                         for ps1 in &ps1_candidates {
@@ -1143,6 +1182,29 @@ pub fn source_file(app: &mut AppState, path: &str) {
     // Normalize path separators for Windows
     let expanded_path = expanded_path.replace('/', std::path::MAIN_SEPARATOR_STR);
 
+    // Fallback: if path references ~/.psmux/ but doesn't exist and the
+    // XDG equivalent (~/.config/psmux/) does, use that instead (issue #135).
+    let expanded_path = if !std::path::Path::new(&expanded_path).exists() {
+        let home = env::var("USERPROFILE")
+            .or_else(|_| env::var("HOME"))
+            .unwrap_or_default();
+        let classic = format!("{}\\.psmux\\", home);
+        if expanded_path.starts_with(&classic) {
+            let xdg_base =
+                env::var("XDG_CONFIG_HOME").unwrap_or_else(|_| format!("{}\\.config", home));
+            let xdg_alt = expanded_path.replacen(&classic, &format!("{}\\psmux\\", xdg_base), 1);
+            if std::path::Path::new(&xdg_alt).exists() {
+                xdg_alt
+            } else {
+                expanded_path
+            }
+        } else {
+            expanded_path
+        }
+    } else {
+        expanded_path
+    };
+
     // Save and restore current_config_file around the nested parse
     let prev_file = current_config_file();
     set_current_config_file(&expanded_path);
@@ -1335,6 +1397,37 @@ fn parse_run_shell(app: &mut AppState, line: &str) {
             .replace("~\\", &format!("{}\\", home))
     } else {
         shell_cmd
+    };
+
+    // Fallback: if the command references ~/.psmux/plugins/ but that directory
+    // doesn't exist and ~/.config/psmux/plugins/ does, rewrite the path.
+    // Plugin repos may hardcode ~/.psmux/plugins/ but the TUI installs to
+    // the XDG location (issue #135).
+    let shell_cmd = {
+        let home = std::env::var("USERPROFILE")
+            .or_else(|_| std::env::var("HOME"))
+            .unwrap_or_default();
+        let classic_fwd = format!("{}/.psmux/plugins/", home);
+        let classic_win = format!("{}\\.psmux\\plugins\\", home);
+        if shell_cmd.contains(&classic_fwd) || shell_cmd.contains(&classic_win) {
+            let classic_dir = std::path::Path::new(&home).join(".psmux").join("plugins");
+            let xdg_base =
+                std::env::var("XDG_CONFIG_HOME").unwrap_or_else(|_| format!("{}\\.config", home));
+            let xdg_dir = std::path::Path::new(&xdg_base)
+                .join("psmux")
+                .join("plugins");
+            if !classic_dir.is_dir() && xdg_dir.is_dir() {
+                let xdg_fwd = format!("{}/psmux/plugins/", xdg_base.replace('\\', "/"));
+                let xdg_win = format!("{}\\psmux\\plugins\\", xdg_base);
+                shell_cmd
+                    .replace(&classic_fwd, &xdg_fwd)
+                    .replace(&classic_win, &xdg_win)
+            } else {
+                shell_cmd
+            }
+        } else {
+            shell_cmd
+        }
     };
 
     // ── Handle .tmux files natively ──────────────────────────────────
@@ -1688,19 +1781,35 @@ mod tests {
     #[test]
     fn set_hook_replaces_existing_hook_for_same_event() {
         let mut app = AppState::new("test".to_string());
-        parse_config_line(&mut app, "set-hook -g client-attached 'display-message first'");
-        parse_config_line(&mut app, "set-hook -g client-attached 'display-message second'");
+        parse_config_line(
+            &mut app,
+            "set-hook -g client-attached 'display-message first'",
+        );
+        parse_config_line(
+            &mut app,
+            "set-hook -g client-attached 'display-message second'",
+        );
 
         let hooks = app.hooks.get("client-attached").unwrap();
-        assert_eq!(hooks.len(), 1, "should have exactly one hook, not duplicates");
+        assert_eq!(
+            hooks.len(),
+            1,
+            "should have exactly one hook, not duplicates"
+        );
         assert_eq!(hooks[0], "display-message second");
     }
 
     #[test]
     fn set_hook_different_events_preserved() {
         let mut app = AppState::new("test".to_string());
-        parse_config_line(&mut app, "set-hook -g client-attached 'display-message attached'");
-        parse_config_line(&mut app, "set-hook -g after-new-window 'display-message new-win'");
+        parse_config_line(
+            &mut app,
+            "set-hook -g client-attached 'display-message attached'",
+        );
+        parse_config_line(
+            &mut app,
+            "set-hook -g after-new-window 'display-message new-win'",
+        );
 
         assert!(app.hooks.contains_key("client-attached"));
         assert!(app.hooks.contains_key("after-new-window"));
@@ -1711,22 +1820,34 @@ mod tests {
     #[test]
     fn set_hook_unset_removes_hook() {
         let mut app = AppState::new("test".to_string());
-        parse_config_line(&mut app, "set-hook -g client-attached 'display-message hello'");
+        parse_config_line(
+            &mut app,
+            "set-hook -g client-attached 'display-message hello'",
+        );
         assert!(app.hooks.contains_key("client-attached"));
 
         parse_config_line(&mut app, "set-hook -gu client-attached");
-        assert!(!app.hooks.contains_key("client-attached"), "hook should be removed by -gu");
+        assert!(
+            !app.hooks.contains_key("client-attached"),
+            "hook should be removed by -gu"
+        );
     }
 
     #[test]
     fn set_hook_unset_u_flag_alone() {
         let mut app = AppState::new("test".to_string());
-        parse_config_line(&mut app, "set-hook -g client-attached 'display-message hello'");
+        parse_config_line(
+            &mut app,
+            "set-hook -g client-attached 'display-message hello'",
+        );
         assert!(app.hooks.contains_key("client-attached"));
 
         // -u alone (without -g) should also unset
         parse_config_line(&mut app, "set-hook -u client-attached");
-        assert!(!app.hooks.contains_key("client-attached"), "hook should be removed by -u");
+        assert!(
+            !app.hooks.contains_key("client-attached"),
+            "hook should be removed by -u"
+        );
     }
 
     #[test]
@@ -1737,3 +1858,7 @@ mod tests {
         assert!(!app.hooks.contains_key("nonexistent-hook"));
     }
 }
+
+#[cfg(test)]
+#[path = "../tests-rs/test_config_plugin_paths.rs"]
+mod tests_plugin_paths;

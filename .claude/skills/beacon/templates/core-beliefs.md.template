@@ -1,0 +1,79 @@
+---
+title: "Core Beliefs"
+status: active
+owner: "{{OWNER}}"
+last_verified: "{{DATE}}"
+created: "{{DATE}}"
+tags: [core-beliefs, principles, agent-first]
+cross_links:
+  - AGENTS.md
+  - ARCHITECTURE.md
+---
+
+# Core Beliefs
+
+These are non-negotiable principles. Read before making any architectural decision.
+Violating these requires an explicit ADR with justification.
+
+## 1. Context is Scarce
+
+Every token in context has opportunity cost. Prefer pointers over content.
+Prefer progressive disclosure over bulk loading. Prefer structured docs over
+free-form prose.
+
+**Concrete example:** AGENTS.md is a table of contents, not a manual.
+If you're adding explanation to AGENTS.md, you're doing it wrong — create
+a doc and link to it.
+
+## 2. Plans Are First-Class Artifacts
+
+Complex work gets an execution plan checked into the repo. Plans have
+progress logs, decision records, and completion checklists. Plans are versioned
+alongside code.
+
+**Concrete example:** Before starting a multi-file refactor, create
+`docs/exec-plans/active/refactor-auth-module.md` with steps and success criteria.
+
+## 3. Freshness Over Completeness
+
+A short, accurate doc beats a comprehensive stale one. Prefer documents
+that are mechanically verifiable (linted, cross-linked, freshness-tracked)
+over documents that are thorough but unmaintained.
+
+**Concrete example:** A 20-line API doc that's verified weekly is more
+valuable than a 200-line API doc that hasn't been checked in 6 months.
+
+## 4. Mechanical Enforcement Prevents Rot
+
+Never rely on discipline alone. Use linters, CI checks, and automated
+gardening to catch staleness, broken links, and structural violations.
+If a rule can't be checked mechanically, simplify the rule until it can.
+
+**Concrete example:** CI runs `lint-docs.sh` on every PR that touches `docs/`.
+Docs with `last_verified` older than 30 days are flagged automatically.
+
+## 5. Link, Don't Duplicate
+
+If the same information exists in two places, one will rot. Every fact
+should have exactly one source of truth. Everything else links to it.
+
+**Concrete example:** Database schema is documented in `docs/generated/db-schema.md`
+and nowhere else. Any doc that discusses schema links to that file.
+
+## 6. Decisions Need Rationale
+
+Record why, not just what. Include rejected alternatives. Future agents
+(and future humans) need to understand the reasoning, not just the outcome.
+
+**Concrete example:** Every design decision gets an ADR in `docs/design-docs/`
+with context, alternatives considered, and consequences.
+
+---
+
+*Add project-specific beliefs below. Each belief must include a concrete example.*
+
+## {{NUMBER}}. {{PROJECT_SPECIFIC_BELIEF}}
+
+{{Explanation}}
+
+**Concrete example:** {{Example}}

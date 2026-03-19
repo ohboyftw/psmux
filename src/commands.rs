@@ -180,13 +180,18 @@ pub fn parse_command_line(line: &str) -> Vec<String> {
                 current.push(c);
             }
         } else if c == '\\' && in_double_quotes {
-            // Inside double quotes, only treat \" as an escape (produces a
-            // literal double-quote).  All other backslashes are kept literal
-            // because psmux is a Windows-native tool where backslash is the
-            // normal path separator (e.g. "C:\Program Files\Git\bin\bash.exe").
+            // Inside double quotes, recognise two escape sequences:
+            //   \"  → literal double-quote
+            //   \\  → literal backslash
+            // All other backslashes are kept literal because psmux is a
+            // Windows-native tool where backslash is the normal path
+            // separator (e.g. "C:\Program Files\Git\bin\bash.exe").
             if i + 1 < chars.len() && chars[i + 1] == '"' {
                 current.push('"');
                 i += 1; // skip the quote
+            } else if i + 1 < chars.len() && chars[i + 1] == '\\' {
+                current.push('\\');
+                i += 1; // skip the second backslash
             } else {
                 current.push(c); // literal backslash
             }
@@ -555,10 +560,10 @@ pub fn execute_command_string(app: &mut AppState, cmd: &str) -> io::Result<()> {
             } else {
                 return Ok(());
             };
-            // Zoom-aware directional navigation (tmux parity):
-            // If zoomed, check if there's a *direct* neighbor (no wrapping).
+            // Zoom-aware directional navigation (tmux parity #134):
+            // If zoomed, check if there's a direct neighbor OR a wrap target.
             // If yes: cancel zoom and navigate to it.
-            // If no: no-op — stay zoomed on the current pane.
+            // If no (single-pane window): no-op — stay zoomed.
             if app.zoom_saved.is_some() {
                 // Temporarily unzoom to compute real geometry
                 let saved = app.zoom_saved.take();
@@ -573,19 +578,22 @@ pub fn execute_command_string(app: &mut AppState, cmd: &str) -> io::Result<()> {
                     }
                 }
                 crate::tree::resize_all_panes(app);
-                // Find direct neighbor (no wrapping)
+                // Find direct neighbor or wrap target (tmux parity #134)
                 let win = &app.windows[app.active_idx];
                 let mut rects: Vec<(Vec<usize>, ratatui::layout::Rect)> = Vec::new();
                 crate::tree::compute_rects(&win.root, app.last_window_area, &mut rects);
                 let active_idx = rects.iter().position(|(path, _)| *path == win.active_path);
-                let has_neighbor = if let Some(ai) = active_idx {
+                let has_target = if let Some(ai) = active_idx {
                     let (_, arect) = &rects[ai];
                     crate::input::find_best_pane_in_direction(&rects, ai, arect, dir, &[], &[])
+                        .or_else(|| {
+                            crate::input::find_wrap_target(&rects, ai, arect, dir, &[], &[])
+                        })
                         .is_some()
                 } else {
                     false
                 };
-                if has_neighbor {
+                if has_target {
                     // Cancel zoom (already unzoomed) and navigate
                     switch_with_copy_save(app, |app| {
                         let win = &app.windows[app.active_idx];
@@ -593,7 +601,7 @@ pub fn execute_command_string(app: &mut AppState, cmd: &str) -> io::Result<()> {
                         crate::input::move_focus(app, dir);
                     });
                 } else {
-                    // No neighbor — re-zoom (restore saved zoom state)
+                    // No target (single-pane) — re-zoom (restore saved zoom state)
                     if let Some(s) = saved {
                         let win = &mut app.windows[app.active_idx];
                         for (p, sz) in s.iter() {

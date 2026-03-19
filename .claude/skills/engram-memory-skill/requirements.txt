@@ -1,0 +1,10 @@
+# Core (zero external deps beyond yaml)
+pyyaml==6.0.2
+
+# Optional: Semantic search (BM25 works without these)
+numpy==2.2.1
+onnxruntime==1.22.0
+tokenizers==0.21.1
+
+# Optional: Redis graph backend (uncomment as needed)
+# redis==5.0.0         # For RedisGraph / FalkorDB graph store

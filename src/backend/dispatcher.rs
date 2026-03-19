@@ -87,7 +87,12 @@ fn handle_spawn_agent(
     let split_direction = match p.split_direction.as_deref() {
         Some("horizontal") => Some(crate::types::LayoutKind::Horizontal),
         Some("vertical") => Some(crate::types::LayoutKind::Vertical),
-        Some(_) => return Err((-32602, "split_direction must be \"horizontal\" or \"vertical\"".into())),
+        Some(_) => {
+            return Err((
+                -32602,
+                "split_direction must be \"horizontal\" or \"vertical\"".into(),
+            ))
+        }
         None => None,
     };
 

@@ -1,0 +1,13 @@
+{
+  "hooks": [
+    {
+      "matcher": "Stop",
+      "hooks": [
+        {
+          "type": "command",
+          "command": "bash \"${CLAUDE_PLUGIN_ROOT}/scripts/python.sh\" \"${CLAUDE_PLUGIN_ROOT}/hooks/stop_hook.py\""
+        }
+      ]
+    }
+  ]
+}

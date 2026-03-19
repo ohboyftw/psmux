@@ -1,0 +1,5 @@
+[
+  {"name": "capitals", "prompt": "What are the capitals of France, Japan, and Brazil? One per line, just city names."},
+  {"name": "math", "prompt": "What is 17 * 23? Reply with just the number."},
+  {"name": "code", "prompt": "Write a one-line Python function that checks if a number is prime. Just the code, no explanation."}
+]

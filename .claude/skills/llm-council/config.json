@@ -1,0 +1,37 @@
+{
+  "council": {
+    "members": [
+      {"source_id": "claude",   "provider": "anthropic", "model": "claude-sonnet-4-20250514", "weight": 1.0},
+      {"source_id": "gpt-53",   "provider": "openai",    "model": "gpt-5.2-codex",            "weight": 0.9},
+      {"source_id": "gemini",   "provider": "google",     "model": "gemini-2.0-flash",         "weight": 0.85},
+      {"source_id": "minimax",  "provider": "minimax",    "model": "MiniMax-M2.1",             "weight": 0.8},
+      {"source_id": "kimi-k25", "provider": "moonshot",   "model": "kimi-k2.5",               "weight": 0.8}
+    ],
+    "synthesizer": {
+      "source_id": "synthesizer",
+      "provider": "anthropic",
+      "model": "claude-sonnet-4-20250514"
+    }
+  },
+  "coderabbit": {
+    "api_url": "https://api.coderabbit.ai/v1/reviews",
+    "cache_dir": "eval_data/coderabbit_captures"
+  },
+  "provider_endpoints": {
+    "minimax": {
+      "base_url": "https://api.minimax.io/v1",
+      "env_key": "MINIMAX_API_KEY",
+      "notes": "OpenAI-compatible. Models: MiniMax-M1-40k, MiniMax-M1-80k, MiniMax-M2.1"
+    },
+    "moonshot": {
+      "base_url": "https://api.moonshot.ai/v1",
+      "env_key": "MOONSHOT_API_KEY",
+      "notes": "OpenAI-compatible. Models: kimi-k2.5 (instant: temp=0.6, thinking: temp=1.0)"
+    },
+    "openrouter": {
+      "base_url": "https://openrouter.ai/api/v1",
+      "env_key": "OPENROUTER_API_KEY",
+      "notes": "Universal fallback. Models: minimax/minimax-m1, moonshotai/kimi-k2.5, etc."
+    }
+  }
+}

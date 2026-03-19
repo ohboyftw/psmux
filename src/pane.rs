@@ -131,6 +131,7 @@ pub fn create_window(
             vti_mode_cache: None,
             mouse_input_cache: None,
             cursor_shape: wp.cursor_shape,
+            bell_pending: wp.bell_pending,
             copy_state: None,
             pane_style: None,
             metadata: std::collections::HashMap::new(),
@@ -173,10 +174,12 @@ pub fn create_window(
 
     // When no explicit command is given, use the configured default-shell
     // (from `set -g default-shell` / `default-command`).
+    // Expand format variables like #{pane_current_path} at spawn time (#111).
+    let expanded_shell = crate::format::expand_format(&app.default_shell, app);
     let mut shell_cmd = if command.is_some() {
         build_command(command, app.env_shim)
-    } else if !app.default_shell.is_empty() {
-        build_default_shell(&app.default_shell, app.env_shim)
+    } else if !expanded_shell.is_empty() {
+        build_default_shell(&expanded_shell, app.env_shim)
     } else {
         build_command(None, app.env_shim)
     };
@@ -215,12 +218,21 @@ pub fn create_window(
     let lot_writer = last_output_time.clone();
     let cursor_shape = std::sync::Arc::new(std::sync::atomic::AtomicU8::new(CURSOR_SHAPE_UNSET));
     let cs_writer = cursor_shape.clone();
+    let bell_pending = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let bell_writer = bell_pending.clone();
     let reader = pair
         .master
         .try_clone_reader()
         .map_err(|e| io::Error::other(format!("clone reader error: {e}")))?;
 
-    spawn_reader_thread(reader, term_reader, dv_writer, cs_writer, Some(lot_writer));
+    spawn_reader_thread(
+        reader,
+        term_reader,
+        dv_writer,
+        cs_writer,
+        Some(lot_writer),
+        bell_writer,
+    );
 
     let configured_shell = if app.default_shell.is_empty() {
         None
@@ -254,6 +266,7 @@ pub fn create_window(
         vti_mode_cache: None,
         mouse_input_cache: None,
         cursor_shape,
+        bell_pending,
         copy_state: None,
         pane_style: None,
         metadata: std::collections::HashMap::new(),
@@ -303,8 +316,10 @@ pub fn spawn_warm_pane(
     let pair = pty_system
         .openpty(size)
         .map_err(|e| io::Error::other(format!("openpty error: {e}")))?;
-    let mut shell_cmd = if !app.default_shell.is_empty() {
-        build_default_shell(&app.default_shell, app.env_shim)
+    // Expand format variables like #{pane_current_path} at spawn time (#111).
+    let expanded_shell = crate::format::expand_format(&app.default_shell, app);
+    let mut shell_cmd = if !expanded_shell.is_empty() {
+        build_default_shell(&expanded_shell, app.env_shim)
     } else {
         build_command(None, app.env_shim)
     };
@@ -335,13 +350,15 @@ pub fn spawn_warm_pane(
     let dv_writer = data_version.clone();
     let cursor_shape = std::sync::Arc::new(std::sync::atomic::AtomicU8::new(CURSOR_SHAPE_UNSET));
     let cs_writer = cursor_shape.clone();
+    let bell_pending = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let bell_writer = bell_pending.clone();
     let reader = pair
         .master
         .try_clone_reader()
         .map_err(|e| io::Error::other(format!("clone reader error: {e}")))?;
     // Warm panes don't need last_output_time tracking — they get a fresh Arc
     // when adopted into a Pane struct.
-    spawn_reader_thread(reader, term_reader, dv_writer, cs_writer, None);
+    spawn_reader_thread(reader, term_reader, dv_writer, cs_writer, None, bell_writer);
     let child_pid = crate::platform::mouse_inject::get_child_pid(&*child);
     let mut pty_writer = pair
         .master
@@ -355,6 +372,7 @@ pub fn spawn_warm_pane(
         term,
         data_version,
         cursor_shape,
+        bell_pending,
         child_pid,
         pane_id,
         rows,
@@ -413,12 +431,21 @@ pub fn create_window_raw(
     let lot_writer = last_output_time.clone();
     let cursor_shape = std::sync::Arc::new(std::sync::atomic::AtomicU8::new(CURSOR_SHAPE_UNSET));
     let cs_writer = cursor_shape.clone();
+    let bell_pending = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let bell_writer = bell_pending.clone();
     let reader = pair
         .master
         .try_clone_reader()
         .map_err(|e| io::Error::other(format!("clone reader error: {e}")))?;
 
-    spawn_reader_thread(reader, term_reader, dv_writer, cs_writer, Some(lot_writer));
+    spawn_reader_thread(
+        reader,
+        term_reader,
+        dv_writer,
+        cs_writer,
+        Some(lot_writer),
+        bell_writer,
+    );
 
     let child_pid = crate::platform::mouse_inject::get_child_pid(&*child);
     let mut pty_writer = pair
@@ -447,6 +474,7 @@ pub fn create_window_raw(
         vti_mode_cache: None,
         mouse_input_cache: None,
         cursor_shape,
+        bell_pending,
         copy_state: None,
         pane_style: None,
         metadata: std::collections::HashMap::new(),
@@ -608,6 +636,7 @@ pub fn split_active_with_command(
             vti_mode_cache: None,
             mouse_input_cache: None,
             cursor_shape: wp.cursor_shape,
+            bell_pending: wp.bell_pending,
             copy_state: None,
             pane_style: None,
             metadata: std::collections::HashMap::new(),
@@ -628,10 +657,12 @@ pub fn split_active_with_command(
         .openpty(size)
         .map_err(|e| io::Error::other(format!("openpty error: {e}")))?;
     // When no explicit command is given, use the configured default-shell.
+    // Expand format variables like #{pane_current_path} at spawn time (#111).
+    let expanded_shell = crate::format::expand_format(&app.default_shell, app);
     let mut shell_cmd = if command.is_some() {
         build_command(command, app.env_shim)
-    } else if !app.default_shell.is_empty() {
-        build_default_shell(&app.default_shell, app.env_shim)
+    } else if !expanded_shell.is_empty() {
+        build_default_shell(&expanded_shell, app.env_shim)
     } else {
         build_command(None, app.env_shim)
     };
@@ -670,7 +701,16 @@ pub fn split_active_with_command(
     let lot_writer = last_output_time.clone();
     let cursor_shape = std::sync::Arc::new(std::sync::atomic::AtomicU8::new(CURSOR_SHAPE_UNSET));
     let cs_writer = cursor_shape.clone();
-    spawn_reader_thread(reader, term_reader, dv_writer, cs_writer, Some(lot_writer));
+    let bell_pending = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let bell_writer = bell_pending.clone();
+    spawn_reader_thread(
+        reader,
+        term_reader,
+        dv_writer,
+        cs_writer,
+        Some(lot_writer),
+        bell_writer,
+    );
     let child_pid = crate::platform::mouse_inject::get_child_pid(&*child);
     let mut pty_writer = pair
         .master
@@ -698,6 +738,7 @@ pub fn split_active_with_command(
         vti_mode_cache: None,
         mouse_input_cache: None,
         cursor_shape,
+        bell_pending,
         copy_state: None,
         pane_style: None,
         metadata: std::collections::HashMap::new(),
@@ -1276,6 +1317,7 @@ pub fn spawn_reader_thread(
     dv_writer: Arc<std::sync::atomic::AtomicU64>,
     cursor_shape: Arc<std::sync::atomic::AtomicU8>,
     last_output_time: Option<Arc<std::sync::atomic::AtomicU64>>,
+    bell_pending: Arc<std::sync::atomic::AtomicBool>,
 ) {
     thread::spawn(move || {
         // 64KB buffer: captures most full-screen TUI paints in a single
@@ -1290,6 +1332,11 @@ pub fn spawn_reader_thread(
                     // Scan for DECSCUSR cursor shape before vt100 parser consumes data.
                     if let Some(shape) = scan_cursor_shape(&local[..n]) {
                         cursor_shape.store(shape, std::sync::atomic::Ordering::Release);
+                    }
+                    // Scan for BEL character (0x07) — sets bell_pending for the server
+                    // to pick up and translate into the window's bell_flag.
+                    if local[..n].contains(&0x07) {
+                        bell_pending.store(true, std::sync::atomic::Ordering::Release);
                     }
                     let rmcup = scan_rmcup(&local[..n]);
                     if let Ok(mut parser) = term_reader.lock() {

@@ -1,0 +1,19 @@
+{
+  "mcpServers": {
+    "beacon": {
+      "command": "C:\\Users\\aravi\\anaconda3\\python.exe",
+      "args": [
+        "D:\\Home\\claudeSkills\\repo\\beacon\\mcp_server.py"
+      ],
+      "env": {
+        "BEACON_PROJECT_ROOT": "D:\\Home\\psmux"
+      }
+    },
+    "llm-council": {
+      "command": "C:\\Users\\aravi\\anaconda3\\python.exe",
+      "args": [
+        "D:\\Home\\claudeSkills\\repo\\llm-council\\mcp_server.py"
+      ]
+    }
+  }
+}

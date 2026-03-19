@@ -40,24 +40,39 @@ pub struct AgentMetadata {
 impl AgentMetadata {
     /// Write this metadata into a pane's `HashMap<String, String>`.
     pub fn apply_to(&self, map: &mut std::collections::HashMap<String, String>) {
-        if let Some(ref v) = self.name { map.insert("@agent".into(), v.clone()); }
-        if let Some(ref v) = self.role { map.insert("@role".into(), v.clone()); }
-        if let Some(ref v) = self.color { map.insert("@color".into(), v.clone()); }
-        if let Some(ref v) = self.effort { map.insert("@effort".into(), v.clone()); }
-        if let Some(v) = self.max_turns { map.insert("@max_turns".into(), v.to_string()); }
-        if let Some(ref v) = self.disallowed_tools { map.insert("@disallowed_tools".into(), v.join(",")); }
+        if let Some(ref v) = self.name {
+            map.insert("@agent".into(), v.clone());
+        }
+        if let Some(ref v) = self.role {
+            map.insert("@role".into(), v.clone());
+        }
+        if let Some(ref v) = self.color {
+            map.insert("@color".into(), v.clone());
+        }
+        if let Some(ref v) = self.effort {
+            map.insert("@effort".into(), v.clone());
+        }
+        if let Some(v) = self.max_turns {
+            map.insert("@max_turns".into(), v.to_string());
+        }
+        if let Some(ref v) = self.disallowed_tools {
+            map.insert("@disallowed_tools".into(), v.join(","));
+        }
     }
 
     /// Reconstruct from a pane's metadata map.  Returns `None` if the map is empty.
     pub fn from_metadata_map(map: &std::collections::HashMap<String, String>) -> Option<Self> {
-        if map.is_empty() { return None; }
+        if map.is_empty() {
+            return None;
+        }
         Some(Self {
             name: map.get("@agent").cloned(),
             color: map.get("@color").cloned(),
             role: map.get("@role").cloned(),
             effort: map.get("@effort").cloned(),
             max_turns: map.get("@max_turns").and_then(|v| v.parse().ok()),
-            disallowed_tools: map.get("@disallowed_tools")
+            disallowed_tools: map
+                .get("@disallowed_tools")
                 .map(|v| v.split(',').map(String::from).collect()),
         })
     }

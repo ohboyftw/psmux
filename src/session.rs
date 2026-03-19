@@ -109,9 +109,15 @@ pub fn cleanup_stale_port_files() {
                         .is_err()
                         {
                             let _ = std::fs::remove_file(&path);
+                            // Also remove the matching .key file to prevent
+                            // orphaned keys from accumulating (issue #136).
+                            let key_path = path.with_extension("key");
+                            let _ = std::fs::remove_file(&key_path);
                         }
                     } else {
                         let _ = std::fs::remove_file(&path);
+                        let key_path = path.with_extension("key");
+                        let _ = std::fs::remove_file(&key_path);
                     }
                 }
             }

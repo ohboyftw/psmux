@@ -47,9 +47,9 @@ tmux -V
 echo $CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS
 # Should be: 1
 
-# 4. Is teammate mode set?
-echo $PSMUX_CLAUDE_TEAMMATE_MODE
-# Should be: tmux (when claude-code-fix-tty is on)
+# 4. Is $TMUX detected by Claude Code?
+# Claude Code reads teammateMode from its own settings.json
+# and auto-detects $TMUX — no psmux injection needed
 ```
 
 ## Fix: $TMUX Not Set

@@ -230,6 +230,9 @@ pub fn read_from_system_clipboard() -> Option<String> {
             let text = String::from_utf16_lossy(slice);
             GlobalUnlock(hmem);
             let _ = CloseClipboard();
+            // Normalize Windows CRLF to LF — ConPTY expands LF to CRLF on
+            // output, so keeping \r\n produces double-spaced text.
+            let text = text.replace("\r\n", "\n");
             Some(text)
         };
         return result;

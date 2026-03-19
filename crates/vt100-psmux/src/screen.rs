@@ -5,16 +5,10 @@ use unicode_width::UnicodeWidthChar as _;
 /// Accepts `file://hostname/path`, `file:///path`, or a bare `/path`.
 /// Percent-decodes the path component.
 fn parse_osc7_uri(raw: &str) -> String {
-    let stripped = if let Some(rest) = raw.strip_prefix("file://") {
+    let stripped = raw.strip_prefix("file://").map_or(raw, |rest| {
         // Skip hostname: everything up to the next '/'
-        if let Some(slash) = rest.find('/') {
-            &rest[slash..]
-        } else {
-            rest
-        }
-    } else {
-        raw
-    };
+        rest.find('/').map_or(rest, |slash| &rest[slash..])
+    });
     percent_decode(stripped)
 }
 
@@ -25,10 +19,7 @@ fn percent_decode(input: &str) -> String {
     let mut i = 0;
     while i < bytes.len() {
         if bytes[i] == b'%' && i + 2 < bytes.len() {
-            if let (Some(hi), Some(lo)) = (
-                hex_val(bytes[i + 1]),
-                hex_val(bytes[i + 2]),
-            ) {
+            if let (Some(hi), Some(lo)) = (hex_val(bytes[i + 1]), hex_val(bytes[i + 2])) {
                 out.push(char::from(hi << 4 | lo));
                 i += 3;
                 continue;
@@ -111,16 +102,16 @@ pub struct Screen {
     mouse_protocol_mode: MouseProtocolMode,
     mouse_protocol_encoding: MouseProtocolEncoding,
 
+    /// Window title set by the application via OSC 0 or OSC 2.
+    osc_title: String,
+
     /// Path announced by the shell via OSC 7 (`\e]7;file://host/path\a`).
     /// Used as a fallback for CWD when PEB walking fails (SSH, WSL).
     osc7_path: Option<String>,
 }
 
 impl Screen {
-    pub(crate) fn new(
-        size: crate::grid::Size,
-        scrollback_len: usize,
-    ) -> Self {
+    pub(crate) fn new(size: crate::grid::Size, scrollback_len: usize) -> Self {
         let mut grid = crate::grid::Grid::new(size, scrollback_len);
         grid.allocate_rows();
         Self {
@@ -133,6 +124,7 @@ impl Screen {
             modes: 0,
             mouse_protocol_mode: MouseProtocolMode::default(),
             mouse_protocol_encoding: MouseProtocolEncoding::default(),
+            osc_title: String::new(),
             osc7_path: None,
         }
     }
@@ -198,11 +190,7 @@ impl Screen {
     /// text format.
     ///
     /// Newlines will not be included.
-    pub fn rows(
-        &self,
-        start: u16,
-        width: u16,
-    ) -> impl Iterator<Item = String> + '_ {
+    pub fn rows(&self, start: u16, width: u16) -> impl Iterator<Item = String> + '_ {
         self.grid().visible_rows().map(move |row| {
             let mut contents = String::new();
             row.write_contents(&mut contents, start, width, false);
@@ -236,12 +224,7 @@ impl Screen {
                     .take(usize::from(end_row) - usize::from(start_row) + 1)
                 {
                     if i == usize::from(start_row) {
-                        row.write_contents(
-                            &mut contents,
-                            start_col,
-                            cols - start_col,
-                            false,
-                        );
+                        row.write_contents(&mut contents, start_col, cols - start_col, false);
                         if !row.wrapped() {
                             contents.push('\n');
                         }
@@ -323,26 +306,14 @@ impl Screen {
     /// unspecified.
     // the unwraps in this method shouldn't be reachable
     #[allow(clippy::missing_panics_doc)]
-    pub fn rows_formatted(
-        &self,
-        start: u16,
-        width: u16,
-    ) -> impl Iterator<Item = Vec<u8>> + '_ {
+    pub fn rows_formatted(&self, start: u16, width: u16) -> impl Iterator<Item = Vec<u8>> + '_ {
         let mut wrapping = false;
         self.grid().visible_rows().enumerate().map(move |(i, row)| {
             // number of rows in a grid is stored in a u16 (see Size), so
             // visible_rows can never return enough rows to overflow here
             let i = i.try_into().unwrap();
             let mut contents = vec![];
-            row.write_contents_formatted(
-                &mut contents,
-                start,
-                width,
-                i,
-                wrapping,
-                None,
-                None,
-            );
+            row.write_contents_formatted(&mut contents, start, width, i, wrapping, None, None);
             if start == 0 && width == self.grid.size().cols {
                 wrapping = row.wrapped();
             }
@@ -369,14 +340,11 @@ impl Screen {
 
     fn write_contents_diff(&self, contents: &mut Vec<u8>, prev: &Self) {
         if self.hide_cursor() != prev.hide_cursor() {
-            crate::term::HideCursor::new(self.hide_cursor())
-                .write_buf(contents);
+            crate::term::HideCursor::new(self.hide_cursor()).write_buf(contents);
         }
-        let prev_attrs = self.grid().write_contents_diff(
-            contents,
-            prev.grid(),
-            prev.attrs,
-        );
+        let prev_attrs = self
+            .grid()
+            .write_contents_diff(contents, prev.grid(), prev.attrs);
         self.attrs.write_escape_code_diff(contents, &prev_attrs);
     }
 
@@ -436,21 +404,11 @@ impl Screen {
     }
 
     fn write_input_mode_formatted(&self, contents: &mut Vec<u8>) {
-        crate::term::ApplicationKeypad::new(
-            self.mode(MODE_APPLICATION_KEYPAD),
-        )
-        .write_buf(contents);
-        crate::term::ApplicationCursor::new(
-            self.mode(MODE_APPLICATION_CURSOR),
-        )
-        .write_buf(contents);
-        crate::term::BracketedPaste::new(self.mode(MODE_BRACKETED_PASTE))
+        crate::term::ApplicationKeypad::new(self.mode(MODE_APPLICATION_KEYPAD)).write_buf(contents);
+        crate::term::ApplicationCursor::new(self.mode(MODE_APPLICATION_CURSOR)).write_buf(contents);
+        crate::term::BracketedPaste::new(self.mode(MODE_BRACKETED_PASTE)).write_buf(contents);
+        crate::term::MouseProtocolMode::new(self.mouse_protocol_mode, MouseProtocolMode::None)
             .write_buf(contents);
-        crate::term::MouseProtocolMode::new(
-            self.mouse_protocol_mode,
-            MouseProtocolMode::None,
-        )
-        .write_buf(contents);
         crate::term::MouseProtocolEncoding::new(
             self.mouse_protocol_encoding,
             MouseProtocolEncoding::Default,
@@ -469,32 +427,19 @@ impl Screen {
     }
 
     fn write_input_mode_diff(&self, contents: &mut Vec<u8>, prev: &Self) {
-        if self.mode(MODE_APPLICATION_KEYPAD)
-            != prev.mode(MODE_APPLICATION_KEYPAD)
-        {
-            crate::term::ApplicationKeypad::new(
-                self.mode(MODE_APPLICATION_KEYPAD),
-            )
-            .write_buf(contents);
-        }
-        if self.mode(MODE_APPLICATION_CURSOR)
-            != prev.mode(MODE_APPLICATION_CURSOR)
-        {
-            crate::term::ApplicationCursor::new(
-                self.mode(MODE_APPLICATION_CURSOR),
-            )
-            .write_buf(contents);
-        }
-        if self.mode(MODE_BRACKETED_PASTE) != prev.mode(MODE_BRACKETED_PASTE)
-        {
-            crate::term::BracketedPaste::new(self.mode(MODE_BRACKETED_PASTE))
+        if self.mode(MODE_APPLICATION_KEYPAD) != prev.mode(MODE_APPLICATION_KEYPAD) {
+            crate::term::ApplicationKeypad::new(self.mode(MODE_APPLICATION_KEYPAD))
                 .write_buf(contents);
         }
-        crate::term::MouseProtocolMode::new(
-            self.mouse_protocol_mode,
-            prev.mouse_protocol_mode,
-        )
-        .write_buf(contents);
+        if self.mode(MODE_APPLICATION_CURSOR) != prev.mode(MODE_APPLICATION_CURSOR) {
+            crate::term::ApplicationCursor::new(self.mode(MODE_APPLICATION_CURSOR))
+                .write_buf(contents);
+        }
+        if self.mode(MODE_BRACKETED_PASTE) != prev.mode(MODE_BRACKETED_PASTE) {
+            crate::term::BracketedPaste::new(self.mode(MODE_BRACKETED_PASTE)).write_buf(contents);
+        }
+        crate::term::MouseProtocolMode::new(self.mouse_protocol_mode, prev.mouse_protocol_mode)
+            .write_buf(contents);
         crate::term::MouseProtocolEncoding::new(
             self.mouse_protocol_encoding,
             prev.mouse_protocol_encoding,
@@ -529,10 +474,8 @@ impl Screen {
 
     fn write_attributes_formatted(&self, contents: &mut Vec<u8>) {
         crate::term::ClearAttrs.write_buf(contents);
-        self.attrs.write_escape_code_diff(
-            contents,
-            &crate::attrs::Attrs::default(),
-        );
+        self.attrs
+            .write_escape_code_diff(contents, &crate::attrs::Attrs::default());
     }
 
     /// Returns the current cursor position of the terminal.
@@ -636,6 +579,19 @@ impl Screen {
     #[must_use]
     pub fn mouse_protocol_encoding(&self) -> MouseProtocolEncoding {
         self.mouse_protocol_encoding
+    }
+
+    /// Returns the window title set via OSC 0 or OSC 2.
+    #[must_use]
+    pub fn title(&self) -> &str {
+        &self.osc_title
+    }
+
+    /// Store a window title set via OSC 0 or OSC 2.
+    pub fn set_title(&mut self, raw: &[u8]) {
+        if let Ok(s) = std::str::from_utf8(raw) {
+            self.osc_title = s.to_string();
+        }
     }
 
     /// Returns the path announced by the shell via OSC 7, if any.
@@ -892,38 +848,26 @@ impl Screen {
             // Use safe accessors to avoid panics on out-of-bounds.
             if let Some(cell_ref) = self.grid().drawing_cell(pos) {
                 if cell_ref.is_wide_continuation() {
-                    if let Some(prev_cell) = self
-                        .grid_mut()
-                        .drawing_cell_mut(crate::grid::Pos {
-                            row: pos.row,
-                            col: pos.col - 1,
-                        })
-                    {
+                    if let Some(prev_cell) = self.grid_mut().drawing_cell_mut(crate::grid::Pos {
+                        row: pos.row,
+                        col: pos.col - 1,
+                    }) {
                         prev_cell.clear(attrs);
                     }
                 }
             }
 
-            let is_wide_at_pos = self
-                .grid()
-                .drawing_cell(pos)
-                .map_or(false, |c| c.is_wide());
+            let is_wide_at_pos = self.grid().drawing_cell(pos).is_some_and(super::cell::Cell::is_wide);
             if is_wide_at_pos {
-                if let Some(next_cell) = self
-                    .grid_mut()
-                    .drawing_cell_mut(crate::grid::Pos {
-                        row: pos.row,
-                        col: pos.col + 1,
-                    })
-                {
+                if let Some(next_cell) = self.grid_mut().drawing_cell_mut(crate::grid::Pos {
+                    row: pos.row,
+                    col: pos.col + 1,
+                }) {
                     next_cell.set(' ', attrs);
                 }
             }
 
-            if let Some(cell) = self
-                .grid_mut()
-                .drawing_cell_mut(pos)
-            {
+            if let Some(cell) = self.grid_mut().drawing_cell_mut(pos) {
                 cell.set(c, attrs);
             } else {
                 return;
@@ -931,33 +875,22 @@ impl Screen {
             self.grid_mut().col_inc(1);
             if width > 1 {
                 let pos = self.grid().pos();
-                let is_wide_here = self
-                    .grid()
-                    .drawing_cell(pos)
-                    .map_or(false, |c| c.is_wide());
+                let is_wide_here = self.grid().drawing_cell(pos).is_some_and(super::cell::Cell::is_wide);
                 if is_wide_here {
                     let next_next_pos = crate::grid::Pos {
                         row: pos.row,
                         col: pos.col + 1,
                     };
-                    if let Some(next_next_cell) = self
-                        .grid_mut()
-                        .drawing_cell_mut(next_next_pos)
-                    {
+                    if let Some(next_next_cell) = self.grid_mut().drawing_cell_mut(next_next_pos) {
                         next_next_cell.clear(attrs);
                         if next_next_pos.col == size.cols - 1 {
-                            if let Some(row) = self.grid_mut()
-                                .drawing_row_mut(pos.row)
-                            {
+                            if let Some(row) = self.grid_mut().drawing_row_mut(pos.row) {
                                 row.wrap(false);
                             }
                         }
                     }
                 }
-                if let Some(next_cell) = self
-                    .grid_mut()
-                    .drawing_cell_mut(pos)
-                {
+                if let Some(next_cell) = self.grid_mut().drawing_cell_mut(pos) {
                     next_cell.clear(crate::attrs::Attrs::default());
                     next_cell.set_wide_continuation(true);
                 }
@@ -1077,11 +1010,7 @@ impl Screen {
     }
 
     // CSI J
-    pub(crate) fn ed(
-        &mut self,
-        mode: u16,
-        mut unhandled: impl FnMut(&mut Self),
-    ) {
+    pub(crate) fn ed(&mut self, mode: u16, mut unhandled: impl FnMut(&mut Self)) {
         let attrs = self.attrs;
         match mode {
             0 => self.grid_mut().erase_all_forward(attrs),
@@ -1092,20 +1021,12 @@ impl Screen {
     }
 
     // CSI ? J
-    pub(crate) fn decsed(
-        &mut self,
-        mode: u16,
-        unhandled: impl FnMut(&mut Self),
-    ) {
+    pub(crate) fn decsed(&mut self, mode: u16, unhandled: impl FnMut(&mut Self)) {
         self.ed(mode, unhandled);
     }
 
     // CSI K
-    pub(crate) fn el(
-        &mut self,
-        mode: u16,
-        mut unhandled: impl FnMut(&mut Self),
-    ) {
+    pub(crate) fn el(&mut self, mode: u16, mut unhandled: impl FnMut(&mut Self)) {
         let attrs = self.attrs;
         match mode {
             0 => self.grid_mut().erase_row_forward(attrs),
@@ -1116,11 +1037,7 @@ impl Screen {
     }
 
     // CSI ? K
-    pub(crate) fn decsel(
-        &mut self,
-        mode: u16,
-        unhandled: impl FnMut(&mut Self),
-    ) {
+    pub(crate) fn decsel(&mut self, mode: u16, unhandled: impl FnMut(&mut Self)) {
         self.el(mode, unhandled);
     }
 
@@ -1161,11 +1078,7 @@ impl Screen {
     }
 
     // CSI ? h
-    pub(crate) fn decset(
-        &mut self,
-        params: &vte::Params,
-        mut unhandled: impl FnMut(&mut Self),
-    ) {
+    pub(crate) fn decset(&mut self, params: &vte::Params, mut unhandled: impl FnMut(&mut Self)) {
         for param in params {
             match param {
                 [1] => self.set_mode(MODE_APPLICATION_CURSOR),
@@ -1198,11 +1111,7 @@ impl Screen {
     }
 
     // CSI ? l
-    pub(crate) fn decrst(
-        &mut self,
-        params: &vte::Params,
-        mut unhandled: impl FnMut(&mut Self),
-    ) {
+    pub(crate) fn decrst(&mut self, params: &vte::Params, mut unhandled: impl FnMut(&mut Self)) {
         for param in params {
             match param {
                 [1] => self.clear_mode(MODE_APPLICATION_CURSOR),
@@ -1238,11 +1147,7 @@ impl Screen {
     }
 
     // CSI m
-    pub(crate) fn sgr(
-        &mut self,
-        params: &vte::Params,
-        mut unhandled: impl FnMut(&mut Self),
-    ) {
+    pub(crate) fn sgr(&mut self, params: &vte::Params, mut unhandled: impl FnMut(&mut Self)) {
         // XXX really i want to just be able to pass in a default Params
         // instance with a 0 in it, but vte doesn't allow creating new Params
         // instances
@@ -1289,7 +1194,7 @@ impl Screen {
                 [2] => self.attrs.set_dim(),
                 [3] => self.attrs.set_italic(true),
                 [4] => self.attrs.set_underline(true),
-                [5] | [6] => self.attrs.set_blink(true),
+                [5 | 6] => self.attrs.set_blink(true),
                 [7] => self.attrs.set_inverse(true),
                 [8] => self.attrs.set_hidden(true),
                 [9] => self.attrs.set_strikethrough(true),
@@ -1304,8 +1209,7 @@ impl Screen {
                     self.attrs.fgcolor = crate::Color::Idx(to_u8!(*n) - 30);
                 }
                 [38, 2, r, g, b] => {
-                    self.attrs.fgcolor =
-                        crate::Color::Rgb(to_u8!(*r), to_u8!(*g), to_u8!(*b));
+                    self.attrs.fgcolor = crate::Color::Rgb(to_u8!(*r), to_u8!(*g), to_u8!(*b));
                 }
                 [38, 5, i] => {
                     self.attrs.fgcolor = crate::Color::Idx(to_u8!(*i));
@@ -1318,8 +1222,7 @@ impl Screen {
                         self.attrs.fgcolor = crate::Color::Rgb(r, g, b);
                     }
                     [5] => {
-                        self.attrs.fgcolor =
-                            crate::Color::Idx(next_param_u8!());
+                        self.attrs.fgcolor = crate::Color::Idx(next_param_u8!());
                     }
                     _ => {
                         unhandled(self);
@@ -1333,8 +1236,7 @@ impl Screen {
                     self.attrs.bgcolor = crate::Color::Idx(to_u8!(*n) - 40);
                 }
                 [48, 2, r, g, b] => {
-                    self.attrs.bgcolor =
-                        crate::Color::Rgb(to_u8!(*r), to_u8!(*g), to_u8!(*b));
+                    self.attrs.bgcolor = crate::Color::Rgb(to_u8!(*r), to_u8!(*g), to_u8!(*b));
                 }
                 [48, 5, i] => {
                     self.attrs.bgcolor = crate::Color::Idx(to_u8!(*i));
@@ -1347,8 +1249,7 @@ impl Screen {
                         self.attrs.bgcolor = crate::Color::Rgb(r, g, b);
                     }
                     [5] => {
-                        self.attrs.bgcolor =
-                            crate::Color::Idx(next_param_u8!());
+                        self.attrs.bgcolor = crate::Color::Idx(next_param_u8!());
                     }
                     _ => {
                         unhandled(self);
@@ -1385,154 +1286,5 @@ fn u16_to_u8(i: u16) -> Option<u8> {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    // ── parse_osc7_uri tests ──────────────────────────────────
-
-    #[test]
-    fn osc7_full_uri_with_hostname() {
-        assert_eq!(parse_osc7_uri("file://myhost/home/user/project"), "/home/user/project");
-    }
-
-    #[test]
-    fn osc7_localhost() {
-        assert_eq!(parse_osc7_uri("file://localhost/home/user"), "/home/user");
-    }
-
-    #[test]
-    fn osc7_empty_hostname() {
-        assert_eq!(parse_osc7_uri("file:///home/user"), "/home/user");
-    }
-
-    #[test]
-    fn osc7_bare_path_no_scheme() {
-        assert_eq!(parse_osc7_uri("/home/user/code"), "/home/user/code");
-    }
-
-    #[test]
-    fn osc7_percent_encoded_spaces() {
-        assert_eq!(parse_osc7_uri("file:///home/user/my%20project"), "/home/user/my project");
-    }
-
-    #[test]
-    fn osc7_percent_encoded_special_chars() {
-        assert_eq!(parse_osc7_uri("file:///path/%23hash%25pct"), "/path/#hash%pct");
-    }
-
-    #[test]
-    fn osc7_windows_path_via_uri() {
-        // WezTerm-style: file://hostname/C:/Users/foo
-        assert_eq!(parse_osc7_uri("file://DESKTOP-ABC/C:/Users/foo"), "/C:/Users/foo");
-    }
-
-    #[test]
-    fn osc7_empty_string() {
-        assert_eq!(parse_osc7_uri(""), "");
-    }
-
-    #[test]
-    fn osc7_file_no_slash_after_host() {
-        // Malformed: file://hostname-only (no path)
-        assert_eq!(parse_osc7_uri("file://hostname-only"), "hostname-only");
-    }
-
-    // ── percent_decode tests ──────────────────────────────────
-
-    #[test]
-    fn decode_no_encoding() {
-        assert_eq!(percent_decode("/simple/path"), "/simple/path");
-    }
-
-    #[test]
-    fn decode_space() {
-        assert_eq!(percent_decode("/my%20path"), "/my path");
-    }
-
-    #[test]
-    fn decode_mixed_case_hex() {
-        assert_eq!(percent_decode("%2f%2F"), "//");
-    }
-
-    #[test]
-    fn decode_invalid_hex_passthrough() {
-        assert_eq!(percent_decode("%ZZ"), "%ZZ");
-    }
-
-    #[test]
-    fn decode_truncated_percent() {
-        assert_eq!(percent_decode("trail%2"), "trail%2");
-    }
-
-    // ── Screen::set_path / path() integration ─────────────────
-
-    #[test]
-    fn screen_path_initially_none() {
-        let s = Screen::new(crate::grid::Size { rows: 24, cols: 80 }, 0);
-        assert!(s.path().is_none());
-    }
-
-    #[test]
-    fn screen_set_path_from_osc7() {
-        let mut s = Screen::new(crate::grid::Size { rows: 24, cols: 80 }, 0);
-        s.set_path(b"file:///home/user/code");
-        assert_eq!(s.path(), Some("/home/user/code"));
-    }
-
-    #[test]
-    fn screen_set_path_overwrites() {
-        let mut s = Screen::new(crate::grid::Size { rows: 24, cols: 80 }, 0);
-        s.set_path(b"file:///first");
-        s.set_path(b"file:///second");
-        assert_eq!(s.path(), Some("/second"));
-    }
-
-    #[test]
-    fn screen_set_path_ignores_invalid_utf8() {
-        let mut s = Screen::new(crate::grid::Size { rows: 24, cols: 80 }, 0);
-        s.set_path(&[0xff, 0xfe, 0xfd]);
-        assert!(s.path().is_none());
-    }
-
-    // ── Full parser round-trip via VTE ─────────────────────────
-
-    #[test]
-    fn parser_osc7_roundtrip() {
-        let mut parser = crate::Parser::new(24, 80, 0);
-        // OSC 7 ; file:///tmp/test ST
-        parser.process(b"\x1b]7;file:///tmp/test\x1b\\");
-        assert_eq!(parser.screen().path(), Some("/tmp/test"));
-    }
-
-    #[test]
-    fn parser_osc7_bel_terminated() {
-        let mut parser = crate::Parser::new(24, 80, 0);
-        // OSC 7 ; file://host/path BEL
-        parser.process(b"\x1b]7;file://host/home/user\x07");
-        assert_eq!(parser.screen().path(), Some("/home/user"));
-    }
-
-    #[test]
-    fn parser_osc7_with_percent_encoding() {
-        let mut parser = crate::Parser::new(24, 80, 0);
-        parser.process(b"\x1b]7;file:///home/user/my%20project\x07");
-        assert_eq!(parser.screen().path(), Some("/home/user/my project"));
-    }
-
-    #[test]
-    fn parser_osc7_updates_on_cd() {
-        let mut parser = crate::Parser::new(24, 80, 0);
-        parser.process(b"\x1b]7;file:///first/dir\x07");
-        assert_eq!(parser.screen().path(), Some("/first/dir"));
-        parser.process(b"\x1b]7;file:///second/dir\x07");
-        assert_eq!(parser.screen().path(), Some("/second/dir"));
-    }
-
-    #[test]
-    fn parser_other_osc_does_not_affect_path() {
-        let mut parser = crate::Parser::new(24, 80, 0);
-        // OSC 0 (set title) should not touch path
-        parser.process(b"\x1b]0;my-title\x07");
-        assert!(parser.screen().path().is_none());
-    }
-}
+#[path = "../../../tests-rs/test_vt100_screen.rs"]
+mod tests;

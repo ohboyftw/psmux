@@ -29,16 +29,18 @@ autotests = false
 autobenches = false
 description = "Cross platform pty interface (psmux fork with ConPTY PASSTHROUGH_MODE + WIN32_INPUT_MODE + RESIZE_QUIRK patches)"
 documentation = "https://docs.rs/portable-pty"
-readme = false
+readme = "README.md"
+keywords = ["pty", "terminal", "conpty"]
+categories = ["os::windows-apis"]
 license = "MIT"
 repository = "https://github.com/psmux/portable-pty-patched"
 resolver = "2"
 
 [features]
 default = []
-serde_support = [
-    "serde",
-    "serde_derive",
+serde = [
+    "dep:serde",
+    "dep:serde_derive",
 ]
 
 [lib]

@@ -1,0 +1,7 @@
+# Core (no extra deps needed for BM25-only mode)
+pyyaml==6.0.2
+
+# Optional: enables semantic (dense vector) search via sentence-transformers
+# Uncomment if you want hybrid BM25+semantic retrieval:
+# numpy==2.2.1
+# sentence-transformers==2.2

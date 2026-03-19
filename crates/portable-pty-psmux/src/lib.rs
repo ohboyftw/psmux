@@ -41,7 +41,7 @@ use anyhow::Error;
 use downcast_rs::{impl_downcast, Downcast};
 #[cfg(unix)]
 use libc;
-#[cfg(feature = "serde_support")]
+#[cfg(feature = "serde")]
 use serde_derive::*;
 use std::io::Result as IoResult;
 #[cfg(windows)]
@@ -59,7 +59,7 @@ pub mod serial;
 
 /// Represents the size of the visible display area in the pty
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[cfg_attr(feature = "serde_support", derive(Serialize, Deserialize))]
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 pub struct PtySize {
     /// The number of lines of text
     pub rows: u16,
@@ -270,10 +270,7 @@ impl_downcast!(PtySystem);
 
 impl Child for std::process::Child {
     fn try_wait(&mut self) -> IoResult<Option<ExitStatus>> {
-        std::process::Child::try_wait(self).map(|s| match s {
-            Some(s) => Some(s.into()),
-            None => None,
-        })
+        std::process::Child::try_wait(self).map(|s| s.map(Into::into))
     }
 
     fn wait(&mut self) -> IoResult<ExitStatus> {

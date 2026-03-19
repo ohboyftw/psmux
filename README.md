@@ -145,7 +145,7 @@ No extra configuration needed. Full guide: **[docs/claude-code.md](docs/claude-c
 > **`ohboy-builds` branch** adds production-grade agent orchestration on top of the basic pane spawning available on `master`:
 >
 > - **New commands:** `wait-pane` (block until agent exits), `capture-pane --clean` (strip shell noise), `--json` output for programmatic queries, `psmux run` (one-shot pane execution)
-> - **Claude Code compatibility:** Tested against Claude Code's latest `TeammateTool` and `TmuxBackend` — handles `CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS`, `--teammate-mode tmux` injection, and the Opus worktree-vs-teammate routing documented in [docs/claude-code.md](docs/claude-code.md)
+> - **Claude Code compatibility:** Tested against Claude Code's `TeammateTool` and `TmuxBackend` — auto-detected via `$TMUX` env var. See [docs/claude-code.md](docs/claude-code.md) for details
 > - **Launcher script:** [`scripts/Start-ClaudeTeams.ps1`](scripts/Start-ClaudeTeams.ps1) — one-command setup that creates a psmux session, sets `$TMUX`, and launches Claude Code with agent teams enabled
 > - **Pi agent dispatch:** [`pi-dispatch.ps1`](.claude/scripts/pi-dispatch.ps1) spawns a [Pi](https://github.com/microsoft/pi) coding agent in a psmux pane, polls for completion, and captures clean output. [`pi-bridge.ps1`](.claude/skills/pi-dispatch/scripts/pi-bridge.ps1) integrates Pi results back into Claude Code's TeammateTool inbox for multi-model swarm orchestration.
 >

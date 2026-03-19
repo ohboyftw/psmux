@@ -1,0 +1,61 @@
+---
+title: "ADR-{{NUMBER}}: {{DECISION_TITLE}}"
+status: draft
+owner: "{{OWNER}}"
+last_verified: "{{DATE}}"
+created: "{{DATE}}"
+tags: [adr, design-decision, {{DOMAIN_TAG}}]
+cross_links: []
+---
+
+# ADR-{{NUMBER}}: {{DECISION_TITLE}}
+
+## Status
+
+{{Proposed | Accepted | Deprecated | Superseded by ADR-X}}
+
+## Context
+
+{{What is the issue? What forces are at play? What constraints exist?
+Be specific — include numbers, deadlines, dependencies.}}
+
+## Decision
+
+{{What is the change that we're proposing and/or doing?
+State it clearly in 1-3 sentences.}}
+
+## Rationale
+
+{{Why this option over the alternatives? What trade-offs did we accept?}}
+
+## Alternatives Considered
+
+### Option A: {{Name}}
+
+- **Pros:** {{list}}
+- **Cons:** {{list}}
+- **Why not:** {{reason}}
+
+### Option B: {{Name}}
+
+- **Pros:** {{list}}
+- **Cons:** {{list}}
+- **Why not:** {{reason}}
+
+## Consequences
+
+**Positive:**
+- {{benefit 1}}
+- {{benefit 2}}
+
+**Negative:**
+- {{cost or risk 1}}
+- {{mitigation}}
+
+**Neutral:**
+- {{side effect that's neither good nor bad}}
+
+## Follow-up Actions
+
+- [ ] {{Action 1}}
+- [ ] {{Action 2}}

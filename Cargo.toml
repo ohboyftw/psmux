@@ -8,10 +8,14 @@ repository = "https://github.com/psmux/psmux"
 readme = "README.md"
 keywords = ["terminal", "multiplexer", "tmux", "windows", "powershell"]
 categories = ["command-line-utilities"]
+
+[workspace]
+members = [".", "crates/portable-pty-psmux", "crates/vt100-psmux"]
 exclude = [
     "target/",
     "release/",
     "tests/",
+    "tests-rs/",
     "packages/",
     "psmux-windows-x86_64/",
     ".github/",
@@ -20,6 +24,11 @@ exclude = [
     "examples/",
     "*.txt",
 ]
+
+# Disable auto-discovery of integration tests from tests/ directory
+[[test]]
+name = "test_vt100_mouse"
+path = "tests-rs/test_vt100_mouse.rs"
 
 # Windows only
 [target.'cfg(not(windows))'.dependencies]
