@@ -1201,7 +1201,6 @@ pub fn respawn_active_pane(
         app.control_port,
         app.socket_name.as_deref(),
         &app.session_name,
-        app.claude_code_fix_tty,
         app.claude_code_force_interactive,
     );
     crate::pane::apply_user_environment(&mut shell_cmd, &app.environment);
@@ -1224,12 +1223,14 @@ pub fn respawn_active_pane(
 
     let data_version = std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0));
     let dv_writer = data_version.clone();
+    let last_output_time = std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0));
+    let lot_writer = last_output_time.clone();
     let cursor_shape = std::sync::Arc::new(std::sync::atomic::AtomicU8::new(
         crate::pane::CURSOR_SHAPE_UNSET,
     ));
     let cs_writer = cursor_shape.clone();
 
-    crate::pane::spawn_reader_thread(reader, term_reader, dv_writer, cs_writer);
+    crate::pane::spawn_reader_thread(reader, term_reader, dv_writer, cs_writer, Some(lot_writer));
 
     let mut pty_writer = pair
         .master
@@ -1242,6 +1243,7 @@ pub fn respawn_active_pane(
     pane.child = child;
     pane.term = term;
     pane.data_version = data_version;
+    pane.last_output_time = last_output_time;
     pane.cursor_shape = cursor_shape;
     pane.child_pid = None;
     pane.vt_bridge_cache = None;

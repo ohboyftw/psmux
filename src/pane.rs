@@ -123,6 +123,7 @@ pub fn create_window(
             title: format!("pane %{}", wp.pane_id),
             child_pid: wp.child_pid,
             data_version: wp.data_version,
+            last_output_time: std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0)),
             last_title_check: epoch,
             last_infer_title: epoch,
             dead: false,
@@ -210,6 +211,8 @@ pub fn create_window(
     let term_reader = term.clone();
     let data_version = std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0));
     let dv_writer = data_version.clone();
+    let last_output_time = std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0));
+    let lot_writer = last_output_time.clone();
     let cursor_shape = std::sync::Arc::new(std::sync::atomic::AtomicU8::new(CURSOR_SHAPE_UNSET));
     let cs_writer = cursor_shape.clone();
     let reader = pair
@@ -217,7 +220,7 @@ pub fn create_window(
         .try_clone_reader()
         .map_err(|e| io::Error::other(format!("clone reader error: {e}")))?;
 
-    spawn_reader_thread(reader, term_reader, dv_writer, cs_writer);
+    spawn_reader_thread(reader, term_reader, dv_writer, cs_writer, Some(lot_writer));
 
     let configured_shell = if app.default_shell.is_empty() {
         None
@@ -243,6 +246,7 @@ pub fn create_window(
         title: format!("pane %{}", pane_id),
         child_pid,
         data_version,
+        last_output_time,
         last_title_check: epoch,
         last_infer_title: epoch,
         dead: false,
@@ -335,7 +339,9 @@ pub fn spawn_warm_pane(
         .master
         .try_clone_reader()
         .map_err(|e| io::Error::other(format!("clone reader error: {e}")))?;
-    spawn_reader_thread(reader, term_reader, dv_writer, cs_writer);
+    // Warm panes don't need last_output_time tracking — they get a fresh Arc
+    // when adopted into a Pane struct.
+    spawn_reader_thread(reader, term_reader, dv_writer, cs_writer, None);
     let child_pid = crate::platform::mouse_inject::get_child_pid(&*child);
     let mut pty_writer = pair
         .master
@@ -403,6 +409,8 @@ pub fn create_window_raw(
     let term_reader = term.clone();
     let data_version = std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0));
     let dv_writer = data_version.clone();
+    let last_output_time = std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0));
+    let lot_writer = last_output_time.clone();
     let cursor_shape = std::sync::Arc::new(std::sync::atomic::AtomicU8::new(CURSOR_SHAPE_UNSET));
     let cs_writer = cursor_shape.clone();
     let reader = pair
@@ -410,7 +418,7 @@ pub fn create_window_raw(
         .try_clone_reader()
         .map_err(|e| io::Error::other(format!("clone reader error: {e}")))?;
 
-    spawn_reader_thread(reader, term_reader, dv_writer, cs_writer);
+    spawn_reader_thread(reader, term_reader, dv_writer, cs_writer, Some(lot_writer));
 
     let child_pid = crate::platform::mouse_inject::get_child_pid(&*child);
     let mut pty_writer = pair
@@ -431,6 +439,7 @@ pub fn create_window_raw(
         title: format!("pane %{}", raw_pane_id),
         child_pid,
         data_version,
+        last_output_time,
         last_title_check: epoch,
         last_infer_title: epoch,
         dead: false,
@@ -591,6 +600,7 @@ pub fn split_active_with_command(
             title: format!("pane %{}", new_pane_id),
             child_pid: wp.child_pid,
             data_version: wp.data_version,
+            last_output_time: std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0)),
             last_title_check: epoch,
             last_infer_title: epoch,
             dead: false,
@@ -656,9 +666,11 @@ pub fn split_active_with_command(
         .map_err(|e| io::Error::other(format!("clone reader error: {e}")))?;
     let data_version = std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0));
     let dv_writer = data_version.clone();
+    let last_output_time = std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0));
+    let lot_writer = last_output_time.clone();
     let cursor_shape = std::sync::Arc::new(std::sync::atomic::AtomicU8::new(CURSOR_SHAPE_UNSET));
     let cs_writer = cursor_shape.clone();
-    spawn_reader_thread(reader, term_reader, dv_writer, cs_writer);
+    spawn_reader_thread(reader, term_reader, dv_writer, cs_writer, Some(lot_writer));
     let child_pid = crate::platform::mouse_inject::get_child_pid(&*child);
     let mut pty_writer = pair
         .master
@@ -678,6 +690,7 @@ pub fn split_active_with_command(
         title: format!("pane %{}", split_pane_id),
         child_pid,
         data_version,
+        last_output_time,
         last_title_check: epoch,
         last_infer_title: epoch,
         dead: false,
@@ -1250,6 +1263,7 @@ pub fn spawn_reader_thread(
     term_reader: Arc<Mutex<vt100::Parser>>,
     dv_writer: Arc<std::sync::atomic::AtomicU64>,
     cursor_shape: Arc<std::sync::atomic::AtomicU8>,
+    last_output_time: Option<Arc<std::sync::atomic::AtomicU64>>,
 ) {
     thread::spawn(move || {
         // 64KB buffer: captures most full-screen TUI paints in a single
@@ -1275,6 +1289,13 @@ pub fn spawn_reader_thread(
                         cursor_shape.store(0, std::sync::atomic::Ordering::Release);
                     }
                     dv_writer.fetch_add(1, std::sync::atomic::Ordering::Release);
+                    if let Some(ref lot) = last_output_time {
+                        let now_ms = std::time::SystemTime::now()
+                            .duration_since(std::time::UNIX_EPOCH)
+                            .unwrap_or_default()
+                            .as_millis() as u64;
+                        lot.store(now_ms, std::sync::atomic::Ordering::Release);
+                    }
                     crate::types::PTY_DATA_READY.store(true, std::sync::atomic::Ordering::Release);
                 }
                 Ok(_) => {

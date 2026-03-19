@@ -1041,11 +1041,6 @@ fn lookup_option(name: &str, app: &AppState) -> Option<String> {
         } else {
             "off".into()
         }),
-        "claude-code-fix-tty" => Some(if app.claude_code_fix_tty {
-            "on".into()
-        } else {
-            "off".into()
-        }),
         "claude-code-force-interactive" => Some(if app.claude_code_force_interactive {
             "on".into()
         } else {
@@ -1462,6 +1457,30 @@ pub fn expand_var(var: &str, app: &AppState, win_idx: usize) -> String {
                 p.child_pid.map(|pid| pid.to_string()).unwrap_or_default()
             } else {
                 String::new()
+            }
+        }
+        "pane_ready" => {
+            // A pane is "ready" when its shell has produced output (data_version > 0)
+            // and the output has stabilised (no new output for >= 500ms).
+            // This indicates the shell prompt has appeared and the pane accepts input.
+            if let Some(p) = target_pane() {
+                let dv = p.data_version.load(std::sync::atomic::Ordering::Acquire);
+                let lot = p.last_output_time.load(std::sync::atomic::Ordering::Acquire);
+                if dv > 0 && lot > 0 {
+                    let now_ms = std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .unwrap_or_default()
+                        .as_millis() as u64;
+                    if now_ms.saturating_sub(lot) >= 500 {
+                        "1".into()
+                    } else {
+                        "0".into()
+                    }
+                } else {
+                    "0".into()
+                }
+            } else {
+                "0".into()
             }
         }
         "pane_tty" => {

@@ -2941,6 +2941,20 @@ pub fn run_server(
                                 app.wait_pane_queue.push((pane_id, resp));
                             }
                         }
+                        CtrlReq::QueryPaneReady(pane_id, resp) => {
+                            let mut dv = 0u64;
+                            let mut lot = 0u64;
+                            for win in app.windows.iter() {
+                                if let Some(path) = crate::tree::find_path_by_id(&win.root, pane_id) {
+                                    if let Some(p) = crate::tree::active_pane(&win.root, &path) {
+                                        dv = p.data_version.load(std::sync::atomic::Ordering::Acquire);
+                                        lot = p.last_output_time.load(std::sync::atomic::Ordering::Acquire);
+                                    }
+                                    break;
+                                }
+                            }
+                            let _ = resp.send((dv, lot));
+                        }
                         CtrlReq::RenameSession(name) => {
                             let home = env::var("USERPROFILE")
                                 .or_else(|_| env::var("HOME"))

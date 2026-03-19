@@ -59,6 +59,11 @@ pub struct Pane {
     /// output is processed.  Checked by the server to know when the screen
     /// has actually changed (avoids serialising stale frames).
     pub data_version: std::sync::Arc<std::sync::atomic::AtomicU64>,
+    /// Epoch millis of the most recent PTY output.  Used together with
+    /// `data_version` to determine pane readiness: a pane is "ready" when it
+    /// has produced output (`data_version > 0`) **and** the output has
+    /// stabilised (no new output for ≥500 ms).  Exposed as `#{pane_ready}`.
+    pub last_output_time: std::sync::Arc<std::sync::atomic::AtomicU64>,
     /// Timestamp of the last auto-rename foreground-process check (throttled to ~1/s).
     pub last_title_check: Instant,
     /// Timestamp of the last infer_title_from_prompt call in layout serialisation (throttled to ~2/s).
@@ -925,6 +930,9 @@ pub enum CtrlReq {
     /// Wait for a pane's child process to exit and return its exit code.
     /// (pane_id, exit_code_sender)
     WaitPane(usize, mpsc::Sender<i32>),
+    /// Query a pane's readiness state: returns (data_version, last_output_time_ms).
+    /// Used by `wait-pane --ready` to poll until the shell prompt has appeared.
+    QueryPaneReady(usize, mpsc::Sender<(u64, u64)>),
 
     // ── Backend JSON-RPC variants (CustomPaneBackend pipe protocol) ──
     /// Backend `initialize` — return the active pane's context ID.

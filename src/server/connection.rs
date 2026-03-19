@@ -830,6 +830,7 @@ pub(crate) fn handle_connection(
                 // Parse -t %N for target pane ID
                 let mut pane_id: Option<usize> = None;
                 let mut timeout_secs: Option<u64> = None;
+                let mut wait_ready = false;
                 let mut i = 0;
                 while i < args.len() {
                     match args[i] {
@@ -846,22 +847,59 @@ pub(crate) fn handle_connection(
                                 i += 1;
                             }
                         }
+                        "--ready" => {
+                            wait_ready = true;
+                        }
                         _ => {}
                     }
                     i += 1;
                 }
                 if let Some(pid) = pane_id {
-                    let (rtx, rrx) = mpsc::channel::<i32>();
-                    let _ = tx.send(CtrlReq::WaitPane(pid, rtx));
-                    // Block until the pane exits or timeout
-                    let exit_code = if let Some(secs) = timeout_secs {
-                        rrx.recv_timeout(std::time::Duration::from_secs(secs))
-                            .unwrap_or(1) // timeout or recv error
+                    if wait_ready {
+                        // Poll pane readiness: output has stabilised (no new
+                        // output for >=500ms after initial burst).
+                        let deadline = timeout_secs.map(|s| {
+                            std::time::Instant::now() + std::time::Duration::from_secs(s)
+                        });
+                        let (qtx, qrx) = mpsc::channel::<(u64, u64)>();
+                        loop {
+                            let qtx2 = qtx.clone();
+                            let _ = tx.send(CtrlReq::QueryPaneReady(pid, qtx2));
+                            if let Ok((dv, lot)) = qrx.recv_timeout(std::time::Duration::from_secs(2)) {
+                                if dv > 0 && lot > 0 {
+                                    let now_ms = std::time::SystemTime::now()
+                                        .duration_since(std::time::UNIX_EPOCH)
+                                        .unwrap_or_default()
+                                        .as_millis() as u64;
+                                    if now_ms.saturating_sub(lot) >= 500 {
+                                        let _ = write!(write_stream, "0");
+                                        let _ = write_stream.flush();
+                                        break;
+                                    }
+                                }
+                            }
+                            if let Some(dl) = deadline {
+                                if std::time::Instant::now() >= dl {
+                                    let _ = write!(write_stream, "1");
+                                    let _ = write_stream.flush();
+                                    break;
+                                }
+                            }
+                            std::thread::sleep(std::time::Duration::from_millis(100));
+                        }
                     } else {
-                        rrx.recv().unwrap_or(1)
-                    };
-                    let _ = write!(write_stream, "{}", exit_code);
-                    let _ = write_stream.flush();
+                        let (rtx, rrx) = mpsc::channel::<i32>();
+                        let _ = tx.send(CtrlReq::WaitPane(pid, rtx));
+                        // Block until the pane exits or timeout
+                        let exit_code = if let Some(secs) = timeout_secs {
+                            rrx.recv_timeout(std::time::Duration::from_secs(secs))
+                                .unwrap_or(1) // timeout or recv error
+                        } else {
+                            rrx.recv().unwrap_or(1)
+                        };
+                        let _ = write!(write_stream, "{}", exit_code);
+                        let _ = write_stream.flush();
+                    }
                 } else {
                     let _ = write!(write_stream, "1");
                     let _ = write_stream.flush();
