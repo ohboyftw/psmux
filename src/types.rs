@@ -767,23 +767,31 @@ pub struct Bind {
 }
 
 pub enum CtrlReq {
-    NewWindow(Option<String>, Option<String>, bool, Option<String>), // cmd, name, detached, start_dir
+    NewWindow(
+        Option<String>,
+        Option<String>,
+        bool,
+        Option<String>,
+        Vec<(String, String)>,
+    ), // cmd, name, detached, start_dir, env_vars
     NewWindowPrint(
         Option<String>,
         Option<String>,
         bool,
         Option<String>,
         Option<String>,
+        Vec<(String, String)>,
         mpsc::Sender<String>,
-    ), // cmd, name, detached, start_dir, format, resp
+    ), // cmd, name, detached, start_dir, format, env_vars, resp
     SplitWindow(
         LayoutKind,
         Option<String>,
         bool,
         Option<String>,
         Option<u16>,
+        Vec<(String, String)>,
         mpsc::Sender<String>,
-    ), // kind, cmd, detached, start_dir, size_percent, error_resp
+    ), // kind, cmd, detached, start_dir, size_percent, env_vars, error_resp
     SplitWindowPrint(
         LayoutKind,
         Option<String>,
@@ -791,8 +799,9 @@ pub enum CtrlReq {
         Option<String>,
         Option<u16>,
         Option<String>,
+        Vec<(String, String)>,
         mpsc::Sender<String>,
-    ), // kind, cmd, detached, start_dir, size_percent, format, resp
+    ), // kind, cmd, detached, start_dir, size_percent, format, env_vars, resp
     KillPane,
     KillPaneById(usize),
     CapturePane(mpsc::Sender<String>),

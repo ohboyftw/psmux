@@ -60,6 +60,18 @@ param(
 
 $ErrorActionPreference = "Stop"
 
+# Helper: poll #{pane_ready} instead of blind Start-Sleep to avoid send-keys truncation
+function Wait-PaneReady {
+    param([string]$Target, [int]$TimeoutSeconds = 25)
+    $start = Get-Date
+    while ($true) {
+        $ready = (psmux display-message -t $Target -p "#{pane_ready}") 2>$null
+        if ($ready -eq "1") { return $true }
+        if (((Get-Date) - $start).TotalSeconds -gt $TimeoutSeconds) { return $false }
+        Start-Sleep -Milliseconds 200
+    }
+}
+
 # ── Parse tasks ──
 if (Test-Path $Tasks) {
     $taskList = Get-Content $Tasks -Raw | ConvertFrom-Json
@@ -117,11 +129,12 @@ for ($i = 0; $i -lt $taskList.Count; $i++) {
         psmux select-layout -t $Session tiled 2>&1 | Out-Null
     }
 
-    Start-Sleep -Milliseconds 300
+    # Wait for shell to be ready (poll instead of blind sleep)
+    if (-not (Wait-PaneReady $paneId)) { Write-Warning "Pane $paneId ($name) not ready after timeout" }
 
     # Send commands
     psmux send-keys -t $paneId "cd '$taskWorkDir'" Enter
-    Start-Sleep -Milliseconds 200
+    if (-not (Wait-PaneReady $paneId 10)) { Write-Warning "Pane $paneId ($name) not ready after cd" }
     psmux send-keys -t $paneId "pi$piFlags -p '$prompt' > '$outFile' 2>&1; echo done > '$markerFile'; exit" Enter
 
     $panes += @{

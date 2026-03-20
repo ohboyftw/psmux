@@ -95,9 +95,7 @@ impl Row {
                 let attrs = *self.cells[next].attrs();
                 self.cells[next].clear(attrs);
             }
-        } else if cell.is_wide_continuation()
-            && col > 0
-        {
+        } else if cell.is_wide_continuation() && col > 0 {
             let prev = usize::from(col - 1);
             let attrs = *self.cells[prev].attrs();
             self.cells[prev].clear(attrs);

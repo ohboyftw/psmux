@@ -857,7 +857,10 @@ impl Screen {
                 }
             }
 
-            let is_wide_at_pos = self.grid().drawing_cell(pos).is_some_and(super::cell::Cell::is_wide);
+            let is_wide_at_pos = self
+                .grid()
+                .drawing_cell(pos)
+                .is_some_and(super::cell::Cell::is_wide);
             if is_wide_at_pos {
                 if let Some(next_cell) = self.grid_mut().drawing_cell_mut(crate::grid::Pos {
                     row: pos.row,
@@ -875,7 +878,10 @@ impl Screen {
             self.grid_mut().col_inc(1);
             if width > 1 {
                 let pos = self.grid().pos();
-                let is_wide_here = self.grid().drawing_cell(pos).is_some_and(super::cell::Cell::is_wide);
+                let is_wide_here = self
+                    .grid()
+                    .drawing_cell(pos)
+                    .is_some_and(super::cell::Cell::is_wide);
                 if is_wide_here {
                     let next_next_pos = crate::grid::Pos {
                         row: pos.row,

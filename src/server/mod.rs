@@ -922,12 +922,12 @@ pub fn run_server(
                         _ => "",
                     };
                     match req {
-                        CtrlReq::NewWindow(cmd, name, detached, start_dir) => {
+                        CtrlReq::NewWindow(cmd, name, detached, start_dir, env_vars) => {
                             let prev_idx = app.active_idx;
                             // Expand format variables like #{pane_current_path} (#111)
                             let start_dir = start_dir
                                 .map(|d| expand_format(&d, &app))
-                                .filter(|d| !d.is_empty());
+                                .filter(|d: &String| !d.is_empty());
                             let saved_dir = if start_dir.is_some() {
                                 env::current_dir().ok()
                             } else {
@@ -938,11 +938,18 @@ pub fn run_server(
                             }
                             // Hide the warm pane when an explicit start dir is requested
                             // so create_window spawns a fresh shell in the correct CWD.
-                            let stashed_warm = if start_dir.is_some() {
+                            let stashed_warm = if start_dir.is_some() || !env_vars.is_empty() {
                                 app.warm_pane.take()
                             } else {
                                 None
                             };
+                            // Inject -e env vars at both levels:
+                            // 1) app.environment → apply_user_environment adds to CommandBuilder
+                            // 2) process env → get_base_env() captures during CommandBuilder::new()
+                            for (k, v) in &env_vars {
+                                app.environment.insert(k.clone(), v.clone());
+                                crate::util::set_env(k, v);
+                            }
                             if let Err(e) = create_window(
                                 &*pty_system,
                                 &mut app,
@@ -950,6 +957,11 @@ pub fn run_server(
                                 start_dir.as_deref(),
                             ) {
                                 eprintln!("psmux: new-window error: {e}");
+                            }
+                            // Remove temporary env vars from both levels
+                            for (k, _) in &env_vars {
+                                app.environment.remove(k);
+                                crate::util::remove_env(k);
                             }
                             if let Some(wp) = stashed_warm {
                                 app.warm_pane = Some(wp);
@@ -981,12 +993,13 @@ pub fn run_server(
                             detached,
                             start_dir,
                             format_str,
+                            env_vars,
                             resp,
                         ) => {
                             let prev_idx = app.active_idx;
                             let start_dir = start_dir
                                 .map(|d| expand_format(&d, &app))
-                                .filter(|d| !d.is_empty());
+                                .filter(|d: &String| !d.is_empty());
                             let saved_dir = if start_dir.is_some() {
                                 env::current_dir().ok()
                             } else {
@@ -995,11 +1008,18 @@ pub fn run_server(
                             if let Some(dir) = &start_dir {
                                 env::set_current_dir(dir).ok();
                             }
-                            let stashed_warm = if start_dir.is_some() {
+                            let stashed_warm = if start_dir.is_some() || !env_vars.is_empty() {
                                 app.warm_pane.take()
                             } else {
                                 None
                             };
+                            // Inject -e env vars at both levels:
+                            // 1) app.environment → apply_user_environment adds to CommandBuilder
+                            // 2) process env → get_base_env() captures during CommandBuilder::new()
+                            for (k, v) in &env_vars {
+                                app.environment.insert(k.clone(), v.clone());
+                                crate::util::set_env(k, v);
+                            }
                             if let Err(e) = create_window(
                                 &*pty_system,
                                 &mut app,
@@ -1007,6 +1027,11 @@ pub fn run_server(
                                 start_dir.as_deref(),
                             ) {
                                 eprintln!("psmux: new-window error: {e}");
+                            }
+                            // Remove temporary env vars from both levels
+                            for (k, _) in &env_vars {
+                                app.environment.remove(k);
+                                crate::util::remove_env(k);
                             }
                             if let Some(wp) = stashed_warm {
                                 app.warm_pane = Some(wp);
@@ -1040,12 +1065,20 @@ pub fn run_server(
                             meta_dirty = true;
                             hook_event = Some("after-new-window");
                         }
-                        CtrlReq::SplitWindow(k, cmd, detached, start_dir, size_pct, resp) => {
+                        CtrlReq::SplitWindow(
+                            k,
+                            cmd,
+                            detached,
+                            start_dir,
+                            size_pct,
+                            env_vars,
+                            resp,
+                        ) => {
                             // tmux: split-window without -Z permanently unzooms (#82)
                             unzoom_if_zoomed(&mut app);
                             let start_dir = start_dir
                                 .map(|d| expand_format(&d, &app))
-                                .filter(|d| !d.is_empty());
+                                .filter(|d: &String| !d.is_empty());
                             let saved_dir = if start_dir.is_some() {
                                 env::current_dir().ok()
                             } else {
@@ -1055,12 +1088,16 @@ pub fn run_server(
                                 env::set_current_dir(dir).ok();
                             }
                             let prev_path = app.windows[app.active_idx].active_path.clone();
-                            // Hide warm pane when explicit start_dir is given (wrong CWD)
-                            let stashed_warm = if start_dir.is_some() {
+                            // Hide warm pane when explicit start_dir or env vars are given
+                            let stashed_warm = if start_dir.is_some() || !env_vars.is_empty() {
                                 app.warm_pane.take()
                             } else {
                                 None
                             };
+                            // Temporarily inject -e env vars so apply_user_environment picks them up
+                            for (k_env, v_env) in &env_vars {
+                                app.environment.insert(k_env.clone(), v_env.clone());
+                            }
                             if let Err(e) = split_active_with_command(
                                 &mut app,
                                 k,
@@ -1071,6 +1108,11 @@ pub fn run_server(
                                 let _ = resp.send(format!("psmux: split-window: {e}"));
                             } else {
                                 let _ = resp.send(String::new());
+                            }
+                            // Remove temporary env vars from both levels
+                            for (k_env, _) in &env_vars {
+                                app.environment.remove(k_env);
+                                crate::util::remove_env(k_env);
                             }
                             if let Some(wp) = stashed_warm {
                                 app.warm_pane = Some(wp);
@@ -1138,12 +1180,13 @@ pub fn run_server(
                             start_dir,
                             size_pct,
                             format_str,
+                            env_vars,
                             resp,
                         ) => {
                             unzoom_if_zoomed(&mut app);
                             let start_dir = start_dir
                                 .map(|d| expand_format(&d, &app))
-                                .filter(|d| !d.is_empty());
+                                .filter(|d: &String| !d.is_empty());
                             let saved_dir = if start_dir.is_some() {
                                 env::current_dir().ok()
                             } else {
@@ -1153,11 +1196,15 @@ pub fn run_server(
                                 env::set_current_dir(dir).ok();
                             }
                             let prev_path = app.windows[app.active_idx].active_path.clone();
-                            let stashed_warm = if start_dir.is_some() {
+                            let stashed_warm = if start_dir.is_some() || !env_vars.is_empty() {
                                 app.warm_pane.take()
                             } else {
                                 None
                             };
+                            // Temporarily inject -e env vars so apply_user_environment picks them up
+                            for (k_env, v_env) in &env_vars {
+                                app.environment.insert(k_env.clone(), v_env.clone());
+                            }
                             let split_ok = match split_active_with_command(
                                 &mut app,
                                 k,
@@ -1171,6 +1218,11 @@ pub fn run_server(
                                     false
                                 }
                             };
+                            // Remove temporary env vars from both levels
+                            for (k_env, _) in &env_vars {
+                                app.environment.remove(k_env);
+                                crate::util::remove_env(k_env);
+                            }
                             if let Some(wp) = stashed_warm {
                                 app.warm_pane = Some(wp);
                             }

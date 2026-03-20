@@ -280,6 +280,16 @@ pub(crate) fn handle_connection(
                     .windows(2)
                     .find(|w| w[0] == "-F")
                     .map(|w| w[1].trim_matches('"').to_string());
+                // Parse -e KEY=VAL environment variables (can appear multiple times)
+                let env_vars: Vec<(String, String)> = args
+                    .windows(2)
+                    .filter(|w| w[0] == "-e")
+                    .filter_map(|w| {
+                        let s = w[1].trim_matches('"');
+                        s.split_once('=')
+                            .map(|(k, v)| (k.to_string(), v.to_string()))
+                    })
+                    .collect();
                 let cmd_str: Option<String> = args
                     .iter()
                     .find(|a| {
@@ -287,12 +297,13 @@ pub(crate) fn handle_connection(
                             && args.windows(2).all(|w| !(w[0] == "-n" && w[1] == **a))
                             && args.windows(2).all(|w| !(w[0] == "-c" && w[1] == **a))
                             && args.windows(2).all(|w| !(w[0] == "-F" && w[1] == **a))
+                            && args.windows(2).all(|w| !(w[0] == "-e" && w[1] == **a))
                     })
                     .map(|s| s.trim_matches('"').to_string());
                 if print_info {
                     let (rtx, rrx) = mpsc::channel::<String>();
                     let _ = tx.send(CtrlReq::NewWindowPrint(
-                        cmd_str, name, detached, start_dir, format_str, rtx,
+                        cmd_str, name, detached, start_dir, format_str, env_vars, rtx,
                     ));
                     if let Ok(text) = rrx.recv_timeout(Duration::from_millis(2000)) {
                         let _ = writeln!(write_stream, "{}", text);
@@ -302,7 +313,9 @@ pub(crate) fn handle_connection(
                         break;
                     }
                 } else {
-                    let _ = tx.send(CtrlReq::NewWindow(cmd_str, name, detached, start_dir));
+                    let _ = tx.send(CtrlReq::NewWindow(
+                        cmd_str, name, detached, start_dir, env_vars,
+                    ));
                 }
             }
             "split-window" | "splitw" => {
@@ -331,6 +344,16 @@ pub(crate) fn handle_connection(
                             s.parse().ok()
                         })
                     });
+                // Parse -e KEY=VAL environment variables (can appear multiple times)
+                let env_vars: Vec<(String, String)> = args
+                    .windows(2)
+                    .filter(|w| w[0] == "-e")
+                    .filter_map(|w| {
+                        let s = w[1].trim_matches('"');
+                        s.split_once('=')
+                            .map(|(k, v)| (k.to_string(), v.to_string()))
+                    })
+                    .collect();
                 let cmd_str: Option<String> = args
                     .iter()
                     .find(|a| {
@@ -339,12 +362,13 @@ pub(crate) fn handle_connection(
                             && args.windows(2).all(|w| !(w[0] == "-p" && w[1] == **a))
                             && args.windows(2).all(|w| !(w[0] == "-l" && w[1] == **a))
                             && args.windows(2).all(|w| !(w[0] == "-F" && w[1] == **a))
+                            && args.windows(2).all(|w| !(w[0] == "-e" && w[1] == **a))
                     })
                     .map(|s| s.trim_matches('"').to_string());
                 if print_info {
                     let (rtx, rrx) = mpsc::channel::<String>();
                     let _ = tx.send(CtrlReq::SplitWindowPrint(
-                        kind, cmd_str, detached, start_dir, size_pct, format_str, rtx,
+                        kind, cmd_str, detached, start_dir, size_pct, format_str, env_vars, rtx,
                     ));
                     if let Ok(text) = rrx.recv_timeout(Duration::from_millis(2000)) {
                         let _ = writeln!(write_stream, "{}", text);
@@ -356,7 +380,7 @@ pub(crate) fn handle_connection(
                 } else {
                     let (rtx, rrx) = mpsc::channel::<String>();
                     let _ = tx.send(CtrlReq::SplitWindow(
-                        kind, cmd_str, detached, start_dir, size_pct, rtx,
+                        kind, cmd_str, detached, start_dir, size_pct, env_vars, rtx,
                     ));
                     if let Ok(err_msg) = rrx.recv_timeout(Duration::from_millis(2000)) {
                         if !err_msg.is_empty() {

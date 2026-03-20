@@ -57,6 +57,18 @@ if (-not $sessions -or $LASTEXITCODE -ne 0) {
     psmux new-session -d -s pi-workers 2>&1 | Out-Null
 }
 
+# Helper: poll #{pane_ready} instead of blind Start-Sleep to avoid send-keys truncation
+function Wait-PaneReady {
+    param([string]$Target, [int]$TimeoutSeconds = 25)
+    $start = Get-Date
+    while ($true) {
+        $ready = (psmux display-message -t $Target -p "#{pane_ready}") 2>$null
+        if ($ready -eq "1") { return $true }
+        if (((Get-Date) - $start).TotalSeconds -gt $TimeoutSeconds) { return $false }
+        Start-Sleep -Milliseconds 200
+    }
+}
+
 # Spawn a new pane with a shell (detached, so we don't steal focus)
 if (-not $Quiet) { Write-Host "[pi-dispatch] Spawning Pi agent..." -ForegroundColor Cyan }
 
@@ -67,8 +79,8 @@ if ($LASTEXITCODE -ne 0) {
 }
 $paneId = $paneId.Trim()
 
-# Give the shell a moment to initialize
-Start-Sleep -Seconds 1
+# Wait for shell to be ready (poll instead of blind sleep)
+if (-not (Wait-PaneReady $paneId)) { Write-Warning "Pane $paneId not ready after timeout" }
 
 # Escape the prompt for shell safety
 $safePrompt = $Prompt -replace "'", "''"
@@ -76,7 +88,7 @@ $safeWorkDir = $WorkDir -replace "\\", "/"
 
 # Send commands via send-keys — Pi runs fully interactive with TTY
 psmux send-keys -t $paneId "cd '$safeWorkDir'" Enter
-Start-Sleep -Milliseconds 300
+if (-not (Wait-PaneReady $paneId 10)) { Write-Warning "Pane $paneId not ready after cd" }
 # Run Pi in non-interactive mode (-p). No redirect — capture-pane gets the output.
 # Touch a marker file when Pi finishes so we know it's done.
 $safeMarker = ($OutFile + ".done") -replace "\\", "/"

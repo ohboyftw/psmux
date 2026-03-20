@@ -920,6 +920,7 @@ fn run_main() -> io::Result<()> {
             let mut print_info = false;
             let mut format_str: Option<String> = None;
             let mut start_dir: Option<String> = None;
+            let mut env_vars: Vec<String> = Vec::new();
             let mut nw_positional: Vec<String> = Vec::new();
             {
                 let mut i = 1;
@@ -948,7 +949,13 @@ fn run_main() -> io::Result<()> {
                                 start_dir = Some(cmd_args[i].trim_matches('"').to_string());
                             }
                         }
-                        "-t" | "-e" | "-S" => {
+                        "-e" => {
+                            i += 1;
+                            if i < cmd_args.len() {
+                                env_vars.push(cmd_args[i].trim_matches('"').to_string());
+                            }
+                        }
+                        "-t" | "-S" => {
                             i += 1; /* skip value */
                         }
                         "-d" => {
@@ -985,6 +992,9 @@ fn run_main() -> io::Result<()> {
             if let Some(dir) = &start_dir {
                 cmd_line.push_str(&format!(" -c \"{}\"", dir.replace("\"", "\\\"")));
             }
+            for ev in &env_vars {
+                cmd_line.push_str(&format!(" -e \"{}\"", ev.replace("\"", "\\\"")));
+            }
             if !cmd_arg.is_empty() {
                 cmd_line.push_str(&format!(" \"{}\"", cmd_arg.replace("\"", "\\\"")));
             }
@@ -1006,6 +1016,7 @@ fn run_main() -> io::Result<()> {
             let mut format_str: Option<String> = None;
             let mut start_dir: Option<String> = None;
             let mut size_pct: Option<String> = None;
+            let mut env_vars: Vec<String> = Vec::new();
             let mut sw_positional: Vec<String> = Vec::new();
             {
                 let mut i = 1;
@@ -1034,7 +1045,13 @@ fn run_main() -> io::Result<()> {
                                 size_pct = Some(cmd_args[i].to_string());
                             }
                         }
-                        "-t" | "-e" => {
+                        "-e" => {
+                            i += 1;
+                            if i < cmd_args.len() {
+                                env_vars.push(cmd_args[i].trim_matches('"').to_string());
+                            }
+                        }
+                        "-t" => {
                             i += 1; /* skip value */
                         }
                         "-h" => {
@@ -1076,6 +1093,9 @@ fn run_main() -> io::Result<()> {
             }
             if let Some(pct) = &size_pct {
                 cmd_line.push_str(&format!(" -p {}", pct));
+            }
+            for ev in &env_vars {
+                cmd_line.push_str(&format!(" -e \"{}\"", ev.replace("\"", "\\\"")));
             }
             if !cmd_arg.is_empty() {
                 cmd_line.push_str(&format!(" \"{}\"", cmd_arg.replace("\"", "\\\"")));
@@ -2372,6 +2392,7 @@ fn run_main() -> io::Result<()> {
         "wait-pane" | "waitp" => {
             let mut target: Option<String> = None;
             let mut timeout_secs: Option<u64> = None;
+            let mut wait_ready = false;
             let mut i = 1;
 
             while i < cmd_args.len() {
@@ -2388,6 +2409,9 @@ fn run_main() -> io::Result<()> {
                             i += 1;
                         }
                     }
+                    "--ready" => {
+                        wait_ready = true;
+                    }
                     _ => {}
                 }
                 i += 1;
@@ -2395,6 +2419,9 @@ fn run_main() -> io::Result<()> {
 
             if let Some(t) = target {
                 let mut cmd = format!("wait-pane -t {}", t);
+                if wait_ready {
+                    cmd.push_str(" --ready");
+                }
                 if let Some(secs) = timeout_secs {
                     cmd.push_str(&format!(" --timeout {}", secs));
                 }
