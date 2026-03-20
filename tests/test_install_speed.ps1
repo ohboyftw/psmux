@@ -149,17 +149,17 @@ if (!$hasScoop) {
     scoop uninstall psmux 2>$null | Out-Null
     scoop uninstall psmux-scoop-local 2>$null | Out-Null
 
-    # Create local scoop manifest pointing to local zip
-    $zipPath = Join-Path $ProjectRoot "target" "psmux-local-test.zip"
+    # Create local scoop manifest pointing to local zip (built by build.ps1 in TEMP)
+    $zipPath = Join-Path $env:TEMP "psmux-test-artifacts" "psmux-local-test.zip"
     if (!(Test-Path $zipPath)) {
-        Write-Host "  [SKIP] Release zip not found: $zipPath" -ForegroundColor Yellow
-        Report "Scoop install" $false "zip not found"
+        Write-Host "  [FAIL] Release zip not found: $zipPath (run .\scripts\build.ps1 first)" -ForegroundColor Red
+        Report "Scoop install" $false "zip not found: $zipPath"
     } else {
         $sha256 = (Get-FileHash $zipPath -Algorithm SHA256).Hash
         $zipUrl = "file:///$($zipPath -replace '\\','/')"
 
         $scoopManifest = @{
-            version = "3.2.0-local"
+            version = "3.3.0-local"
             description = "psmux local test"
             homepage = "https://github.com/psmux/psmux"
             license = "MIT"
@@ -253,10 +253,10 @@ if (!$hasChoco) {
     Kill-All-Psmux
     choco uninstall psmux -y --force 2>$null | Out-Null
 
-    $zipPath = Join-Path $ProjectRoot "target" "psmux-local-test.zip"
+    $zipPath = Join-Path $env:TEMP "psmux-test-artifacts" "psmux-local-test.zip"
     if (!(Test-Path $zipPath)) {
-        Write-Host "  [SKIP] Release zip not found" -ForegroundColor Yellow
-        Report "Choco install" $false "zip not found"
+        Write-Host "  [FAIL] Release zip not found: $zipPath (run .\scripts\build.ps1 first)" -ForegroundColor Red
+        Report "Choco install" $false "zip not found: $zipPath"
     } else {
         $sha256 = (Get-FileHash $zipPath -Algorithm SHA256).Hash
         $chocoDir = Join-Path $ProjectRoot "target" "choco-local"
@@ -297,7 +297,7 @@ Uninstall-BinFile -Name "tmux"
 <package xmlns="http://schemas.microsoft.com/packaging/2015/06/nuspec.xsd">
   <metadata>
     <id>psmux</id>
-    <version>3.2.0-local</version>
+    <version>3.3.0-local</version>
     <title>psmux local test</title>
     <authors>Josh</authors>
     <owners>Josh</owners>

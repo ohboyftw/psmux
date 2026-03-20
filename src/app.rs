@@ -1100,9 +1100,14 @@ pub fn run(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> io::Result<
         let poll_ms = if bp_pending || has_pty_data { 1 } else { 20 };
         if event::poll(Duration::from_millis(poll_ms))? {
             match event::read()? {
-                Event::Key(key)
+                Event::Key(mut key)
                     if key.kind == KeyEventKind::Press || key.kind == KeyEventKind::Repeat =>
                 {
+                    // On Windows, ConPTY interprets Shift+Enter's ESC+CR as
+                    // Alt+Enter.  Poll the physical keyboard to detect the
+                    // real modifier — same fix as client.rs.
+                    #[cfg(windows)]
+                    crate::platform::augment_enter_shift(&mut key);
                     // On Windows, crossterm does not emit Event::Paste — bracket
                     // paste sequences arrive as individual Key events.  Feed each
                     // key through the detector; when a complete paste is found,

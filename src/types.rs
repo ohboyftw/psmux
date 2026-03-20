@@ -174,6 +174,10 @@ pub struct Window {
     ///  - Directional navigation tie-breaking (issue #70)
     ///  - Focus selection after kill-pane (issue #71)
     pub pane_mru: Vec<usize>,
+    /// Per-window zoom state (tmux parity: each window tracks its own zoom independently).
+    /// When `Some(...)`, one pane in this window is zoomed; the vec stores saved split sizes
+    /// for restoration on unzoom.
+    pub zoom_saved: Option<Vec<(Vec<usize>, Vec<u16>)>>,
 }
 
 /// A menu item for display-menu
@@ -393,7 +397,6 @@ pub struct AppState {
     pub created_at: chrono::DateTime<Local>,
     pub next_win_id: usize,
     pub next_pane_id: usize,
-    pub zoom_saved: Option<Vec<(Vec<usize>, Vec<u16>)>>,
     /// Whether the attached client is currently in prefix mode (for `client_prefix` format var).
     pub client_prefix_active: bool,
     pub sync_input: bool,
@@ -625,7 +628,6 @@ impl AppState {
             created_at: Local::now(),
             next_win_id: 1,
             next_pane_id: 1,
-            zoom_saved: None,
             client_prefix_active: false,
             sync_input: false,
             hooks: std::collections::HashMap::new(),
@@ -885,7 +887,8 @@ pub enum CtrlReq {
     HasSession(mpsc::Sender<bool>),
     RenameSession(String),
     /// Claim a warm server: rename session + send response so CLI knows it's done.
-    ClaimSession(String, mpsc::Sender<String>),
+    /// Fields: session name, optional client CWD, response sender.
+    ClaimSession(String, Option<String>, mpsc::Sender<String>),
     SwapPane(String),
     ResizePane(String, u16),
     SetBuffer(String),

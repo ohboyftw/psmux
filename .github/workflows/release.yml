@@ -27,12 +27,15 @@ jobs:
           - target: x86_64-pc-windows-msvc
             label: Windows x64
             artifact: windows-x64
+            nsis_arch: x64
           - target: i686-pc-windows-msvc
             label: Windows x86
             artifact: windows-x86
+            nsis_arch: x86
           - target: aarch64-pc-windows-msvc
             label: Windows ARM64 (Snapdragon)
             artifact: windows-arm64
+            nsis_arch: arm64
 
     steps:
       - uses: actions/checkout@v4
@@ -81,11 +84,48 @@ jobs:
           }
           Write-Output "Zip contains: $($entries -join ', ')"
 
+      - name: Install NSIS
+        shell: pwsh
+        run: |
+          choco install nsis -y --no-progress
+          # Install EnVar plugin for PATH manipulation
+          $nsisDir = "C:\Program Files (x86)\NSIS"
+          $pluginUrl = "https://nsis.sourceforge.io/mediawiki/images/7/7f/EnVar_plugin.zip"
+          $pluginZip = "$env:TEMP\EnVar_plugin.zip"
+          Invoke-WebRequest -Uri $pluginUrl -OutFile $pluginZip
+          Expand-Archive -Path $pluginZip -DestinationPath "$env:TEMP\EnVar" -Force
+          Copy-Item "$env:TEMP\EnVar\Plugins\x86-ansi\*" "$nsisDir\Plugins\x86-ansi\" -Force
+          Copy-Item "$env:TEMP\EnVar\Plugins\x86-unicode\*" "$nsisDir\Plugins\x86-unicode\" -Force
+
+      - name: Build NSIS installer
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $version = "${{ github.ref_name }}" -replace '^v', ''
+          $releaseDir = Resolve-Path "target/${{ matrix.target }}/release"
+          $repoDir = Resolve-Path "."
+          New-Item -ItemType Directory -Path "target\installer" -Force | Out-Null
+
+          & "C:\Program Files (x86)\NSIS\makensis.exe" /NOCD `
+            /DVERSION=$version `
+            /DARCH=${{ matrix.nsis_arch }} `
+            "/DSOURCE_DIR=$releaseDir" `
+            "/DREPO_DIR=$repoDir" `
+            "installer\psmux.nsi"
+          if ($LASTEXITCODE -ne 0) { Write-Error "NSIS build failed"; exit 1 }
+
+          $setup = "target\installer\psmux-v${version}-${{ matrix.nsis_arch }}-setup.exe"
+          if (-not (Test-Path $setup)) { Write-Error "Setup not found: $setup"; exit 1 }
+          $sizeMB = [math]::Round((Get-Item $setup).Length / 1MB, 2)
+          Write-Output "NSIS installer: $setup ($sizeMB MB)"
+
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: psmux-${{ matrix.artifact }}
-          path: psmux-*-${{ matrix.artifact }}.zip
+          path: |
+            psmux-*-${{ matrix.artifact }}.zip
+            target/installer/*-${{ matrix.nsis_arch }}-setup.exe
 
   release:
     name: Create Release
@@ -136,11 +176,21 @@ jobs:
             echo ""
             echo ""
             echo "### Downloads"
+            echo ""
+            echo "**Portable (zip):**"
             echo "| Platform | File |"
             echo "|----------|------|"
             echo "| Windows x64 (Intel/AMD 64-bit) | \`psmux-${CURRENT_TAG}-windows-x64.zip\` |"
             echo "| Windows x86 (Intel/AMD 32-bit) | \`psmux-${CURRENT_TAG}-windows-x86.zip\` |"
             echo "| Windows ARM64 (Snapdragon/Surface Pro X) | \`psmux-${CURRENT_TAG}-windows-arm64.zip\` |"
+            echo ""
+            echo "**Installer (NSIS setup — kills running instances, adds to PATH, warmup):**"
+            echo "| Platform | File |"
+            echo "|----------|------|"
+            VERSION_NO_V="${CURRENT_TAG#v}"
+            echo "| Windows x64 | \`psmux-v${VERSION_NO_V}-x64-setup.exe\` |"
+            echo "| Windows x86 | \`psmux-v${VERSION_NO_V}-x86-setup.exe\` |"
+            echo "| Windows ARM64 | \`psmux-v${VERSION_NO_V}-arm64-setup.exe\` |"
             echo ""
             echo "### Installation"
             echo ""
@@ -185,7 +235,7 @@ jobs:
         uses: actions/download-artifact@v4
 
       - name: List artifacts
-        run: find . -type f -name "*.zip"
+        run: find . -type f \( -name "*.zip" -o -name "*-setup.exe" \)
 
       - name: Create Release
         uses: softprops/action-gh-release@v1
@@ -194,6 +244,9 @@ jobs:
             psmux-windows-x64/*.zip
             psmux-windows-x86/*.zip
             psmux-windows-arm64/*.zip
+            psmux-windows-x64/**/*-setup.exe
+            psmux-windows-x86/**/*-setup.exe
+            psmux-windows-arm64/**/*-setup.exe
           body_path: /tmp/release_body.md
           draft: false
           prerelease: false
@@ -219,8 +272,25 @@ jobs:
           }
         shell: pwsh
 
-      - name: Publish to crates.io
-        run: cargo publish
+      - name: Publish sub-crates then main crate to crates.io
+        shell: pwsh
+        run: |
+          # Sub-crates must be published first so crates.io can resolve path deps
+          cargo publish --allow-dirty -p portable-pty-psmux 2>&1
+          if ($LASTEXITCODE -ne 0) {
+            Write-Warning "portable-pty-psmux publish failed (may already be published)"
+          }
+          Start-Sleep 15
+          cargo publish --allow-dirty -p vt100-psmux 2>&1
+          if ($LASTEXITCODE -ne 0) {
+            Write-Warning "vt100-psmux publish failed (may already be published)"
+          }
+          Start-Sleep 15
+          cargo publish --allow-dirty
+          if ($LASTEXITCODE -ne 0) {
+            Write-Error "psmux publish failed!"
+            exit 1
+          }
         env:
           CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
 
@@ -597,6 +667,7 @@ jobs:
 
           # ---- Version manifest ----
           @"
+          # yaml-language-server: `$schema=https://aka.ms/winget-manifest.version.1.9.0.schema.json
           PackageIdentifier: $pkgId
           PackageVersion: $ver
           DefaultLocale: en-US
@@ -606,6 +677,7 @@ jobs:
 
           # ---- Installer manifest ----
           @"
+          # yaml-language-server: `$schema=https://aka.ms/winget-manifest.installer.1.9.0.schema.json
           PackageIdentifier: $pkgId
           PackageVersion: $ver
           Platform:
@@ -636,6 +708,7 @@ jobs:
 
           # ---- Default locale manifest ----
           @"
+          # yaml-language-server: `$schema=https://aka.ms/winget-manifest.defaultLocale.1.9.0.schema.json
           PackageIdentifier: $pkgId
           PackageVersion: $ver
           PackageLocale: en-US

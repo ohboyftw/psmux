@@ -564,9 +564,9 @@ pub fn execute_command_string(app: &mut AppState, cmd: &str) -> io::Result<()> {
             // If zoomed, check if there's a direct neighbor OR a wrap target.
             // If yes: cancel zoom and navigate to it.
             // If no (single-pane window): no-op — stay zoomed.
-            if app.zoom_saved.is_some() {
+            if app.windows[app.active_idx].zoom_saved.is_some() {
                 // Temporarily unzoom to compute real geometry
-                let saved = app.zoom_saved.take();
+                let saved = app.windows[app.active_idx].zoom_saved.take();
                 if let Some(ref s) = saved {
                     let win = &mut app.windows[app.active_idx];
                     for (p, sz) in s.iter() {
@@ -578,7 +578,7 @@ pub fn execute_command_string(app: &mut AppState, cmd: &str) -> io::Result<()> {
                     }
                 }
                 crate::tree::resize_all_panes(app);
-                // Find direct neighbor or wrap target (tmux parity #134)
+                // Find direct neighbor only (no wrap when zoomed — tmux parity)
                 let win = &app.windows[app.active_idx];
                 let mut rects: Vec<(Vec<usize>, ratatui::layout::Rect)> = Vec::new();
                 crate::tree::compute_rects(&win.root, app.last_window_area, &mut rects);
@@ -611,7 +611,7 @@ pub fn execute_command_string(app: &mut AppState, cmd: &str) -> io::Result<()> {
                                 *sizes = sz.clone();
                             }
                         }
-                        app.zoom_saved = Some(s);
+                        win.zoom_saved = Some(s);
                     }
                     crate::tree::resize_all_panes(app);
                 }

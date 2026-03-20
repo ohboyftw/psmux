@@ -156,6 +156,26 @@ if ($LASTEXITCODE -ne 0) {
     Start-Sleep -Seconds 4
 }
 
+# Use a non-interactive PowerShell receiver that reads stdin line-by-line
+# and writes to a temp file.  This avoids PSReadLine interpreting paste lines
+# as commands, and avoids capture-pane scrollback limits.
+$pasteTestFile = Join-Path $env:TEMP "psmux_paste_test_74.txt"
+$recvScript = Join-Path $env:TEMP "psmux_paste_recv.ps1"
+@'
+$out = $args[0]
+$lines = @()
+while ($true) {
+    $l = [Console]::ReadLine()
+    if ($l -eq $null) { break }
+    if ($l -eq "EOF_PSMUX_TEST") { break }
+    $lines += $l
+}
+$lines | Set-Content $out -Encoding UTF8
+'@ | Set-Content $recvScript -Encoding UTF8
+
+Psmux send-keys -t paste74 "pwsh -NoProfile -File `"$recvScript`" `"$pasteTestFile`"" Enter 2>$null | Out-Null
+Start-Sleep -Milliseconds 2000
+
 $bigLines = @()
 for ($i = 1; $i -le 20; $i++) {
     $bigLines += "$i) lorem"
@@ -163,50 +183,54 @@ for ($i = 1; $i -le 20; $i++) {
         $bigLines += (' ' * $sp) + "- n$sp i$i"
     }
 }
+# Append sentinel so the receiver knows when to stop
+$bigLines += "EOF_PSMUX_TEST"
 $bigPayload = $bigLines -join "`n"
 $enc3 = ConvertTo-Base64 $bigPayload
 
-Write-Test "3.1 Large paste ($($bigLines.Count) lines)"
-Write-Info "Payload: $($bigLines.Count) lines, $($bigPayload.Length) bytes, base64=$($enc3.Length)"
-Psmux send-keys -t paste74 "clear" Enter 2>$null | Out-Null
-Start-Sleep -Milliseconds 800
+$dataLineCount = $bigLines.Count - 1  # exclude sentinel
+Write-Test "3.1 Large paste ($dataLineCount lines)"
+Write-Info "Payload: $dataLineCount data lines, $($bigPayload.Length) bytes, base64=$($enc3.Length)"
 Psmux send-paste -t paste74 $enc3 2>$null | Out-Null
-Start-Sleep -Milliseconds 5000
+# The last line "EOF_PSMUX_TEST" may not have a trailing newline from send-paste.
+# Send Enter to flush the sentinel line to the receiver.
+Start-Sleep -Milliseconds 3000
+Psmux send-keys -t paste74 Enter 2>$null | Out-Null
+Start-Sleep -Milliseconds 3000
 
-$cap3 = (Psmux capture-pane -t paste74 -p -S -500 2>$null | Out-String)
+# Verify output file
+if (Test-Path $pasteTestFile) {
+    $outputLines = @(Get-Content $pasteTestFile)
+    $hasFirst = ($outputLines | Where-Object { $_ -match "1\) lorem" }).Count -gt 0
+    $hasMiddle = ($outputLines | Where-Object { $_ -match "10\) lorem|15\) lorem" }).Count -gt 0
+    $hasNested = ($outputLines | Where-Object { $_ -match "n4" }).Count -gt 0
 
-$hasFirst = $cap3 -match "1\) lorem"
-$hasMiddle = $cap3 -match "10\) lorem|15\) lorem"
-$hasNested = $cap3 -match "n4"
+    if ($hasFirst -and $hasMiddle -and $hasNested) {
+        Write-Pass "Large paste: first, middle, and nested content visible ($($outputLines.Count) lines received)"
+    } else {
+        Write-Fail "Large paste incomplete (first=$hasFirst middle=$hasMiddle nested=$hasNested, lines=$($outputLines.Count))"
+        Write-Info "First 5 lines: $(($outputLines | Select-Object -First 5) -join ' | ')"
+        Write-Info "Last 5 lines: $(($outputLines | Select-Object -Last 5) -join ' | ')"
+    }
 
-if ($hasFirst -and $hasMiddle -and $hasNested) {
-    Write-Pass "Large paste: first, middle, and nested content visible"
-} elseif ($hasFirst -and $hasNested) {
-    # PSReadLine on Windows may not buffer all 140 lines atomically in detached mode.
-    # The paste was delivered (first + nested visible), middle lines scrolled or truncated
-    # by the shell's own input processing. This is a PSReadLine limitation, not psmux.
-    Write-Pass "Large paste delivered (first+nested visible; middle lines may be truncated by PSReadLine)"
+    Write-Test "3.2 Indentation integrity in large paste"
+    $n6Lines = $outputLines | Where-Object { $_ -match "n6" }
+    $maxIndent = 0
+    foreach ($rl in $n6Lines) {
+        $stripped = $rl -replace '[^ ].*', ''
+        if ($stripped.Length -gt $maxIndent) { $maxIndent = $stripped.Length }
+    }
+    if ($n6Lines.Count -gt 0 -and $maxIndent -ge 6 -and $maxIndent -le 10) {
+        Write-Pass "6-space indent preserved for n6 entries ($($n6Lines.Count) lines)"
+    } else {
+        Write-Fail "Indentation not preserved (found $($n6Lines.Count) n6 lines, maxIndent=$maxIndent)"
+    }
 } else {
-    Write-Fail "Large paste incomplete (first=$hasFirst middle=$hasMiddle nested=$hasNested)"
-    # Show last few captures for diagnostics
-    $capEnd = if ($cap3.Length -gt 300) { $cap3.Substring($cap3.Length - 300) } else { $cap3 }
-    Write-Info "Capture tail: $capEnd"
-}
+    Write-Fail "Large paste output file not created — receiver did not capture input"
 
-Write-Test "3.2 Indentation integrity in large paste"
-$cap3Lines = $cap3 -split "`n" | Where-Object { $_ -match "n6" }
-$maxIndent = 0
-foreach ($rl in $cap3Lines) {
-    $stripped = $rl -replace '[^ ].*', ''
-    if ($stripped.Length -gt $maxIndent) { $maxIndent = $stripped.Length }
+    Write-Test "3.2 Indentation integrity in large paste"
+    Write-Fail "Skipped (no output file)"
 }
-if (($cap3 -match "      n6") -or ($cap3Lines.Count -gt 0 -and $maxIndent -le 10)) {
-    Write-Pass "6-space indent preserved for n6 entries"
-} else {
-    Write-Fail "Indentation not preserved (found $($cap3Lines.Count) n6 lines, maxIndent=$maxIndent)"
-}
-
-Psmux send-keys -t paste74 C-c 2>$null | Out-Null
 Start-Sleep -Milliseconds 300
 
 # ============================================================

@@ -688,35 +688,26 @@ pub fn run_server(
     if let Some(wp) = early_warm {
         if app.default_shell.is_empty() {
             // No custom shell — the pre-spawned default (pwsh) is correct.
-            // Inject config-defined environment variables into the running
-            // warm pane shell.  The warm pane was spawned BEFORE config was
-            // loaded, so any `set-environment` vars from the config file are
-            // missing.  We write PowerShell `$env:` assignments silently.
-            if !app.environment.is_empty() {
+            // Check if config loaded env vars that the early warm pane is missing.
+            let needs_env = app.environment.iter().any(|(k, _)| {
+                !k.starts_with("PSMUX_TARGET_SESSION") && k != "TMUX" && k != "TMUX_PANE"
+            });
+            if needs_env {
+                // The early warm pane was spawned before config, so it lacks
+                // config-defined env vars (e.g. TERM from default-terminal).
+                // Kill it and respawn with env vars set at the process level
+                // via CommandBuilder::env() — this avoids writing PowerShell
+                // commands to the PTY which would echo visibly (#137).
                 let mut wp = wp;
-                let mut env_cmd = String::new();
-                for (key, value) in &app.environment {
-                    // Skip internal psmux variables that are already set
-                    if key.starts_with("PSMUX_TARGET_SESSION")
-                        || key == "TMUX"
-                        || key == "TMUX_PANE"
-                    {
-                        continue;
+                wp.child.kill().ok();
+                match spawn_warm_pane(&*pty_system, &mut app) {
+                    Ok(new_wp) => {
+                        app.warm_pane = Some(new_wp);
                     }
-                    let escaped_val = value.replace('\'', "''");
-                    if !env_cmd.is_empty() {
-                        env_cmd.push_str("; ");
+                    Err(e) => {
+                        eprintln!("psmux: warm pane respawn failed: {e}");
                     }
-                    env_cmd.push_str(&format!("${{env:{}}}='{}'", key, escaped_val));
                 }
-                if !env_cmd.is_empty() {
-                    // Send silently: write the command, then clear the line so
-                    // the user doesn't see the env setup on the fresh prompt.
-                    let inject = format!("{}\r\n", env_cmd);
-                    use std::io::Write as _;
-                    let _ = wp.writer.write_all(inject.as_bytes());
-                }
-                app.warm_pane = Some(wp);
             } else {
                 app.warm_pane = Some(wp);
             }
@@ -1656,7 +1647,7 @@ pub fn run_server(
                         app.status_left_length, app.status_right_length, app.status_lines, status_format_json,
                         mode_style_escaped, status_position_escaped, status_justify_escaped,
                         cursor_style_code, app.status_visible, app.repeat_time_ms,
-                        app.zoom_saved.is_some(),
+                        app.windows.get(app.active_idx).is_some_and(|w| w.zoom_saved.is_some()),
                     ));
                             // Inject overlay state (popup, menu, confirm, display_panes)
                             {
@@ -3121,7 +3112,7 @@ pub fn run_server(
                             crate::util::set_env("PSMUX_TARGET_SESSION", app.port_file_base());
                             hook_event = Some("after-rename-session");
                         }
-                        CtrlReq::ClaimSession(name, resp) => {
+                        CtrlReq::ClaimSession(name, _client_cwd, resp) => {
                             // Same as RenameSession but with a synchronous response
                             // so the CLI knows the rename completed before attaching.
                             let home = env::var("USERPROFILE")
@@ -4920,7 +4911,7 @@ pub fn run_server(
                 app.status_left_length, app.status_right_length, app.status_lines, status_format_json,
                 mode_style_escaped, status_position_escaped, status_justify_escaped,
                 cursor_style_code, app.status_visible, app.repeat_time_ms,
-                app.zoom_saved.is_some(),
+                app.windows.get(app.active_idx).is_some_and(|w| w.zoom_saved.is_some()),
             ));
             // Inject overlay state (popup, menu, confirm, display_panes)
             {

@@ -151,6 +151,7 @@ fn mock_window(name: &str) -> crate::types::Window {
         manual_rename: false,
         layout_index: 0,
         pane_mru: vec![],
+        zoom_saved: None,
     }
 }
 
@@ -243,6 +244,114 @@ fn test_window_activity_flag_var_off() {
 fn test_appstate_defaults_allow_rename() {
     let app = mock_app();
     assert!(app.allow_rename);
+}
+
+// ── Per-window zoom flag tests (issue #125 follow-up) ──────────────
+
+#[test]
+fn test_window_zoomed_flag_default_no_zoom() {
+    let mut app = mock_app();
+    app.windows.push(mock_window("win0"));
+    assert_eq!(expand_var("window_zoomed_flag", &app, 0), "0");
+}
+
+#[test]
+fn test_window_zoomed_flag_set_on_zoomed_window() {
+    let mut app = mock_app();
+    let mut win = mock_window("win0");
+    win.zoom_saved = Some(vec![(vec![], vec![50, 50])]);
+    app.windows.push(win);
+    app.active_idx = 0;
+    // The zoomed window should report flag=1
+    assert_eq!(expand_var("window_zoomed_flag", &app, 0), "1");
+}
+
+#[test]
+fn test_window_zoomed_flag_per_window_not_global() {
+    // Simulates: zoom in window 0, check that window 1 does NOT show zoomed
+    let mut app = mock_app();
+    let mut win0 = mock_window("win0");
+    win0.zoom_saved = Some(vec![(vec![], vec![50, 50])]);
+    app.windows.push(win0);
+    app.windows.push(mock_window("win1"));
+    app.active_idx = 0;
+    // Window 0 is zoomed → flag=1
+    assert_eq!(expand_var("window_zoomed_flag", &app, 0), "1");
+    // Window 1 is NOT zoomed → flag=0
+    assert_eq!(expand_var("window_zoomed_flag", &app, 1), "0");
+}
+
+#[test]
+fn test_window_zoomed_flag_stays_on_original_window_after_switch() {
+    // Simulates: zoom in window 0, then switch to window 1
+    // Window 0 should still show zoomed, window 1 should not
+    let mut app = mock_app();
+    let mut win0 = mock_window("win0");
+    win0.zoom_saved = Some(vec![(vec![], vec![50, 50])]);
+    app.windows.push(win0);
+    app.windows.push(mock_window("win1"));
+    // Switch to window 1
+    app.active_idx = 1;
+    // Window 0 still zoomed → flag=1 (even though it's not the active window)
+    assert_eq!(expand_var("window_zoomed_flag", &app, 0), "1");
+    // Window 1 is NOT zoomed → flag=0
+    assert_eq!(expand_var("window_zoomed_flag", &app, 1), "0");
+}
+
+#[test]
+fn test_window_zoomed_flag_multiple_windows_zoomed() {
+    // In tmux, multiple windows can each have a zoomed pane independently
+    let mut app = mock_app();
+    let mut win0 = mock_window("win0");
+    win0.zoom_saved = Some(vec![(vec![], vec![50, 50])]);
+    let mut win1 = mock_window("win1");
+    win1.zoom_saved = Some(vec![(vec![0], vec![30, 70])]);
+    app.windows.push(win0);
+    app.windows.push(win1);
+    app.windows.push(mock_window("win2"));
+    app.active_idx = 2;
+    // Both window 0 and 1 are zoomed
+    assert_eq!(expand_var("window_zoomed_flag", &app, 0), "1");
+    assert_eq!(expand_var("window_zoomed_flag", &app, 1), "1");
+    // Window 2 is not zoomed
+    assert_eq!(expand_var("window_zoomed_flag", &app, 2), "0");
+}
+
+#[test]
+fn test_window_flags_include_z_when_zoomed() {
+    let mut app = mock_app();
+    let mut win = mock_window("win0");
+    win.zoom_saved = Some(vec![(vec![], vec![50, 50])]);
+    app.windows.push(win);
+    app.active_idx = 0;
+    let flags = expand_var("window_flags", &app, 0);
+    assert!(flags.contains('Z'), "window_flags should contain Z when zoomed, got: {}", flags);
+    assert!(flags.contains('*'), "window_flags should contain * for active window, got: {}", flags);
+}
+
+#[test]
+fn test_window_flags_no_z_when_not_zoomed() {
+    let mut app = mock_app();
+    app.windows.push(mock_window("win0"));
+    app.active_idx = 0;
+    let flags = expand_var("window_flags", &app, 0);
+    assert!(!flags.contains('Z'), "window_flags should not contain Z when not zoomed, got: {}", flags);
+}
+
+#[test]
+fn test_conditional_window_zoomed_flag_per_window() {
+    let mut app = mock_app();
+    let mut win0 = mock_window("win0");
+    win0.zoom_saved = Some(vec![(vec![], vec![50, 50])]);
+    app.windows.push(win0);
+    app.windows.push(mock_window("win1"));
+    app.active_idx = 1; // active is window 1, but window 0 is zoomed
+    // Conditional format should show ZOOMED for window 0
+    let result0 = expand_format_for_window("#{?window_zoomed_flag,ZOOMED,normal}", &app, 0);
+    assert_eq!(result0, "ZOOMED");
+    // Conditional format should show normal for window 1
+    let result1 = expand_format_for_window("#{?window_zoomed_flag,ZOOMED,normal}", &app, 1);
+    assert_eq!(result1, "normal");
 }
 
 #[test]

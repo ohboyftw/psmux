@@ -152,6 +152,7 @@ pub fn create_window(
             manual_rename: false,
             layout_index: 0,
             pane_mru: vec![initial_pane_id],
+            zoom_saved: None,
         });
         app.next_win_id += 1;
         app.active_idx = app.windows.len() - 1;
@@ -289,6 +290,7 @@ pub fn create_window(
         manual_rename: false,
         layout_index: 0,
         pane_mru: vec![pane_id],
+        zoom_saved: None,
     });
     app.next_win_id += 1;
     app.active_idx = app.windows.len() - 1;
@@ -499,6 +501,7 @@ pub fn create_window_raw(
         manual_rename: false,
         layout_index: 0,
         pane_mru: vec![raw_pane_id],
+        zoom_saved: None,
     });
     app.next_win_id += 1;
     app.active_idx = app.windows.len() - 1;

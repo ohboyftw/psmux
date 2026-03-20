@@ -131,8 +131,11 @@ pub(crate) fn combined_data_version(app: &AppState) -> u64 {
     v = v.wrapping_add(mode_tag.wrapping_mul(0x1_0000_0000));
     // Include zoom state so toggling zoom always invalidates the cached
     // frame, even when no PTY data has changed (issue #125).
-    if app.zoom_saved.is_some() {
-        v = v.wrapping_add(0x8000_0000_0000);
+    // Check per-window zoom state — each window tracks zoom independently.
+    for (wi, w) in app.windows.iter().enumerate() {
+        if w.zoom_saved.is_some() {
+            v = v.wrapping_add(0x8000_0000_0000_u64.wrapping_add(wi as u64));
+        }
     }
     // Include client prefix state so the status bar re-renders
     // immediately when the prefix key is pressed/released (issue #126).

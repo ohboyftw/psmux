@@ -173,10 +173,63 @@ Test-Assert "EDITOR in environment" ($showEnv -match "EDITOR=vim")
 
 Cleanup-PsmuxState
 
+# ─── Test 6: env var injection NOT echoed in warm pane ─────────────────
+Write-Host "`nTest 6: TERM env var is NOT echoed visibly in the pane (warm path)" -ForegroundColor Yellow
+Cleanup-PsmuxState
+
+$tempConf4 = Join-Path $env:TEMP "psmux_test137d.conf"
+Set-Content -Path $tempConf4 -Value 'set -g default-terminal "xterm-256color"'
+
+$env:PSMUX_CONFIG_FILE = $tempConf4
+# Create the first (initial) session: this uses the early warm pane
+$output = & $psmux new-session -d -s "echo0" 2>&1 | Out-String
+Start-Sleep -Milliseconds 3000
+Remove-Item env:PSMUX_CONFIG_FILE -ErrorAction SilentlyContinue
+
+# Capture the pane buffer to see what the user would see
+$captured = & $psmux capture-pane -t echo0 -p 2>&1 | Out-String
+Write-Host "  INFO: captured pane: $($captured.Trim())" -ForegroundColor Gray
+
+# The env assignment command must NOT appear in the pane output
+$hasEnvEcho = $captured -match '\$\{?env:TERM\}?\s*='
+Test-Assert "No env:TERM assignment echoed in pane" (-not $hasEnvEcho)
+
+# Also check for the old broken format
+$hasOldFormat = $captured -match '\$env:default-terminal'
+Test-Assert "No old default-terminal env injection in pane" (-not $hasOldFormat)
+
+Cleanup-PsmuxState
+
+# ─── Test 7: second session via warm claim also has no echo ────────────
+Write-Host "`nTest 7: Second session via warm claim has no env var echo" -ForegroundColor Yellow
+Cleanup-PsmuxState
+
+$env:PSMUX_CONFIG_FILE = $tempConf4
+
+# First session
+$output1 = & $psmux new-session -d -s "echo1" 2>&1 | Out-String
+Start-Sleep -Milliseconds 2000
+
+# Split to trigger warm pane consumption and respawn
+$splitOutput = & $psmux split-window -t echo1 2>&1 | Out-String
+Start-Sleep -Milliseconds 2000
+
+Remove-Item env:PSMUX_CONFIG_FILE -ErrorAction SilentlyContinue
+
+# Capture the second pane (the one from warm claim)
+$captured2 = & $psmux capture-pane -t echo1 -p 2>&1 | Out-String
+Write-Host "  INFO: captured pane 2: $($captured2.Trim())" -ForegroundColor Gray
+
+$hasEnvEcho2 = $captured2 -match '\$\{?env:TERM\}?\s*='
+Test-Assert "No env:TERM assignment echoed in split pane" (-not $hasEnvEcho2)
+
+Cleanup-PsmuxState
+
 # ─── Cleanup temp files ───────────────────────────────────────────────
 Remove-Item $tempConf -Force -ErrorAction SilentlyContinue
 Remove-Item $tempConf2 -Force -ErrorAction SilentlyContinue
 Remove-Item $tempConf3 -Force -ErrorAction SilentlyContinue
+Remove-Item $tempConf4 -Force -ErrorAction SilentlyContinue
 
 # ─── Summary ───────────────────────────────────────────────────────────
 Write-Host "`n=== Results ===" -ForegroundColor Cyan

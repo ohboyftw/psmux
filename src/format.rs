@@ -1284,6 +1284,9 @@ pub fn expand_var(var: &str, app: &AppState, win_idx: usize) -> String {
             } else if win_idx == app.last_window_idx {
                 f.push('-');
             }
+            if win.zoom_saved.is_some() {
+                f.push('Z');
+            }
             if win.activity_flag {
                 f.push('#');
             }
@@ -1304,7 +1307,7 @@ pub fn expand_var(var: &str, app: &AppState, win_idx: usize) -> String {
             }
         }
         "window_zoomed_flag" => {
-            if app.zoom_saved.is_some() && win_idx == app.active_idx {
+            if win.zoom_saved.is_some() {
                 "1".into()
             } else {
                 "0".into()

@@ -402,6 +402,60 @@ fn alt_enter_encoding_for_conpty() {
     );
 }
 
+// ── Issue #121 (whil0012 follow-up): PSReadLine Shift+Enter via native injection ──
+
+/// augment_enter_shift must remap Alt+Enter → Shift+Enter when physical Shift
+/// is held (ConPTY misreports Shift+Enter as Alt+Enter).
+#[cfg(windows)]
+#[test]
+fn augment_enter_shift_noop_when_already_shift() {
+    use crossterm::event::KeyModifiers;
+    let mut ev = key(KeyCode::Enter, KeyModifiers::SHIFT);
+    crate::platform::augment_enter_shift(&mut ev);
+    assert!(ev.modifiers.contains(KeyModifiers::SHIFT),
+        "augment_enter_shift must preserve existing SHIFT modifier");
+}
+
+#[cfg(windows)]
+#[test]
+fn augment_enter_shift_ignores_non_enter() {
+    use crossterm::event::KeyModifiers;
+    let mut ev = key(KeyCode::Char('a'), KeyModifiers::ALT);
+    crate::platform::augment_enter_shift(&mut ev);
+    assert!(ev.modifiers.contains(KeyModifiers::ALT),
+        "augment_enter_shift must not change non-Enter keys");
+    assert!(!ev.modifiers.contains(KeyModifiers::SHIFT),
+        "augment_enter_shift must not add SHIFT to non-Enter keys");
+}
+
+/// VT fallback encoding for modified Enter still works (encode_key_event path).
+#[test]
+fn ctrl_shift_enter_vt_encoding_works() {
+    let ev = key(KeyCode::Enter, KeyModifiers::CONTROL | KeyModifiers::SHIFT);
+    let bytes = encode_key_event(&ev).unwrap();
+    assert_eq!(bytes, b"\x1b[13;6~",
+        "Ctrl+Shift+Enter VT encoding must be CSI 13;6~");
+}
+
+#[test]
+fn ctrl_alt_enter_vt_encoding_works() {
+    let ev = key(KeyCode::Enter, KeyModifiers::CONTROL | KeyModifiers::ALT);
+    let bytes = encode_key_event(&ev).unwrap();
+    assert_eq!(bytes, b"\x1b[13;7~",
+        "Ctrl+Alt+Enter VT encoding must be CSI 13;7~");
+}
+
+#[test]
+fn shift_alt_enter_on_non_windows_produces_csi() {
+    // On non-Windows, Shift+Alt+Enter should use CSI encoding
+    let ev = key(KeyCode::Enter, KeyModifiers::SHIFT | KeyModifiers::ALT);
+    let bytes = encode_key_event(&ev).unwrap();
+    #[cfg(windows)]
+    assert_eq!(bytes, b"\x1b\r", "Shift+Alt+Enter on Windows → ESC+CR");
+    #[cfg(not(windows))]
+    assert_eq!(bytes, b"\x1b[13;4~", "Shift+Alt+Enter on non-Windows → CSI 13;4~");
+}
+
 // ── Issue #134: wrapped directional navigation geometry tests ──
 
 /// Build a two-pane horizontal layout (left | right) for geometry tests.

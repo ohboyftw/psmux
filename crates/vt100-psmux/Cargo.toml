@@ -13,7 +13,7 @@
 edition = "2021"
 rust-version = "1.70"
 name = "vt100-psmux"
-version = "0.16.3"
+version = "0.16.4"
 authors = ["Jesse Luehrs <doy@tozt.net>"]
 build = false
 include = [

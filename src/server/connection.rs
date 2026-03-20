@@ -985,7 +985,7 @@ pub(crate) fn handle_connection(
                 // Warm-server claim: rename + synchronous response so CLI knows it's done.
                 if let Some(name) = args.iter().find(|a| !a.starts_with('-')) {
                     let (rtx, rrx) = mpsc::channel::<String>();
-                    let _ = tx.send(CtrlReq::ClaimSession((*name).to_string(), rtx));
+                    let _ = tx.send(CtrlReq::ClaimSession((*name).to_string(), None, rtx));
                     if let Ok(resp) = rrx.recv_timeout(std::time::Duration::from_secs(5)) {
                         let _ = write!(write_stream, "{}", resp);
                         let _ = write_stream.flush();
