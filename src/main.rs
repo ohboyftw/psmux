@@ -1117,6 +1117,14 @@ fn run_main() -> io::Result<()> {
             cmd_line.push('\n');
             if print_info {
                 let resp = send_control_with_response(cmd_line)?;
+                let trimmed = resp.trim();
+                if trimmed.is_empty() || trimmed.starts_with("ERROR:") {
+                    let msg = trimmed
+                        .strip_prefix("ERROR:")
+                        .unwrap_or("pane too small to split");
+                    eprintln!("psmux: split-window: {msg}");
+                    std::process::exit(1);
+                }
                 print!("{}", resp);
             } else {
                 let resp = send_control_with_response(cmd_line)?;

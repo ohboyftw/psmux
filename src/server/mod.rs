@@ -1199,19 +1199,20 @@ pub fn run_server(
                             for (k_env, v_env) in &env_vars {
                                 app.environment.insert(k_env.clone(), v_env.clone());
                             }
-                            let split_ok = match split_active_with_command(
+                            let split_err = match split_active_with_command(
                                 &mut app,
                                 k,
                                 cmd.as_deref(),
                                 Some(&*pty_system),
                                 start_dir.as_deref(),
                             ) {
-                                Ok(()) => true,
+                                Ok(()) => None,
                                 Err(e) => {
                                     eprintln!("psmux: split-window error: {e}");
-                                    false
+                                    Some(e.to_string())
                                 }
                             };
+                            let split_ok = split_err.is_none();
                             // Remove temporary env vars from both levels
                             for (k_env, _) in &env_vars {
                                 app.environment.remove(k_env);
@@ -1267,7 +1268,11 @@ pub fn run_server(
                                 }
                                 let _ = resp.send(pane_info);
                             } else {
-                                let _ = resp.send(String::new());
+                                // Signal error to the client with a prefix it can detect
+                                let err_msg = split_err
+                                    .as_deref()
+                                    .unwrap_or("pane too small to split");
+                                let _ = resp.send(format!("ERROR:{err_msg}"));
                             }
                             if let Some(prev) = saved_dir {
                                 env::set_current_dir(prev).ok();
