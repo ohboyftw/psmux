@@ -812,6 +812,17 @@ pub fn find_window_index_by_id(app: &AppState, wid: usize) -> Option<usize> {
 }
 
 pub fn focus_pane_by_id(app: &mut AppState, pid: usize) {
+    focus_pane_by_id_inner(app, pid, true);
+}
+
+/// Focus a pane by ID without updating MRU.
+/// Used for temporary focus (e.g. `-t` targeting) where the focus will be
+/// restored afterward and should not pollute the MRU list (#71, #140).
+pub fn focus_pane_by_id_no_mru(app: &mut AppState, pid: usize) {
+    focus_pane_by_id_inner(app, pid, false);
+}
+
+fn focus_pane_by_id_inner(app: &mut AppState, pid: usize, update_mru: bool) {
     fn rec(node: &Node, path: &mut Vec<usize>, found: &mut Option<Vec<usize>>, pid: usize) {
         match node {
             Node::Leaf(p) => {
@@ -839,7 +850,9 @@ pub fn focus_pane_by_id(app: &mut AppState, pid: usize) {
             app.active_idx = wi;
             let win = &mut app.windows[wi];
             win.active_path = p;
-            touch_mru(&mut win.pane_mru, pid);
+            if update_mru {
+                touch_mru(&mut win.pane_mru, pid);
+            }
             return;
         }
     }
@@ -968,9 +981,20 @@ pub fn reap_children(app: &mut AppState) -> io::Result<(bool, bool)> {
                         .retain(|id| surviving_ids.contains(id));
                 }
                 app.windows[i].root = new_root;
-                if !path_exists(&app.windows[i].root, &app.windows[i].active_path) {
-                    // The active pane's path shifted due to tree restructuring.
-                    // Try to find it by ID first, then by MRU order (issue #71).
+                // Check if the active path still points to the same pane.
+                // Tree restructuring can shift indices so a valid path may
+                // now reference a different pane (#140).
+                let path_still_valid = path_exists(
+                    &app.windows[i].root,
+                    &app.windows[i].active_path,
+                ) && active_pane_id
+                    == get_active_pane_id(
+                        &app.windows[i].root,
+                        &app.windows[i].active_path,
+                    );
+                if !path_still_valid {
+                    // The active pane's path shifted or the pane was pruned.
+                    // Try to find it by ID first, then by MRU order (#71, #140).
                     let found = active_pane_id
                         .and_then(|id| find_path_by_id(&app.windows[i].root, id))
                         .or_else(|| {

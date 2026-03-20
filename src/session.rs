@@ -109,10 +109,12 @@ pub fn cleanup_stale_port_files() {
                         .is_err()
                         {
                             let _ = std::fs::remove_file(&path);
-                            // Also remove the matching .key file to prevent
-                            // orphaned keys from accumulating (issue #136).
+                            // Also remove the matching .key and .version files to
+                            // prevent orphans from accumulating (issue #136).
                             let key_path = path.with_extension("key");
                             let _ = std::fs::remove_file(&key_path);
+                            let ver_path = path.with_extension("version");
+                            let _ = std::fs::remove_file(&ver_path);
                         }
                     } else {
                         let _ = std::fs::remove_file(&path);
@@ -122,6 +124,60 @@ pub fn cleanup_stale_port_files() {
                 }
             }
         }
+    }
+}
+
+/// Kill any warm (standby) servers in the given namespace.
+/// Called when the last non-warm session exits so orphan warm servers don't
+/// linger indefinitely (#120, #138).  Skips if other non-warm sessions still
+/// exist (warm servers may be needed for `new-session`).
+pub fn kill_warm_servers(ns_prefix: Option<&str>) {
+    let home = match env::var("USERPROFILE").or_else(|_| env::var("HOME")) {
+        Ok(h) => h,
+        Err(_) => return,
+    };
+    let psmux_dir = format!("{}\\.psmux", home);
+    let entries = match std::fs::read_dir(&psmux_dir) {
+        Ok(e) => e,
+        Err(_) => return,
+    };
+
+    let mut has_non_warm = false;
+    let mut warm_targets: Vec<(String, u16)> = Vec::new(); // (session_name, port)
+
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.extension().map(|e| e == "port").unwrap_or(false) {
+            if let Some(session_name) = path.file_stem().and_then(|s| s.to_str()) {
+                // Apply namespace filtering
+                if let Some(pfx) = ns_prefix {
+                    if !session_name.starts_with(pfx) {
+                        continue;
+                    }
+                }
+                if is_warm_session(session_name) {
+                    if let Ok(port_str) = std::fs::read_to_string(&path) {
+                        if let Ok(port) = port_str.trim().parse::<u16>() {
+                            warm_targets.push((session_name.to_string(), port));
+                        }
+                    }
+                } else {
+                    // Another non-warm session exists — warm servers are still needed
+                    has_non_warm = true;
+                }
+            }
+        }
+    }
+
+    if has_non_warm {
+        return; // Other sessions still running, keep warm servers alive
+    }
+
+    // No other non-warm sessions — kill all warm servers
+    for (session_name, port) in warm_targets {
+        let key = read_session_key(&session_name).unwrap_or_default();
+        let addr = format!("127.0.0.1:{}", port);
+        let _ = send_auth_cmd(&addr, &key, b"kill-server\n");
     }
 }
 

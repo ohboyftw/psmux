@@ -542,6 +542,9 @@ pub fn run_server(
     let _ = std::fs::write(&regpath, port.to_string());
     let keypath = format!("{}\\{}.key", dir, app.port_file_base());
     let _ = std::fs::write(&keypath, &session_key);
+    // Write version stamp so clients can detect stale warm servers (#110).
+    let verpath = format!("{}\\{}.version", dir, app.port_file_base());
+    let _ = std::fs::write(&verpath, crate::types::build_version_stamp());
 
     // Expose the server identity via env var so that child processes spawned
     // by run-shell (from hooks, keybindings, etc.) can find this server when
@@ -1412,7 +1415,11 @@ pub fn run_server(
                                 .unwrap_or(usize::MAX);
                                 temp_focus_restore = Some((app.active_idx, pane_id));
                             }
-                            focus_pane_by_id(&mut app, pid);
+                            // Use no_mru variant: temp focus is internal
+                            // targeting, not a user navigation action.
+                            // Touching MRU here pollutes kill-pane's MRU
+                            // fallback (#71, #140).
+                            crate::tree::focus_pane_by_id_no_mru(&mut app, pid);
                         }
                         CtrlReq::FocusPaneByIndexTemp(idx) => {
                             if temp_focus_restore.is_none() {
@@ -2998,22 +3005,31 @@ pub fn run_server(
                             hook_event = Some("window-closed");
                         }
                         CtrlReq::KillSession => {
-                            // Remove port/key files FIRST so clients see the session
-                            // as gone immediately, then kill processes.
+                            // Remove port/key/version files FIRST so clients see the
+                            // session as gone immediately, then kill processes.
                             let home = env::var("USERPROFILE")
                                 .or_else(|_| env::var("HOME"))
                                 .unwrap_or_default();
                             let regpath =
                                 format!("{}\\.psmux\\{}.port", home, app.port_file_base());
                             let keypath = format!("{}\\.psmux\\{}.key", home, app.port_file_base());
+                            let verpath =
+                                format!("{}\\.psmux\\{}.version", home, app.port_file_base());
                             let _ = std::fs::remove_file(&regpath);
                             let _ = std::fs::remove_file(&keypath);
+                            let _ = std::fs::remove_file(&verpath);
                             crate::types::shutdown_persistent_streams();
                             // Kill all child processes using a single process snapshot
                             tree::kill_all_children_batch(&mut app.windows);
                             // Kill warm pane's child (process::exit skips Drop)
                             if let Some(mut wp) = app.warm_pane.take() {
                                 wp.child.kill().ok();
+                            }
+                            // Kill orphaned warm servers if this was the last
+                            // non-warm session (#120, #138).
+                            if !is_warm_server(&app) {
+                                let ns = app.socket_name.as_deref().map(|l| format!("{l}__"));
+                                crate::session::kill_warm_servers(ns.as_deref());
                             }
                             // TerminateProcess is synchronous on Windows — processes
                             // are already dead.  Minimal delay for OS handle cleanup.
@@ -3115,6 +3131,8 @@ pub fn run_server(
                                 format!("{}\\.psmux\\{}.port", home, app.port_file_base());
                             let old_keypath =
                                 format!("{}\\.psmux\\{}.key", home, app.port_file_base());
+                            let old_verpath =
+                                format!("{}\\.psmux\\{}.version", home, app.port_file_base());
                             let new_base = if let Some(ref sn) = app.socket_name {
                                 format!("{}__{}", sn, name)
                             } else {
@@ -3122,6 +3140,8 @@ pub fn run_server(
                             };
                             let new_path = format!("{}\\.psmux\\{}.port", home, new_base);
                             let new_keypath = format!("{}\\.psmux\\{}.key", home, new_base);
+                            let new_verpath =
+                                format!("{}\\.psmux\\{}.version", home, new_base);
                             if let Some(port) = app.control_port {
                                 let _ = std::fs::remove_file(&old_path);
                                 let _ = std::fs::write(&new_path, port.to_string());
@@ -3129,6 +3149,12 @@ pub fn run_server(
                                     let _ = std::fs::remove_file(&old_keypath);
                                     let _ = std::fs::write(&new_keypath, key);
                                 }
+                                // Rename version stamp alongside port/key
+                                let _ = std::fs::remove_file(&old_verpath);
+                                let _ = std::fs::write(
+                                    &new_verpath,
+                                    crate::types::build_version_stamp(),
+                                );
                             }
                             app.session_name = name;
                             // Update env so run-shell/hooks from this server target the new name
@@ -4072,16 +4098,19 @@ pub fn run_server(
                             app.hooks.remove(&hook);
                         }
                         CtrlReq::KillServer => {
-                            // Remove port/key files FIRST so clients see the session
-                            // as gone immediately, then kill processes.
+                            // Remove port/key/version files FIRST so clients see the
+                            // session as gone immediately, then kill processes.
                             let home = env::var("USERPROFILE")
                                 .or_else(|_| env::var("HOME"))
                                 .unwrap_or_default();
                             let regpath =
                                 format!("{}\\.psmux\\{}.port", home, app.port_file_base());
                             let keypath = format!("{}\\.psmux\\{}.key", home, app.port_file_base());
+                            let verpath =
+                                format!("{}\\.psmux\\{}.version", home, app.port_file_base());
                             let _ = std::fs::remove_file(&regpath);
                             let _ = std::fs::remove_file(&keypath);
+                            let _ = std::fs::remove_file(&verpath);
                             crate::types::shutdown_persistent_streams();
                             // Kill all child processes using a single process snapshot
                             tree::kill_all_children_batch(&mut app.windows);
@@ -4995,12 +5024,20 @@ pub fn run_server(
                     .unwrap_or_default();
                 let regpath = format!("{}\\.psmux\\{}.port", home, app.port_file_base());
                 let keypath = format!("{}\\.psmux\\{}.key", home, app.port_file_base());
+                let verpath = format!("{}\\.psmux\\{}.version", home, app.port_file_base());
                 let _ = std::fs::remove_file(&regpath);
                 let _ = std::fs::remove_file(&keypath);
+                let _ = std::fs::remove_file(&verpath);
                 crate::types::shutdown_persistent_streams();
                 // Kill warm pane's child (process::exit skips Drop)
                 if let Some(mut wp) = app.warm_pane.take() {
                     wp.child.kill().ok();
+                }
+                // When a non-warm session is the last one exiting, kill any
+                // orphaned warm servers so they don't linger (#120, #138).
+                if !warm {
+                    let ns = app.socket_name.as_deref().map(|l| format!("{l}__"));
+                    crate::session::kill_warm_servers(ns.as_deref());
                 }
                 std::thread::sleep(std::time::Duration::from_millis(10));
                 std::process::exit(0);

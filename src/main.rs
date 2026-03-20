@@ -698,6 +698,20 @@ fn run_main() -> io::Result<()> {
                             if !std::path::Path::new(&warm_port_path).exists() {
                                 continue;
                             }
+                            // Skip warm servers built from a different version/commit
+                            // to avoid stale-binary confusion (#110).
+                            let warm_ver_path =
+                                format!("{}\\.psmux\\{}.version", home, warm_base);
+                            if let Ok(ver) = std::fs::read_to_string(&warm_ver_path) {
+                                if ver.trim() != crate::types::build_version_stamp() {
+                                    // Stale warm server — kill it and clean up
+                                    let _ = std::fs::remove_file(&warm_port_path);
+                                    let _ = std::fs::remove_file(&warm_ver_path);
+                                    let wkey = format!("{}\\.psmux\\{}.key", home, warm_base);
+                                    let _ = std::fs::remove_file(&wkey);
+                                    continue;
+                                }
+                            }
                             let warm_port_str = match std::fs::read_to_string(&warm_port_path) {
                                 Ok(s) => s,
                                 Err(_) => continue,
@@ -1177,6 +1191,7 @@ fn run_main() -> io::Result<()> {
         // send-keys - Send keys to a pane (critical for scripting)
         "send-keys" | "send" | "send-key" => {
             let mut literal = false;
+            let mut wait_ready = false;
             let mut keys: Vec<String> = Vec::new();
             // Getopt-style parsing: -t consumes next arg, -l/-R are boolean
             let mut i = 1;
@@ -1187,6 +1202,9 @@ fn run_main() -> io::Result<()> {
                     }
                     "-R" => {
                         keys.push("__RESET__".to_string());
+                    }
+                    "--wait-ready" => {
+                        wait_ready = true;
                     }
                     "-t" => {
                         i += 1;
@@ -1203,6 +1221,9 @@ fn run_main() -> io::Result<()> {
             let mut cmd = "send-keys".to_string();
             if literal {
                 cmd.push_str(" -l");
+            }
+            if wait_ready {
+                cmd.push_str(" --wait-ready");
             }
             // Quote arguments that contain spaces to preserve them
             for k in keys {
@@ -3204,7 +3225,12 @@ fn run_main() -> io::Result<()> {
         };
         let warm_port_path = format!("{}\\.psmux\\{}.port", home, warm_base);
         let mut warm_claimed = false;
-        if std::path::Path::new(&warm_port_path).exists() {
+        // Skip stale warm servers from a different build (#110)
+        let warm_ver_path = format!("{}\\.psmux\\{}.version", home, warm_base);
+        let warm_version_ok = std::fs::read_to_string(&warm_ver_path)
+            .map(|v| v.trim() == crate::types::build_version_stamp())
+            .unwrap_or(true); // no version file = legacy warm server, allow
+        if warm_version_ok && std::path::Path::new(&warm_port_path).exists() {
             let warm_key = crate::session::read_session_key(&warm_base).unwrap_or_default();
             if let Ok(port_str) = std::fs::read_to_string(&warm_port_path) {
                 if let Ok(port) = port_str.trim().parse::<u16>() {

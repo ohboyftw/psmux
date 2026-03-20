@@ -701,11 +701,43 @@ pub(crate) fn handle_connection(
                 let literal = args.contains(&"-l");
                 let paste_mode = args.contains(&"-p");
                 let has_x = args.contains(&"-X");
+                let wait_ready = args.contains(&"--wait-ready");
                 // Parse -N <count> for repeat
                 let mut repeat_count: usize = 1;
                 if let Some(n_pos) = args.iter().position(|a| *a == "-N") {
                     if let Some(count_str) = args.get(n_pos + 1) {
                         repeat_count = count_str.parse::<usize>().unwrap_or(1).max(1);
+                    }
+                }
+                // --wait-ready: poll pane readiness before delivering keys.
+                // Uses the same 500ms silence heuristic as wait-pane --ready.
+                if wait_ready {
+                    if let Some(pid) = target_pane {
+                        let deadline =
+                            std::time::Instant::now() + std::time::Duration::from_secs(30);
+                        let (qtx, qrx) = mpsc::channel::<(u64, u64)>();
+                        loop {
+                            let qtx2 = qtx.clone();
+                            let _ = tx.send(CtrlReq::QueryPaneReady(pid, qtx2));
+                            if let Ok((dv, lot)) =
+                                qrx.recv_timeout(std::time::Duration::from_secs(2))
+                            {
+                                if dv > 0 && lot > 0 {
+                                    let now_ms = std::time::SystemTime::now()
+                                        .duration_since(std::time::UNIX_EPOCH)
+                                        .unwrap_or_default()
+                                        .as_millis()
+                                        as u64;
+                                    if now_ms.saturating_sub(lot) >= 500 {
+                                        break; // pane is ready
+                                    }
+                                }
+                            }
+                            if std::time::Instant::now() >= deadline {
+                                break; // timeout — deliver keys anyway
+                            }
+                            std::thread::sleep(std::time::Duration::from_millis(100));
+                        }
                     }
                 }
                 if has_x {
@@ -723,9 +755,13 @@ pub(crate) fn handle_connection(
                         .iter()
                         .enumerate()
                         .filter(|(i, a)| {
-                            !a.starts_with('-') && **a != "-l" && **a != "-t"
-                    // Skip the argument to -N
-                    && !(i > &0 && args.get(i - 1).is_some_and(|prev| *prev == "-N"))
+                            !a.starts_with('-')
+                                && **a != "-l"
+                                && **a != "-t"
+                                && **a != "--wait-ready"
+                                // Skip the argument to -N
+                                && !(i > &0
+                                    && args.get(i - 1).is_some_and(|prev| *prev == "-N"))
                         })
                         .map(|(_, a)| *a)
                         .collect();

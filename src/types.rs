@@ -7,6 +7,13 @@ use portable_pty::MasterPty;
 use ratatui::prelude::Rect;
 
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
+pub const GIT_HASH: &str = env!("PSMUX_GIT_HASH");
+
+/// Build a version stamp string for warm pool staleness detection.
+/// Format: `VERSION-HASH` (e.g. `3.2.0-abc1234`).
+pub fn build_version_stamp() -> String {
+    format!("{}-{}", VERSION, GIT_HASH)
+}
 
 /// Thread-safe bounded queue for DCS passthrough sequences captured by the
 /// vt100 parser's `dcs_passthrough` callback.  Shared between the PTY reader
