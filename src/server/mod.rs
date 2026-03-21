@@ -4809,6 +4809,32 @@ pub fn run_server(
                                 let _ = tx.send(sent);
                             }
                         }
+                        CtrlReq::BackendRunShell { context_id, resp } => {
+                            let cwd = if let Some(ref cid) = context_id {
+                                let pane_id_str = cid.trim_start_matches('%');
+                                if let Ok(pid) = pane_id_str.parse::<usize>() {
+                                    let mut found_cwd = None;
+                                    for win in app.windows.iter() {
+                                        if let Some(path) =
+                                            crate::tree::find_path_by_id(&win.root, pid)
+                                        {
+                                            if let Some(p) =
+                                                crate::tree::active_pane(&win.root, &path)
+                                            {
+                                                found_cwd = p.spawn_cwd.clone();
+                                            }
+                                            break;
+                                        }
+                                    }
+                                    found_cwd
+                                } else {
+                                    None
+                                }
+                            } else {
+                                None
+                            };
+                            let _ = resp.send(cwd);
+                        }
                     }
                     // Log any active_idx change for debugging window-switch issues
                     if app.active_idx != _prev_active_idx && crate::debug_log::server_log_enabled()

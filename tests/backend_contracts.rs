@@ -1,5 +1,11 @@
 use serde::{Deserialize, Serialize};
 
+// Mirror the error code constants from src/backend/protocol.rs
+const PANE_NOT_FOUND: i32 = -32001;
+const SPAWN_FAILED: i32 = -32002;
+const COMMAND_TIMEOUT: i32 = -32007;
+const COMMAND_FAILED: i32 = -32008;
+
 #[test]
 fn test_spawn_agent_with_frontmatter_fields_deserializes() {
     let json_str = r#"{"id":"1","method":"spawn_agent","params":{
@@ -201,4 +207,36 @@ fn spawn_result_has_protocol_v2_fields() {
     assert_eq!(json["ready"], true);
     assert!(json["elapsed_ms"].is_number());
     assert!(json["data_version"].is_number());
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct RunShellResult {
+    exit_code: i32,
+    stdout: String,
+    stderr: String,
+    elapsed_ms: u64,
+}
+
+#[test]
+fn run_shell_result_shape() {
+    let result = RunShellResult {
+        exit_code: 0,
+        stdout: "hello\n".into(),
+        stderr: String::new(),
+        elapsed_ms: 42,
+    };
+    let json = serde_json::to_value(&result).unwrap();
+    assert_eq!(json["exit_code"], 0);
+    assert_eq!(json["stdout"], "hello\n");
+    assert_eq!(json["stderr"], "");
+    assert!(json["elapsed_ms"].is_number());
+}
+
+#[test]
+fn error_codes_are_in_valid_range() {
+    // JSON-RPC server errors: -32000 to -32099
+    assert!(PANE_NOT_FOUND >= -32099 && PANE_NOT_FOUND <= -32000);
+    assert!(SPAWN_FAILED >= -32099 && SPAWN_FAILED <= -32000);
+    assert!(COMMAND_TIMEOUT >= -32099 && COMMAND_TIMEOUT <= -32000);
+    assert!(COMMAND_FAILED >= -32099 && COMMAND_FAILED <= -32000);
 }

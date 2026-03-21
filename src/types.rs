@@ -1029,6 +1029,12 @@ pub enum CtrlReq {
         text: String,
         resp: Option<mpsc::Sender<bool>>,
     },
+    /// Backend `run_shell` — resolve pane cwd for server-side command execution.
+    /// Returns the pane's spawn-time cwd (or None if no context_id / pane not found).
+    BackendRunShell {
+        context_id: Option<String>,
+        resp: mpsc::Sender<Option<std::path::PathBuf>>,
+    },
 }
 
 /// Global flag set by PTY reader threads when new output arrives.

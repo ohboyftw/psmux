@@ -58,6 +58,7 @@ pub fn dispatch_rpc(line: &str, tx: &mpsc::Sender<CtrlReq>) -> Option<String> {
         "kill" => handle_kill(&req.params, tx),
         "kill_all" => handle_kill_all(&req.params, tx),
         "list" => handle_list(&req.params, tx),
+        "run_shell" => handle_run_shell(&req.params, tx),
         _ => Err(RpcErr::from((-32601, format!("Method not found: {}", req.method)))),
     };
 
@@ -456,6 +457,130 @@ fn handle_list(
     // The server returns a pre-serialized JSON string; parse it back to Value.
     serde_json::from_str(&json_str)
         .map_err(|e| RpcErr::from((-32603, format!("Internal error: {e}"))))
+}
+
+/// Handle `run_shell` — spawn a process server-side and collect its output.
+///
+/// Resolves the working directory from: explicit `cwd` param > pane `spawn_cwd` > none.
+/// Uses a poll-based timeout loop (try_wait) to keep the child handle available for
+/// `kill()` on timeout, avoiding the ownership problem with `wait_with_output()`.
+fn handle_run_shell(
+    params: &serde_json::Value,
+    tx: &mpsc::Sender<CtrlReq>,
+) -> Result<serde_json::Value, RpcErr> {
+    let p: RunShellParams = serde_json::from_value(params.clone())
+        .map_err(|e| RpcErr::from((-32602, format!("Invalid params: {e}"))))?;
+
+    if p.command.is_empty() {
+        return Err(RpcErr::from((-32602, "command must not be empty".to_string())));
+    }
+
+    let timeout_ms = p.timeout_ms.unwrap_or(30000) as u64;
+
+    // Resolve working directory: explicit cwd > pane spawn_cwd > none
+    let cwd = if let Some(ref explicit_cwd) = p.cwd {
+        Some(std::path::PathBuf::from(explicit_cwd))
+    } else if p.context_id.is_some() {
+        let (resp_tx, resp_rx) = mpsc::channel();
+        tx.send(CtrlReq::BackendRunShell {
+            context_id: p.context_id.clone(),
+            resp: resp_tx,
+        })
+        .map_err(|_| RpcErr::from((-32603, "Server channel closed".to_string())))?;
+
+        resp_rx
+            .recv_timeout(std::time::Duration::from_secs(5))
+            .map_err(|_| RpcErr::from((-32603, "Server response timeout".to_string())))?
+    } else {
+        None
+    };
+
+    // Build command
+    let mut cmd = std::process::Command::new(&p.command[0]);
+    if p.command.len() > 1 {
+        cmd.args(&p.command[1..]);
+    }
+    if let Some(ref dir) = cwd {
+        cmd.current_dir(dir);
+    }
+    if let Some(ref env_vars) = p.env {
+        for (k, v) in env_vars {
+            cmd.env(k, v);
+        }
+    }
+    cmd.stdout(std::process::Stdio::piped());
+    cmd.stderr(std::process::Stdio::piped());
+
+    // Spawn
+    let start = std::time::Instant::now();
+    let mut child = cmd.spawn().map_err(|e| RpcErr {
+        code: COMMAND_FAILED,
+        message: format!("Failed to spawn: {e}"),
+        data: Some(serde_json::json!({ "command": p.command })),
+    })?;
+
+    // Take stdout/stderr pipes before poll loop
+    let mut stdout_pipe = child.stdout.take();
+    let mut stderr_pipe = child.stderr.take();
+
+    // Poll-based timeout with try_wait — keeps child handle for kill()
+    loop {
+        match child.try_wait() {
+            Ok(Some(status)) => {
+                let mut stdout_buf = Vec::new();
+                let mut stderr_buf = Vec::new();
+                if let Some(ref mut pipe) = stdout_pipe {
+                    use std::io::Read;
+                    let _ = pipe.read_to_end(&mut stdout_buf);
+                }
+                if let Some(ref mut pipe) = stderr_pipe {
+                    use std::io::Read;
+                    let _ = pipe.read_to_end(&mut stderr_buf);
+                }
+                let result = RunShellResult {
+                    exit_code: status.code().unwrap_or(-1),
+                    stdout: String::from_utf8_lossy(&stdout_buf).to_string(),
+                    stderr: String::from_utf8_lossy(&stderr_buf).to_string(),
+                    elapsed_ms: start.elapsed().as_millis() as u64,
+                };
+                return serde_json::to_value(result)
+                    .map_err(|e| RpcErr::from((-32603, format!("Internal error: {e}"))));
+            }
+            Ok(None) => {
+                if start.elapsed().as_millis() as u64 > timeout_ms {
+                    let _ = child.kill();
+                    let mut stdout_buf = Vec::new();
+                    let mut stderr_buf = Vec::new();
+                    if let Some(ref mut pipe) = stdout_pipe {
+                        use std::io::Read;
+                        let _ = pipe.read_to_end(&mut stdout_buf);
+                    }
+                    if let Some(ref mut pipe) = stderr_pipe {
+                        use std::io::Read;
+                        let _ = pipe.read_to_end(&mut stderr_buf);
+                    }
+                    return Err(RpcErr {
+                        code: COMMAND_TIMEOUT,
+                        message: format!("Command timed out after {}ms", timeout_ms),
+                        data: Some(serde_json::json!({
+                            "stdout": String::from_utf8_lossy(&stdout_buf),
+                            "stderr": String::from_utf8_lossy(&stderr_buf),
+                            "command": p.command,
+                            "timeout_ms": timeout_ms,
+                        })),
+                    });
+                }
+                std::thread::sleep(std::time::Duration::from_millis(50));
+            }
+            Err(e) => {
+                return Err(RpcErr {
+                    code: COMMAND_FAILED,
+                    message: format!("Process error: {e}"),
+                    data: None,
+                });
+            }
+        }
+    }
 }
 
 #[cfg(test)]
