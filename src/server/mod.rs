@@ -736,7 +736,7 @@ pub fn run_server(
     if let Some(ref raw_args) = raw_command {
         create_window_raw(&*pty_system, &mut app, raw_args)?;
     } else {
-        create_window(&*pty_system, &mut app, initial_command.as_deref(), None)?;
+        create_window(&*pty_system, &mut app, initial_command.as_deref(), None, None)?;
     }
     if let Some(prev) = saved_dir {
         env::set_current_dir(prev).ok();
@@ -916,7 +916,7 @@ pub fn run_server(
                         _ => "",
                     };
                     match req {
-                        CtrlReq::NewWindow(cmd, name, detached, start_dir, env_vars) => {
+                        CtrlReq::NewWindow(cmd, name, detached, start_dir, env_vars, shell) => {
                             let prev_idx = app.active_idx;
                             // Expand format variables like #{pane_current_path} (#111)
                             let start_dir = start_dir
@@ -930,9 +930,9 @@ pub fn run_server(
                             if let Some(dir) = &start_dir {
                                 env::set_current_dir(dir).ok();
                             }
-                            // Hide the warm pane when an explicit start dir is requested
-                            // so create_window spawns a fresh shell in the correct CWD.
-                            let stashed_warm = if start_dir.is_some() || !env_vars.is_empty() {
+                            // Hide the warm pane when an explicit start dir, env vars,
+                            // or shell override is requested — the warm pane uses the default shell.
+                            let stashed_warm = if start_dir.is_some() || !env_vars.is_empty() || shell.is_some() {
                                 app.warm_pane.take()
                             } else {
                                 None
@@ -949,6 +949,7 @@ pub fn run_server(
                                 &mut app,
                                 cmd.as_deref(),
                                 start_dir.as_deref(),
+                                shell.as_deref(),
                             ) {
                                 eprintln!("psmux: new-window error: {e}");
                             }
@@ -988,6 +989,7 @@ pub fn run_server(
                             start_dir,
                             format_str,
                             env_vars,
+                            shell,
                             resp,
                         ) => {
                             let prev_idx = app.active_idx;
@@ -1002,7 +1004,7 @@ pub fn run_server(
                             if let Some(dir) = &start_dir {
                                 env::set_current_dir(dir).ok();
                             }
-                            let stashed_warm = if start_dir.is_some() || !env_vars.is_empty() {
+                            let stashed_warm = if start_dir.is_some() || !env_vars.is_empty() || shell.is_some() {
                                 app.warm_pane.take()
                             } else {
                                 None
@@ -1019,6 +1021,7 @@ pub fn run_server(
                                 &mut app,
                                 cmd.as_deref(),
                                 start_dir.as_deref(),
+                                shell.as_deref(),
                             ) {
                                 eprintln!("psmux: new-window error: {e}");
                             }
@@ -1066,6 +1069,7 @@ pub fn run_server(
                             start_dir,
                             size_pct,
                             env_vars,
+                            shell,
                             resp,
                         ) => {
                             // tmux: split-window without -Z permanently unzooms (#82)
@@ -1082,8 +1086,8 @@ pub fn run_server(
                                 env::set_current_dir(dir).ok();
                             }
                             let prev_path = app.windows[app.active_idx].active_path.clone();
-                            // Hide warm pane when explicit start_dir or env vars are given
-                            let stashed_warm = if start_dir.is_some() || !env_vars.is_empty() {
+                            // Hide warm pane when explicit start_dir, env vars, or shell override given
+                            let stashed_warm = if start_dir.is_some() || !env_vars.is_empty() || shell.is_some() {
                                 app.warm_pane.take()
                             } else {
                                 None
@@ -1098,6 +1102,7 @@ pub fn run_server(
                                 cmd.as_deref(),
                                 Some(&*pty_system),
                                 start_dir.as_deref(),
+                                shell.as_deref(),
                             ) {
                                 let _ = resp.send(format!("psmux: split-window: {e}"));
                             } else {
@@ -1175,6 +1180,7 @@ pub fn run_server(
                             size_pct,
                             format_str,
                             env_vars,
+                            shell,
                             resp,
                         ) => {
                             unzoom_if_zoomed(&mut app);
@@ -1190,7 +1196,7 @@ pub fn run_server(
                                 env::set_current_dir(dir).ok();
                             }
                             let prev_path = app.windows[app.active_idx].active_path.clone();
-                            let stashed_warm = if start_dir.is_some() || !env_vars.is_empty() {
+                            let stashed_warm = if start_dir.is_some() || !env_vars.is_empty() || shell.is_some() {
                                 app.warm_pane.take()
                             } else {
                                 None
@@ -1205,6 +1211,7 @@ pub fn run_server(
                                 cmd.as_deref(),
                                 Some(&*pty_system),
                                 start_dir.as_deref(),
+                                shell.as_deref(),
                             ) {
                                 Ok(()) => None,
                                 Err(e) => {
@@ -4516,6 +4523,7 @@ pub fn run_server(
                             env: extra_env,
                             metadata,
                             split_direction,
+                            shell,
                             resp,
                         } => {
                             // Build command string: join argv into a single
@@ -4532,8 +4540,8 @@ pub fn run_server(
                             if let Some(dir) = &start_dir {
                                 env::set_current_dir(dir).ok();
                             }
-                            // Temporarily stash warm pane when custom dir is given
-                            let stashed_warm = if start_dir.is_some() {
+                            // Temporarily stash warm pane when custom dir or shell override is given
+                            let stashed_warm = if start_dir.is_some() || shell.is_some() {
                                 app.warm_pane.take()
                             } else {
                                 None
@@ -4553,6 +4561,7 @@ pub fn run_server(
                                 Some(&cmd_str),
                                 Some(&*pty_system),
                                 start_dir.as_deref(),
+                                shell.as_deref(),
                             );
                             // Restore stashed env vars
                             for (k, prev) in saved_envs {

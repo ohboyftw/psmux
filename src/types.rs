@@ -115,6 +115,9 @@ pub struct Pane {
     pub passthrough_queue: PassthroughQueue,
     /// Working directory at pane spawn time. Used by run_shell to inherit context.
     pub spawn_cwd: Option<std::path::PathBuf>,
+    /// Shell binary basename used for this pane (e.g. "bash", "pwsh").
+    /// Set at spawn time from the --shell flag, default-shell, or system default.
+    pub shell_name: Option<String>,
 }
 
 /// Pre-spawned shell ready to be transplanted into a new window instantly.
@@ -784,7 +787,8 @@ pub enum CtrlReq {
         bool,
         Option<String>,
         Vec<(String, String)>,
-    ), // cmd, name, detached, start_dir, env_vars
+        Option<String>,
+    ), // cmd, name, detached, start_dir, env_vars, shell
     NewWindowPrint(
         Option<String>,
         Option<String>,
@@ -792,8 +796,9 @@ pub enum CtrlReq {
         Option<String>,
         Option<String>,
         Vec<(String, String)>,
+        Option<String>,
         mpsc::Sender<String>,
-    ), // cmd, name, detached, start_dir, format, env_vars, resp
+    ), // cmd, name, detached, start_dir, format, env_vars, shell, resp
     SplitWindow(
         LayoutKind,
         Option<String>,
@@ -801,8 +806,9 @@ pub enum CtrlReq {
         Option<String>,
         Option<u16>,
         Vec<(String, String)>,
+        Option<String>,
         mpsc::Sender<String>,
-    ), // kind, cmd, detached, start_dir, size_percent, env_vars, error_resp
+    ), // kind, cmd, detached, start_dir, size_percent, env_vars, shell, error_resp
     SplitWindowPrint(
         LayoutKind,
         Option<String>,
@@ -811,8 +817,9 @@ pub enum CtrlReq {
         Option<u16>,
         Option<String>,
         Vec<(String, String)>,
+        Option<String>,
         mpsc::Sender<String>,
-    ), // kind, cmd, detached, start_dir, size_percent, format, env_vars, resp
+    ), // kind, cmd, detached, start_dir, size_percent, format, env_vars, shell, resp
     KillPane,
     KillPaneById(usize),
     CapturePane(mpsc::Sender<String>),
@@ -997,6 +1004,8 @@ pub enum CtrlReq {
         env: Option<std::collections::HashMap<String, String>>,
         metadata: Option<crate::backend::protocol::AgentMetadata>,
         split_direction: Option<LayoutKind>,
+        /// Shell override from `SpawnAgentParams::shell` (--shell flag).
+        shell: Option<String>,
         resp: mpsc::Sender<String>,
     },
     /// Backend `capture` — capture pane content by context ID.

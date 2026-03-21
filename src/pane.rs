@@ -79,11 +79,13 @@ pub fn create_window(
     app: &mut AppState,
     command: Option<&str>,
     start_dir: Option<&str>,
+    shell_override: Option<&str>,
 ) -> io::Result<()> {
     // ── Fast path: use pre-spawned warm pane when creating a default shell ──
     // The warm pane has its shell already loaded (~470ms for pwsh), so the
     // prompt appears instantly — matching wezterm's "instant tab" feel.
-    if command.is_none() && start_dir.is_none() && app.warm_pane.is_some() {
+    // Skip when shell_override is set — the warm pane uses the default shell.
+    if command.is_none() && start_dir.is_none() && shell_override.is_none() && app.warm_pane.is_some() {
         let wp = app.warm_pane.take().unwrap();
         // Resize to current terminal dimensions if they changed since pre-spawn
         let area = app.last_window_area;
@@ -112,6 +114,7 @@ pub fn create_window(
         } else {
             Some(app.default_shell.as_str())
         };
+        let warm_shell_name = default_shell_name(None, configured_shell);
         let pane = Pane {
             master: wp.master,
             writer: wp.writer,
@@ -137,8 +140,9 @@ pub fn create_window(
             metadata: std::collections::HashMap::new(),
             passthrough_queue: PassthroughQueue::new(64),
             spawn_cwd: std::env::current_dir().ok(),
+            shell_name: Some(warm_shell_name.clone()),
         };
-        let win_name = default_shell_name(None, configured_shell);
+        let win_name = warm_shell_name;
         let initial_pane_id = wp.pane_id;
         app.windows.push(Window {
             root: Node::Leaf(pane),
@@ -174,10 +178,15 @@ pub fn create_window(
         .openpty(size)
         .map_err(|e| io::Error::other(format!("openpty error: {e}")))?;
 
-    // When no explicit command is given, use the configured default-shell
-    // (from `set -g default-shell` / `default-command`).
-    // Expand format variables like #{pane_current_path} at spawn time (#111).
-    let expanded_shell = crate::format::expand_format(&app.default_shell, app);
+    // Shell resolution priority:
+    // 1. shell_override (--shell flag) — highest priority
+    // 2. app.default_shell — server-wide default
+    // 3. System default shell — current behavior
+    let expanded_shell = if let Some(shell) = shell_override {
+        shell.to_string()
+    } else {
+        crate::format::expand_format(&app.default_shell, app)
+    };
     let mut shell_cmd = if command.is_some() {
         build_command(command, app.env_shim)
     } else if !expanded_shell.is_empty() {
@@ -249,6 +258,18 @@ pub fn create_window(
     conpty_preemptive_dsr_response(&mut *pty_writer);
     let epoch = std::time::Instant::now() - Duration::from_secs(2);
     let pane_id = app.next_pane_id;
+    // Compute shell_name: basename of the shell used for this pane.
+    let cw_shell_name = if let Some(cmd) = command {
+        default_shell_name(Some(cmd), None)
+    } else if !expanded_shell.is_empty() {
+        std::path::Path::new(&expanded_shell)
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or("shell")
+            .to_string()
+    } else {
+        default_shell_name(None, configured_shell)
+    };
     let pane = Pane {
         master: pair.master,
         writer: pty_writer,
@@ -276,6 +297,7 @@ pub fn create_window(
         spawn_cwd: start_dir
             .map(std::path::PathBuf::from)
             .or_else(|| std::env::current_dir().ok()),
+        shell_name: Some(cw_shell_name.clone()),
     };
     app.next_pane_id += 1;
     let win_name = command
@@ -387,7 +409,7 @@ pub fn spawn_warm_pane(
 }
 
 pub fn split_active(app: &mut AppState, kind: LayoutKind) -> io::Result<()> {
-    split_active_with_command(app, kind, None, None, None)
+    split_active_with_command(app, kind, None, None, None, None)
 }
 
 /// Create a new window with a raw command (program + args, no shell wrapping)
@@ -461,6 +483,11 @@ pub fn create_window_raw(
     conpty_preemptive_dsr_response(&mut *pty_writer);
     let epoch = std::time::Instant::now() - Duration::from_secs(2);
     let raw_pane_id = app.next_pane_id;
+    let raw_win_name = std::path::Path::new(&raw_args[0])
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or(&raw_args[0])
+        .to_string();
     let pane = Pane {
         master: pair.master,
         writer: pty_writer,
@@ -486,13 +513,10 @@ pub fn create_window_raw(
         metadata: std::collections::HashMap::new(),
         passthrough_queue: PassthroughQueue::new(64),
         spawn_cwd: std::env::current_dir().ok(),
+        shell_name: Some(raw_win_name.clone()),
     };
     app.next_pane_id += 1;
-    let win_name = std::path::Path::new(&raw_args[0])
-        .file_stem()
-        .and_then(|s| s.to_str())
-        .unwrap_or(&raw_args[0])
-        .to_string();
+    let win_name = raw_win_name;
     app.windows.push(Window {
         root: Node::Leaf(pane),
         active_path: vec![],
@@ -529,6 +553,7 @@ pub fn split_active_with_command(
     command: Option<&str>,
     pty_system_ref: Option<&dyn portable_pty::PtySystem>,
     start_dir: Option<&str>,
+    shell_override: Option<&str>,
 ) -> io::Result<()> {
     // ── Guard: refuse split if the active pane is too small ──────────
     // After splitting, each half gets roughly (dim / 2) - 1 (for the divider).
@@ -606,9 +631,9 @@ pub fn split_active_with_command(
     // though its ConPTY was created at full-window size, resizing to the
     // split dimensions only costs a ConPTY repaint (~10-50ms) vs a full
     // cold spawn (~500ms).  Net result: split feels nearly instant.
-    // Skip warm pane when start_dir is set — the warm pane was spawned
-    // in the server's CWD, not the requested directory (#107).
-    if command.is_none() && start_dir.is_none() && app.warm_pane.is_some() {
+    // Skip warm pane when start_dir or shell_override is set — the warm pane
+    // was spawned in the server's CWD with the default shell (#107).
+    if command.is_none() && start_dir.is_none() && shell_override.is_none() && app.warm_pane.is_some() {
         let wp = app.warm_pane.take().unwrap();
         // Resize ConPTY + parser to the split dimensions
         if rows != wp.rows || cols != wp.cols {
@@ -625,6 +650,24 @@ pub fn split_active_with_command(
         }
         let epoch = std::time::Instant::now() - Duration::from_secs(2);
         let new_pane_id = wp.pane_id;
+        let configured_shell_name = {
+            let s = crate::format::expand_format(&app.default_shell, app);
+            if s.is_empty() {
+                cached_shell()
+                    .and_then(|p| {
+                        std::path::Path::new(p)
+                            .file_stem()
+                            .map(|s| s.to_string_lossy().into_owned())
+                    })
+                    .unwrap_or_else(|| "shell".into())
+            } else {
+                std::path::Path::new(&s)
+                    .file_stem()
+                    .and_then(|fs| fs.to_str())
+                    .unwrap_or("shell")
+                    .to_string()
+            }
+        };
         let new_leaf = Node::Leaf(Pane {
             master: wp.master,
             writer: wp.writer,
@@ -650,6 +693,7 @@ pub fn split_active_with_command(
             metadata: std::collections::HashMap::new(),
             passthrough_queue: PassthroughQueue::new(64),
             spawn_cwd: std::env::current_dir().ok(),
+            shell_name: Some(configured_shell_name),
         });
         let win = &mut app.windows[app.active_idx];
         replace_leaf_with_split(&mut win.root, &win.active_path, kind, new_leaf);
@@ -665,9 +709,15 @@ pub fn split_active_with_command(
     let pair = pty_system
         .openpty(size)
         .map_err(|e| io::Error::other(format!("openpty error: {e}")))?;
-    // When no explicit command is given, use the configured default-shell.
-    // Expand format variables like #{pane_current_path} at spawn time (#111).
-    let expanded_shell = crate::format::expand_format(&app.default_shell, app);
+    // Shell resolution priority:
+    // 1. shell_override (--shell flag) — highest priority
+    // 2. app.default_shell — server-wide default
+    // 3. System default shell — current behavior
+    let expanded_shell = if let Some(shell) = shell_override {
+        shell.to_string()
+    } else {
+        crate::format::expand_format(&app.default_shell, app)
+    };
     let mut shell_cmd = if command.is_some() {
         build_command(command, app.env_shim)
     } else if !expanded_shell.is_empty() {
@@ -728,6 +778,29 @@ pub fn split_active_with_command(
     conpty_preemptive_dsr_response(&mut *pty_writer);
     let epoch = std::time::Instant::now() - Duration::from_secs(2);
     let split_pane_id = app.next_pane_id;
+    // Compute shell_name: basename of the shell actually used for this pane.
+    let split_shell_name = if let Some(cmd) = command {
+        let (prog, _) = resolve_shell_program(cmd);
+        std::path::Path::new(&prog)
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or(cmd)
+            .to_string()
+    } else if !expanded_shell.is_empty() {
+        std::path::Path::new(&expanded_shell)
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or("shell")
+            .to_string()
+    } else {
+        cached_shell()
+            .and_then(|p| {
+                std::path::Path::new(p)
+                    .file_stem()
+                    .map(|s| s.to_string_lossy().into_owned())
+            })
+            .unwrap_or_else(|| "shell".into())
+    };
     let new_leaf = Node::Leaf(Pane {
         master: pair.master,
         writer: pty_writer,
@@ -755,6 +828,7 @@ pub fn split_active_with_command(
         spawn_cwd: start_dir
             .map(std::path::PathBuf::from)
             .or_else(|| std::env::current_dir().ok()),
+        shell_name: Some(split_shell_name),
     });
     app.next_pane_id += 1;
     let win = &mut app.windows[app.active_idx];

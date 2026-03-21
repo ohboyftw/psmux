@@ -935,6 +935,7 @@ fn run_main() -> io::Result<()> {
             let mut format_str: Option<String> = None;
             let mut start_dir: Option<String> = None;
             let mut env_vars: Vec<String> = Vec::new();
+            let mut shell_arg: Option<String> = None;
             let mut nw_positional: Vec<String> = Vec::new();
             {
                 let mut i = 1;
@@ -967,6 +968,12 @@ fn run_main() -> io::Result<()> {
                             i += 1;
                             if i < cmd_args.len() {
                                 env_vars.push(cmd_args[i].trim_matches('"').to_string());
+                            }
+                        }
+                        "--shell" => {
+                            i += 1;
+                            if i < cmd_args.len() {
+                                shell_arg = Some(cmd_args[i].trim_matches('"').to_string());
                             }
                         }
                         "-t" | "-S" => {
@@ -1009,6 +1016,9 @@ fn run_main() -> io::Result<()> {
             for ev in &env_vars {
                 cmd_line.push_str(&format!(" -e \"{}\"", ev.replace("\"", "\\\"")));
             }
+            if let Some(ref sh) = shell_arg {
+                cmd_line.push_str(&format!(" --shell \"{}\"", sh.replace("\"", "\\\"")));
+            }
             if !cmd_arg.is_empty() {
                 cmd_line.push_str(&format!(" \"{}\"", cmd_arg.replace("\"", "\\\"")));
             }
@@ -1031,6 +1041,7 @@ fn run_main() -> io::Result<()> {
             let mut start_dir: Option<String> = None;
             let mut size_pct: Option<String> = None;
             let mut env_vars: Vec<String> = Vec::new();
+            let mut shell_arg: Option<String> = None;
             let mut sw_positional: Vec<String> = Vec::new();
             {
                 let mut i = 1;
@@ -1063,6 +1074,12 @@ fn run_main() -> io::Result<()> {
                             i += 1;
                             if i < cmd_args.len() {
                                 env_vars.push(cmd_args[i].trim_matches('"').to_string());
+                            }
+                        }
+                        "--shell" => {
+                            i += 1;
+                            if i < cmd_args.len() {
+                                shell_arg = Some(cmd_args[i].trim_matches('"').to_string());
                             }
                         }
                         "-t" => {
@@ -1110,6 +1127,9 @@ fn run_main() -> io::Result<()> {
             }
             for ev in &env_vars {
                 cmd_line.push_str(&format!(" -e \"{}\"", ev.replace("\"", "\\\"")));
+            }
+            if let Some(ref sh) = shell_arg {
+                cmd_line.push_str(&format!(" --shell \"{}\"", sh.replace("\"", "\\\"")));
             }
             if !cmd_arg.is_empty() {
                 cmd_line.push_str(&format!(" \"{}\"", cmd_arg.replace("\"", "\\\"")));

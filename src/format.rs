@@ -1468,6 +1468,13 @@ pub fn expand_var(var: &str, app: &AppState, win_idx: usize) -> String {
                 String::new()
             }
         }
+        "pane_shell" => {
+            if let Some(p) = target_pane() {
+                p.shell_name.clone().unwrap_or_default()
+            } else {
+                String::new()
+            }
+        }
         "pane_ready" => {
             // A pane is "ready" when its shell has produced output (data_version > 0)
             // and the output has stabilised (no new output for >= 500ms).

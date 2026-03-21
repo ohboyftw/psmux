@@ -130,6 +130,7 @@ fn handle_spawn_agent(
         env: p.env,
         metadata,
         split_direction,
+        shell: p.shell,
         resp: resp_tx,
     })
     .map_err(|_| RpcErr::from((-32603, "Server channel closed".to_string())))?;

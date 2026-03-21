@@ -233,7 +233,7 @@ pub fn run(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> io::Result<
 
     load_config(&mut app);
 
-    create_window(&*pty_system, &mut app, None, None)?;
+    create_window(&*pty_system, &mut app, None, None, None)?;
 
     let (tx, rx) = mpsc::channel::<CtrlReq>();
     app.control_rx = Some(rx);
@@ -360,7 +360,7 @@ pub fn run(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> io::Result<
                                     && args.windows(2).all(|w| !(w[0] == "-n" && w[1] == **a))
                             })
                             .map(|s| s.trim_matches('"').to_string());
-                        let _ = tx.send(CtrlReq::NewWindow(cmd_str, name, false, None, vec![]));
+                        let _ = tx.send(CtrlReq::NewWindow(cmd_str, name, false, None, vec![], None));
                         // Write immediate acknowledgment so the client's read()
                         // returns promptly instead of waiting for stream close.
                         let _ = writeln!(stream, "OK");
@@ -385,6 +385,7 @@ pub fn run(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> io::Result<
                             None,
                             None,
                             vec![],
+                            None,
                             rtx,
                         ));
                         let _ = writeln!(stream, "OK");
@@ -1221,8 +1222,8 @@ pub fn run(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> io::Result<
                 break;
             };
             match req {
-                CtrlReq::NewWindow(cmd, name, _detached, start_dir, _) => {
-                    create_window(&*pty_system, &mut app, cmd.as_deref(), start_dir.as_deref())?;
+                CtrlReq::NewWindow(cmd, name, _detached, start_dir, _, shell) => {
+                    create_window(&*pty_system, &mut app, cmd.as_deref(), start_dir.as_deref(), shell.as_deref())?;
                     if let Some(n) = name {
                         if let Some(w) = app.windows.last_mut() {
                             w.name = n;
@@ -1230,7 +1231,7 @@ pub fn run(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> io::Result<
                     }
                     resize_all_panes(&mut app);
                 }
-                CtrlReq::SplitWindow(k, cmd, _detached, start_dir, _size_pct, _, resp) => {
+                CtrlReq::SplitWindow(k, cmd, _detached, start_dir, _size_pct, _, shell, resp) => {
                     let _ = resp.send(
                         if let Err(e) = split_active_with_command(
                             &mut app,
@@ -1238,6 +1239,7 @@ pub fn run(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> io::Result<
                             cmd.as_deref(),
                             Some(&*pty_system),
                             start_dir.as_deref(),
+                            shell.as_deref(),
                         ) {
                             format!("{e}")
                         } else {

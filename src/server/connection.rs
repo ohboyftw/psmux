@@ -290,6 +290,11 @@ pub(crate) fn handle_connection(
                             .map(|(k, v)| (k.to_string(), v.to_string()))
                     })
                     .collect();
+                // Parse --shell SHELL override
+                let shell_arg: Option<String> = args
+                    .windows(2)
+                    .find(|w| w[0] == "--shell")
+                    .map(|w| w[1].trim_matches('"').to_string());
                 let cmd_str: Option<String> = args
                     .iter()
                     .find(|a| {
@@ -298,12 +303,13 @@ pub(crate) fn handle_connection(
                             && args.windows(2).all(|w| !(w[0] == "-c" && w[1] == **a))
                             && args.windows(2).all(|w| !(w[0] == "-F" && w[1] == **a))
                             && args.windows(2).all(|w| !(w[0] == "-e" && w[1] == **a))
+                            && args.windows(2).all(|w| !(w[0] == "--shell" && w[1] == **a))
                     })
                     .map(|s| s.trim_matches('"').to_string());
                 if print_info {
                     let (rtx, rrx) = mpsc::channel::<String>();
                     let _ = tx.send(CtrlReq::NewWindowPrint(
-                        cmd_str, name, detached, start_dir, format_str, env_vars, rtx,
+                        cmd_str, name, detached, start_dir, format_str, env_vars, shell_arg, rtx,
                     ));
                     if let Ok(text) = rrx.recv_timeout(Duration::from_millis(2000)) {
                         let _ = writeln!(write_stream, "{}", text);
@@ -314,7 +320,7 @@ pub(crate) fn handle_connection(
                     }
                 } else {
                     let _ = tx.send(CtrlReq::NewWindow(
-                        cmd_str, name, detached, start_dir, env_vars,
+                        cmd_str, name, detached, start_dir, env_vars, shell_arg,
                     ));
                 }
             }
@@ -354,6 +360,11 @@ pub(crate) fn handle_connection(
                             .map(|(k, v)| (k.to_string(), v.to_string()))
                     })
                     .collect();
+                // Parse --shell SHELL override
+                let shell_arg: Option<String> = args
+                    .windows(2)
+                    .find(|w| w[0] == "--shell")
+                    .map(|w| w[1].trim_matches('"').to_string());
                 let cmd_str: Option<String> = args
                     .iter()
                     .find(|a| {
@@ -363,12 +374,13 @@ pub(crate) fn handle_connection(
                             && args.windows(2).all(|w| !(w[0] == "-l" && w[1] == **a))
                             && args.windows(2).all(|w| !(w[0] == "-F" && w[1] == **a))
                             && args.windows(2).all(|w| !(w[0] == "-e" && w[1] == **a))
+                            && args.windows(2).all(|w| !(w[0] == "--shell" && w[1] == **a))
                     })
                     .map(|s| s.trim_matches('"').to_string());
                 if print_info {
                     let (rtx, rrx) = mpsc::channel::<String>();
                     let _ = tx.send(CtrlReq::SplitWindowPrint(
-                        kind, cmd_str, detached, start_dir, size_pct, format_str, env_vars, rtx,
+                        kind, cmd_str, detached, start_dir, size_pct, format_str, env_vars, shell_arg, rtx,
                     ));
                     if let Ok(text) = rrx.recv_timeout(Duration::from_millis(2000)) {
                         let _ = writeln!(write_stream, "{}", text);
@@ -380,7 +392,7 @@ pub(crate) fn handle_connection(
                 } else {
                     let (rtx, rrx) = mpsc::channel::<String>();
                     let _ = tx.send(CtrlReq::SplitWindow(
-                        kind, cmd_str, detached, start_dir, size_pct, env_vars, rtx,
+                        kind, cmd_str, detached, start_dir, size_pct, env_vars, shell_arg, rtx,
                     ));
                     if let Ok(err_msg) = rrx.recv_timeout(Duration::from_millis(2000)) {
                         if !err_msg.is_empty() {
