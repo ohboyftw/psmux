@@ -136,6 +136,7 @@ pub fn create_window(
             pane_style: None,
             metadata: std::collections::HashMap::new(),
             passthrough_queue: PassthroughQueue::new(64),
+            spawn_cwd: std::env::current_dir().ok(),
         };
         let win_name = default_shell_name(None, configured_shell);
         let initial_pane_id = wp.pane_id;
@@ -272,6 +273,9 @@ pub fn create_window(
         pane_style: None,
         metadata: std::collections::HashMap::new(),
         passthrough_queue: PassthroughQueue::new(64),
+        spawn_cwd: start_dir
+            .map(std::path::PathBuf::from)
+            .or_else(|| std::env::current_dir().ok()),
     };
     app.next_pane_id += 1;
     let win_name = command
@@ -481,6 +485,7 @@ pub fn create_window_raw(
         pane_style: None,
         metadata: std::collections::HashMap::new(),
         passthrough_queue: PassthroughQueue::new(64),
+        spawn_cwd: std::env::current_dir().ok(),
     };
     app.next_pane_id += 1;
     let win_name = std::path::Path::new(&raw_args[0])
@@ -644,6 +649,7 @@ pub fn split_active_with_command(
             pane_style: None,
             metadata: std::collections::HashMap::new(),
             passthrough_queue: PassthroughQueue::new(64),
+            spawn_cwd: std::env::current_dir().ok(),
         });
         let win = &mut app.windows[app.active_idx];
         replace_leaf_with_split(&mut win.root, &win.active_path, kind, new_leaf);
@@ -746,6 +752,9 @@ pub fn split_active_with_command(
         pane_style: None,
         metadata: std::collections::HashMap::new(),
         passthrough_queue: PassthroughQueue::new(64),
+        spawn_cwd: start_dir
+            .map(std::path::PathBuf::from)
+            .or_else(|| std::env::current_dir().ok()),
     });
     app.next_pane_id += 1;
     let win = &mut app.windows[app.active_idx];

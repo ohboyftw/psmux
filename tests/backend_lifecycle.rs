@@ -12,7 +12,7 @@ fn test_dispatch_initialize() {
     let parsed: serde_json::Value = serde_json::from_str(&response.unwrap()).unwrap();
     assert_eq!(parsed["id"], "1");
     assert!(parsed["result"]["self_context_id"].is_string());
-    assert_eq!(parsed["result"]["protocol_version"], "1");
+    assert_eq!(parsed["result"]["protocol_version"], "2");
 }
 
 #[test]
@@ -54,7 +54,7 @@ fn test_dispatch_capture() {
     let parsed: serde_json::Value = serde_json::from_str(&response.unwrap()).unwrap();
     assert_eq!(parsed["id"], "4");
     assert!(parsed["result"]["text"].is_string());
-    assert_eq!(parsed["result"]["truncated"], false);
+    assert!(parsed["result"]["data_version"].is_number());
 }
 
 #[test]

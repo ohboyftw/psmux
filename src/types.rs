@@ -113,6 +113,8 @@ pub struct Pane {
     /// Filled by the PTY reader thread's vt100 callback, drained by the
     /// client render loop when `allow_passthrough` is "on" or "all".
     pub passthrough_queue: PassthroughQueue,
+    /// Working directory at pane spawn time. Used by run_shell to inherit context.
+    pub spawn_cwd: Option<std::path::PathBuf>,
 }
 
 /// Pre-spawned shell ready to be transplanted into a new window instantly.
@@ -1020,9 +1022,12 @@ pub enum CtrlReq {
         resp: mpsc::Sender<Vec<String>>,
     },
     /// Backend `write` — send text to a pane by context ID.
+    /// `resp` is optional: `Some(tx)` requests acknowledgement (true = sent,
+    /// false = pane not found); `None` is fire-and-forget (backward compatible).
     BackendSendText {
         pane_id: String,
         text: String,
+        resp: Option<mpsc::Sender<bool>>,
     },
 }
 

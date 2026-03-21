@@ -237,12 +237,22 @@ fn handle_write(
     let text = String::from_utf8(decoded)
         .map_err(|e| RpcErr::from((-32602, format!("Invalid UTF-8: {e}"))))?;
 
-    // Fire-and-forget: send text to the pane.
+    // Send text to the pane and wait for confirmation.
+    let (resp_tx, resp_rx) = mpsc::channel();
     tx.send(CtrlReq::BackendSendText {
-        pane_id: p.context_id,
+        pane_id: p.context_id.clone(),
         text,
+        resp: Some(resp_tx),
     })
     .map_err(|_| RpcErr::from((-32603, "Server channel closed".to_string())))?;
+
+    if let Ok(false) = resp_rx.recv_timeout(std::time::Duration::from_secs(2)) {
+        return Err(RpcErr {
+            code: PANE_NOT_FOUND,
+            message: format!("Pane not found: {}", p.context_id),
+            data: Some(serde_json::json!({ "context_id": p.context_id })),
+        });
+    }
 
     Ok(serde_json::json!({}))
 }

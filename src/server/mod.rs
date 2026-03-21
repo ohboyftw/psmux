@@ -4610,11 +4610,13 @@ pub fn run_server(
                                 .strip_prefix('%')
                                 .and_then(|s| s.parse::<usize>().ok());
                             let mut captured = String::new();
+                            let mut found = false;
                             if let Some(pid) = id {
                                 // Find the pane across all windows
                                 for win in &app.windows {
                                     if let Some(path) = crate::tree::find_path_by_id(&win.root, pid)
                                     {
+                                        found = true;
                                         if let Some(p) = crate::tree::active_pane(&win.root, &path)
                                         {
                                             if let Ok(parser) = p.term.lock() {
@@ -4637,22 +4639,26 @@ pub fn run_server(
                                     }
                                 }
                             }
-                            // Clean mode: strip trailing blank lines
-                            if clean {
-                                while captured.ends_with("\n\n") {
-                                    captured.pop();
+                            if !found {
+                                let _ = resp.send("__PANE_NOT_FOUND__".to_string());
+                            } else {
+                                // Clean mode: strip trailing blank lines
+                                if clean {
+                                    while captured.ends_with("\n\n") {
+                                        captured.pop();
+                                    }
                                 }
-                            }
-                            // Line limiting: return only the last N lines
-                            if let Some(max_lines) = lines {
-                                let max = max_lines as usize;
-                                let all_lines: Vec<&str> = captured.lines().collect();
-                                if all_lines.len() > max {
-                                    captured = all_lines[all_lines.len() - max..].join("\n");
-                                    captured.push('\n');
+                                // Line limiting: return only the last N lines
+                                if let Some(max_lines) = lines {
+                                    let max = max_lines as usize;
+                                    let all_lines: Vec<&str> = captured.lines().collect();
+                                    if all_lines.len() > max {
+                                        captured = all_lines[all_lines.len() - max..].join("\n");
+                                        captured.push('\n');
+                                    }
                                 }
+                                let _ = resp.send(captured);
                             }
-                            let _ = resp.send(captured);
                         }
                         CtrlReq::BackendListPanes { resp } => {
                             // Build a JSON array of all panes across all windows.
@@ -4778,10 +4784,11 @@ pub fn run_server(
                             }
                             let _ = resp.send(killed_ids);
                         }
-                        CtrlReq::BackendSendText { pane_id, text } => {
+                        CtrlReq::BackendSendText { pane_id, text, resp } => {
                             let id = pane_id
                                 .strip_prefix('%')
                                 .and_then(|s| s.parse::<usize>().ok());
+                            let mut sent = false;
                             if let Some(pid) = id {
                                 // Find the pane and write text to its PTY writer.
                                 for win in &mut app.windows {
@@ -4792,10 +4799,14 @@ pub fn run_server(
                                         {
                                             let _ = p.writer.write_all(text.as_bytes());
                                             let _ = p.writer.flush();
+                                            sent = true;
                                         }
                                         break;
                                     }
                                 }
+                            }
+                            if let Some(tx) = resp {
+                                let _ = tx.send(sent);
                             }
                         }
                     }
