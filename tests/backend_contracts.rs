@@ -240,3 +240,23 @@ fn error_codes_are_in_valid_range() {
     assert!(COMMAND_TIMEOUT >= -32099 && COMMAND_TIMEOUT <= -32000);
     assert!(COMMAND_FAILED >= -32099 && COMMAND_FAILED <= -32000);
 }
+
+#[test]
+fn bare_flag_injects_bare_for_claude_command() {
+    let mut command = vec!["claude".to_string(), "-p".to_string(), "task".to_string()];
+    let bare = true;
+    if bare && command.first().map(|c| c.to_lowercase().contains("claude")).unwrap_or(false) {
+        command.insert(1, "--bare".to_string());
+    }
+    assert_eq!(command, vec!["claude", "--bare", "-p", "task"]);
+}
+
+#[test]
+fn bare_flag_ignored_for_non_claude_command() {
+    let mut command = vec!["python".to_string(), "script.py".to_string()];
+    let bare = true;
+    if bare && command.first().map(|c| c.to_lowercase().contains("claude")).unwrap_or(false) {
+        command.insert(1, "--bare".to_string());
+    }
+    assert_eq!(command, vec!["python", "script.py"]);
+}
