@@ -166,6 +166,30 @@ No extra configuration needed. Full guide: **[docs/claude-code.md](docs/claude-c
 >
 > These features are on the [`ohboyftw/psmux`](https://github.com/ohboyftw/psmux/tree/ohboy-builds) fork and not yet merged to upstream `master`.
 
+## Television Integration
+
+psmux ships with a [cable channel pack](cable/) for [television](https://github.com/alexpasmantier/television) (`tv`) — a fast Rust fuzzy finder. Fuzzy-search your sessions, windows, and panes with live `capture-pane` preview.
+
+```powershell
+# Install channels
+pwsh cable/install.ps1
+
+# Usage
+tv psmux-panes       # Fuzzy pane picker with live content preview
+tv psmux-agents      # Browse running agent swarm (@agent, @role metadata)
+tv psmux-sessions    # Switch sessions
+tv psmux-windows     # Switch windows
+tv psmux-keys        # Browse key bindings
+```
+
+| Channel | Preview | Actions |
+|---------|---------|---------|
+| `psmux-panes` | Live `capture-pane` output | Enter=focus, Ctrl+K=kill, Ctrl+C=clipboard |
+| `psmux-agents` | Clean agent output | Enter=focus, Ctrl+K=kill, Ctrl+S=send-keys |
+| `psmux-sessions` | Pane list per session | Enter=attach, Ctrl+K=kill |
+| `psmux-windows` | Pane list per window | Enter=select, Ctrl+K=kill |
+| `psmux-keys` | — | Enter=copy command |
+
 ## Documentation
 
 | Topic | Description |
