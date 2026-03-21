@@ -85,7 +85,11 @@ pub fn create_window(
     // The warm pane has its shell already loaded (~470ms for pwsh), so the
     // prompt appears instantly — matching wezterm's "instant tab" feel.
     // Skip when shell_override is set — the warm pane uses the default shell.
-    if command.is_none() && start_dir.is_none() && shell_override.is_none() && app.warm_pane.is_some() {
+    if command.is_none()
+        && start_dir.is_none()
+        && shell_override.is_none()
+        && app.warm_pane.is_some()
+    {
         let wp = app.warm_pane.take().unwrap();
         // Resize to current terminal dimensions if they changed since pre-spawn
         let area = app.last_window_area;
@@ -299,6 +303,10 @@ pub fn create_window(
             .or_else(|| std::env::current_dir().ok()),
         shell_name: Some(cw_shell_name.clone()),
     };
+    #[cfg(feature = "mycel")]
+    crate::mycel::publish_pane_event("psmux/pane/created", &serde_json::json!({
+        "pane_id": format!("%{}", pane_id), "command": command.unwrap_or(""),
+    }));
     app.next_pane_id += 1;
     let win_name = command
         .map(|c| default_shell_name(Some(c), None))
@@ -633,7 +641,11 @@ pub fn split_active_with_command(
     // cold spawn (~500ms).  Net result: split feels nearly instant.
     // Skip warm pane when start_dir or shell_override is set — the warm pane
     // was spawned in the server's CWD with the default shell (#107).
-    if command.is_none() && start_dir.is_none() && shell_override.is_none() && app.warm_pane.is_some() {
+    if command.is_none()
+        && start_dir.is_none()
+        && shell_override.is_none()
+        && app.warm_pane.is_some()
+    {
         let wp = app.warm_pane.take().unwrap();
         // Resize ConPTY + parser to the split dimensions
         if rows != wp.rows || cols != wp.cols {
@@ -830,6 +842,10 @@ pub fn split_active_with_command(
             .or_else(|| std::env::current_dir().ok()),
         shell_name: Some(split_shell_name),
     });
+    #[cfg(feature = "mycel")]
+    crate::mycel::publish_pane_event("psmux/pane/created", &serde_json::json!({
+        "pane_id": format!("%{}", split_pane_id), "command": command.unwrap_or(""),
+    }));
     app.next_pane_id += 1;
     let win = &mut app.windows[app.active_idx];
     replace_leaf_with_split(&mut win.root, &win.active_path, kind, new_leaf);

@@ -573,6 +573,15 @@ pub fn run_server(
     > = std::sync::Arc::new(std::sync::RwLock::new(std::collections::HashMap::new()));
     let shared_aliases_main = shared_aliases.clone();
 
+    // Initialize mycel event bus (optional — only when built with --features mycel)
+    #[cfg(feature = "mycel")]
+    {
+        let hostname = std::env::var("COMPUTERNAME")
+            .or_else(|_| std::env::var("HOSTNAME"))
+            .unwrap_or_else(|_| "unknown".into());
+        crate::mycel::init_mycel_bus(&format!("psmux@{}", hostname));
+    }
+
     // Clone tx for the backend pipe listener before moving tx into the TCP accept thread.
     let backend_tx = tx.clone();
     let backend_session_name = app.session_name.clone();

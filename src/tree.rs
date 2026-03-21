@@ -537,6 +537,15 @@ pub fn prune_exited(n: Node, remain_on_exit: bool) -> Option<Node> {
         if let Ok(json) = serde_json::to_string(&event) {
             crate::types::push_backend_event(&json);
         }
+        // Publish to mycel event bus (optional)
+        #[cfg(feature = "mycel")]
+        crate::mycel::publish_pane_event(
+            "psmux/pane/died",
+            &serde_json::json!({
+                "pane_id": format!("%{}", pane_id),
+                "exit_code": exit_code,
+            }),
+        );
     }
     result
 }
@@ -984,14 +993,13 @@ pub fn reap_children(app: &mut AppState) -> io::Result<(bool, bool)> {
                 // Check if the active path still points to the same pane.
                 // Tree restructuring can shift indices so a valid path may
                 // now reference a different pane (#140).
-                let path_still_valid = path_exists(
-                    &app.windows[i].root,
-                    &app.windows[i].active_path,
-                ) && active_pane_id
-                    == get_active_pane_id(
-                        &app.windows[i].root,
-                        &app.windows[i].active_path,
-                    );
+                let path_still_valid =
+                    path_exists(&app.windows[i].root, &app.windows[i].active_path)
+                        && active_pane_id
+                            == get_active_pane_id(
+                                &app.windows[i].root,
+                                &app.windows[i].active_path,
+                            );
                 if !path_still_valid {
                     // The active pane's path shifted or the pane was pruned.
                     // Try to find it by ID first, then by MRU order (#71, #140).

@@ -29,6 +29,8 @@ mod window_ops;
 mod backend;
 #[allow(unused)]
 mod remote;
+#[cfg(feature = "mycel")]
+mod mycel;
 
 use std::env;
 use std::io::{self, BufRead as _, Read as _, Write};
