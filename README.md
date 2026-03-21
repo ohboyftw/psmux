@@ -13,7 +13,7 @@
 
 <p align="center">
   <strong>The native Windows tmux. Born in PowerShell, made in Rust.</strong><br/>
-  Full mouse support · tmux themes · tmux config · 76 commands · blazing fast
+  Full mouse support · tmux themes · tmux config · 92 commands · blazing fast
 </p>
 
 <p align="center">
@@ -117,7 +117,7 @@ See [docker/README.md](docker/README.md) for full details.
 
 ## Why psmux?
 
-If you've used tmux on Linux/macOS and wished you had something like it on Windows, **this is it**. Split panes, multiple windows, session persistence, full mouse support, tmux themes, 76 commands, 126+ format variables, 53 vim copy-mode keys. Your existing `.tmux.conf` works. Full details: **[docs/features.md](docs/features.md)** · **[docs/compatibility.md](docs/compatibility.md)**
+If you've used tmux on Linux/macOS and wished you had something like it on Windows, **this is it**. Split panes, multiple windows, session persistence, full mouse support, tmux themes, 92 commands, 126+ format variables, 53 vim copy-mode keys. Your existing `.tmux.conf` works. Full details: **[docs/features.md](docs/features.md)** · **[docs/compatibility.md](docs/compatibility.md)**
 
 ## Usage
 
@@ -142,14 +142,29 @@ claude                       # Run Claude Code — agent teams just work
 
 No extra configuration needed. Full guide: **[docs/claude-code.md](docs/claude-code.md)**
 
-> **`ohboy-builds` branch** adds production-grade agent orchestration on top of the basic pane spawning available on `master`:
+> **[`ohboy-builds` branch](https://github.com/ohboyftw/psmux/tree/ohboy-builds)** adds production-grade agent orchestration on top of `master`:
 >
-> - **New commands:** `wait-pane` (block until agent exits), `capture-pane --clean` (strip shell noise), `--json` output for programmatic queries, `psmux run` (one-shot pane execution)
-> - **Claude Code compatibility:** Tested against Claude Code's `TeammateTool` and `TmuxBackend` — auto-detected via `$TMUX` env var. See [docs/claude-code.md](docs/claude-code.md) for details
-> - **Launcher script:** [`scripts/Start-ClaudeTeams.ps1`](scripts/Start-ClaudeTeams.ps1) — one-command setup that creates a psmux session, sets `$TMUX`, and launches Claude Code with agent teams enabled
-> - **Pi agent dispatch:** [`pi-dispatch.ps1`](.claude/scripts/pi-dispatch.ps1) spawns a [Pi](https://github.com/microsoft/pi) coding agent in a psmux pane, polls for completion, and captures clean output. [`pi-bridge.ps1`](.claude/skills/pi-dispatch/scripts/pi-bridge.ps1) integrates Pi results back into Claude Code's TeammateTool inbox for multi-model swarm orchestration.
+> **Agent Backend (Protocol v2):**
+> - **CustomPaneBackend** — JSON-RPC 2.0 server over Windows named pipes for Claude Code's TeammateTool agent spawning
+> - **Spawn with readiness** — `spawn_agent` waits until the pane shell is ready before returning (no more swallowed commands)
+> - **Capture with freshness** — `capture` can wait for new output via `data_version` tracking (no more stale reads)
+> - **`run_shell`** — Execute commands server-side and get stdout + exit codes directly. Bypasses send-keys entirely
+> - **`--shell` flag** — Request `bash`, `pwsh`, or `cmd` per pane on `new-window`/`split-window`/`spawn_agent`. Reported via `#{pane_shell}`
+> - **`--bare` aware spawning** — Automatically injects `--bare` for Claude Code agents to skip hooks/LSP overhead
+> - **Structured errors** — Machine-readable error codes (`PANE_NOT_FOUND`, `SPAWN_TIMEOUT`, `COMMAND_TIMEOUT`, etc.)
 >
-> These features are not yet on `master`.
+> **Remote & Transport:**
+> - **Remote tmux control mode** — `attach-remote`, `new-session-remote`, `list-sessions-remote` connect to remote Linux tmux sessions over SSH using `-CC` control mode
+> - **DCS passthrough** — `set -g allow-passthrough on` forwards DCS sequences to the host terminal
+>
+> **Agent Compatibility:**
+> - **Claude Code `TeammateTool`** — Auto-detected via `$TMUX`. Tested with 5-8 concurrent agents
+> - **Warm pool lifecycle** — Version-stamped warm panes, orphan cleanup on session exit
+> - **`send-keys --wait-ready`** — Server-side pane readiness polling before key delivery
+> - **`-e KEY=VAL`** — Per-pane environment variables on `new-window`/`split-window`
+> - **Launcher script:** [`scripts/Start-ClaudeTeams.ps1`](scripts/Start-ClaudeTeams.ps1) — one-command agent teams setup
+>
+> These features are on the [`ohboyftw/psmux`](https://github.com/ohboyftw/psmux/tree/ohboy-builds) fork and not yet merged to upstream `master`.
 
 ## Documentation
 
@@ -159,7 +174,7 @@ No extra configuration needed. Full guide: **[docs/claude-code.md](docs/claude-c
 | **[Compatibility](docs/compatibility.md)** | tmux command/config compatibility matrix |
 | **[Performance](docs/performance.md)** | Benchmarks and optimization details |
 | **[Key Bindings](docs/keybindings.md)** | Default keys and customization |
-| **[Scripting](docs/scripting.md)** | 76 commands, hooks, targets, pipe-pane |
+| **[Scripting](docs/scripting.md)** | 92 commands, hooks, targets, pipe-pane |
 | **[Configuration](docs/configuration.md)** | Config files, options, environment variables |
 | **[Plugins & Themes](docs/plugins.md)** | Plugin ecosystem — Catppuccin, Dracula, Nord, and more |
 | **[Mouse Over SSH](docs/mouse-ssh.md)** | SSH mouse support and Windows version requirements |
