@@ -2617,20 +2617,28 @@ pub fn handle_mouse(app: &mut AppState, me: MouseEvent, window_area: Rect) -> io
                 win.active_path = path.clone();
                 active_area = Some(*area);
             }
-            // tmux parity: Only forward scroll to child if alternate screen
-            // is active (real TUI app like nvim/htop).  If not (shell prompt),
-            // auto-enter copy mode.
+            // tmux parity: Forward scroll to child if alternate screen is
+            // active (real TUI app like nvim/htop) OR if the child has
+            // explicitly enabled button-press mouse tracking (e.g. Codex CLI,
+            // opencode — apps that request 1000/1002 but not alternate screen).
             //
-            // We only check alternate_screen() — NOT is_fullscreen_tui() or
-            // pane_wants_mouse() — because:
-            //   - is_fullscreen_tui() false-positives when shell output (ls/dir)
-            //     fills the screen, preventing scroll-to-copy-mode.
-            //   - pane_wants_mouse() false-positives from PSReadLine's spurious
-            //     mouse tracking on ConPTY.
-            //   - alternate_screen() is reliable: all TUI apps report it correctly.
+            // We exclude AnyMotion (1003) from the mouse-mode check because
+            // PSReadLine on ConPTY spuriously enables it without actually
+            // handling scroll events, which would break scroll-to-copy-mode.
+            // Apps that genuinely handle scroll (Codex CLI, htop, etc.) use
+            // PressRelease (1000) or ButtonMotion (1002).
             let child_in_alt = active_pane(&win.root, &win.active_path).is_some_and(|p| {
                 if let Ok(parser) = p.term.lock() {
-                    return parser.screen().alternate_screen();
+                    let screen = parser.screen();
+                    if screen.alternate_screen() {
+                        return true;
+                    }
+                    // Forward scroll when app explicitly requests button-click
+                    // mouse tracking (fixes #88: Codex CLI scroll).
+                    // Exclude AnyMotion — PSReadLine sets it spuriously.
+                    let mode = screen.mouse_protocol_mode();
+                    return mode != vt100::MouseProtocolMode::None
+                        && mode != vt100::MouseProtocolMode::AnyMotion;
                 }
                 false
             });
@@ -2691,14 +2699,19 @@ pub fn handle_mouse(app: &mut AppState, me: MouseEvent, window_area: Rect) -> io
                 win.active_path = path.clone();
                 active_area = Some(*area);
             }
-            // Forward scroll-down to child only if alternate screen is active
-            // (real TUI app).  At a shell prompt, scroll-down without copy
-            // mode is a no-op (can't scroll past live output).
-            // Only check alternate_screen() — NOT is_fullscreen_tui() — to
-            // avoid false-positives when shell output fills the screen.
+            // Forward scroll-down to child if alternate screen is active
+            // (real TUI app) OR if the child has explicitly enabled
+            // button-press mouse tracking (fixes #88: Codex CLI scroll).
+            // AnyMotion (1003) is excluded — PSReadLine sets it spuriously.
             let child_in_alt = active_pane(&win.root, &win.active_path).is_some_and(|p| {
                 if let Ok(parser) = p.term.lock() {
-                    return parser.screen().alternate_screen();
+                    let screen = parser.screen();
+                    if screen.alternate_screen() {
+                        return true;
+                    }
+                    let mode = screen.mouse_protocol_mode();
+                    return mode != vt100::MouseProtocolMode::None
+                        && mode != vt100::MouseProtocolMode::AnyMotion;
                 }
                 false
             });

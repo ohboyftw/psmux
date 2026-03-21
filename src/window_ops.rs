@@ -861,21 +861,16 @@ fn remote_scroll_wheel(app: &mut AppState, x: u16, y: u16, up: bool) {
         return;
     }
 
-    // Determine target pane, switch focus, and check if child is in alternate screen.
+    // Determine target pane, switch focus, and check if child should receive
+    // scroll events (alternate screen active, or explicit button-click mouse
+    // tracking requested — fixes #88: Codex CLI scroll).
     //
-    // IMPORTANT (tmux parity): For scroll events, we ONLY check alternate_screen()
-    // to decide whether to forward to the child or enter copy mode.
+    // AnyMotion (1003) is excluded from the mouse-mode check: PSReadLine on
+    // ConPTY spuriously enables it without handling scroll events, which
+    // would break scroll-to-copy-mode at shell prompts.
     //
-    // We do NOT use:
-    //   - pane_wants_mouse() / mouse_protocol_mode(): PSReadLine on ConPTY
-    //     spuriously enables AnyMotion mouse tracking.
-    //   - is_fullscreen_tui() heuristic: A shell prompt after `ls` / `dir` can
-    //     fill the last rows + leave the cursor at the bottom, causing a false
-    //     positive that prevents scroll-to-copy-mode.
-    //
-    // alternate_screen() is reliable: all modern TUI apps (nvim, htop, vim,
-    // opencode) correctly report alternate screen through ConPTY.  Testing
-    // confirms nvim shows alternate_on=1.  Shell prompts always show 0.
+    // We do NOT use is_fullscreen_tui(): a shell prompt after `ls` / `dir`
+    // can fill the screen, causing a false positive.
     let (child_in_alt_screen, target_area_opt, sgr_btn, button_state) = {
         let win = &mut app.windows[app.active_idx];
         let mut rects: Vec<(Vec<usize>, Rect)> = Vec::new();
@@ -896,16 +891,25 @@ fn remote_scroll_wheel(app: &mut AppState, x: u16, y: u16, up: bool) {
                 .map(|(_, area)| *area);
         }
 
-        let alt = active_pane(&win.root, &win.active_path).is_some_and(|p| {
+        let forward = active_pane(&win.root, &win.active_path).is_some_and(|p| {
             if let Ok(parser) = p.term.lock() {
-                return parser.screen().alternate_screen();
+                let screen = parser.screen();
+                if screen.alternate_screen() {
+                    return true;
+                }
+                // Forward scroll when app explicitly requests button-click
+                // mouse tracking (fixes #88: Codex CLI scroll).
+                // Exclude AnyMotion — PSReadLine sets it spuriously.
+                let mode = screen.mouse_protocol_mode();
+                return mode != vt100::MouseProtocolMode::None
+                    && mode != vt100::MouseProtocolMode::AnyMotion;
             }
             false
         });
         let sgr_btn: u8 = if up { 64 } else { 65 };
         let wheel_delta: i16 = if up { 120 } else { -120 };
         let bs = ((wheel_delta as i32) << 16) as u32;
-        (alt, target_area, sgr_btn, bs)
+        (forward, target_area, sgr_btn, bs)
     };
 
     mouse_log(&format!("  -> alt_screen={}", child_in_alt_screen));
