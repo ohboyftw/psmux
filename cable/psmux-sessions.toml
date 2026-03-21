@@ -1,0 +1,28 @@
+[metadata]
+name = "psmux-sessions"
+description = "Switch between psmux sessions"
+requirements = ["psmux"]
+
+[source]
+command = "psmux list-sessions -F '#{session_name}\t#{session_windows} windows\t#{session_attached} attached'"
+display = "{split:\t:0}  ({split:\t:1}, {split:\t:2})"
+output = "{split:\t:0}"
+shell = "powershell"
+
+[preview]
+command = "psmux list-panes -t '{split:\t:0}' -F '#{pane_id} #{pane_shell} #{pane_current_path}'"
+shell = "powershell"
+
+[keybindings]
+enter = "actions:attach"
+ctrl-k = "actions:kill"
+
+[actions.attach]
+description = "Attach to session"
+command = "psmux attach-session -t '{split:\t:0}'"
+mode = "execute"
+
+[actions.kill]
+description = "Kill session"
+command = "psmux kill-session -t '{split:\t:0}'"
+mode = "fork"

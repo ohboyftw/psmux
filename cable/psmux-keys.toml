@@ -1,0 +1,14 @@
+[metadata]
+name = "psmux-keys"
+description = "Browse psmux key bindings"
+requirements = ["psmux"]
+
+[source]
+command = "psmux list-keys -F '#{key_binding}\t#{key_command}'"
+display = "{split:\t:0}  ->  {split:\t:1}"
+output = "{split:\t:1}"
+shell = "powershell"
+frecency = false
+
+[ui.preview_panel]
+hidden = true

@@ -1,0 +1,28 @@
+[metadata]
+name = "psmux-windows"
+description = "Switch between psmux windows"
+requirements = ["psmux"]
+
+[source]
+command = "psmux list-windows -F '#{window_index}\t#{window_name}\t#{window_panes} panes\t#{window_active}'"
+display = "{split:\t:0}: {split:\t:1}  ({split:\t:2})"
+output = "{split:\t:0}"
+shell = "powershell"
+
+[preview]
+command = "psmux list-panes -t ':{split:\t:0}' -F '  #{pane_id} #{pane_shell} #{pane_current_path}'"
+shell = "powershell"
+
+[keybindings]
+enter = "actions:select"
+ctrl-k = "actions:kill"
+
+[actions.select]
+description = "Select window"
+command = "psmux select-window -t ':{split:\t:0}'"
+mode = "execute"
+
+[actions.kill]
+description = "Kill window"
+command = "psmux kill-window -t ':{split:\t:0}'"
+mode = "fork"

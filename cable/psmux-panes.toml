@@ -1,0 +1,41 @@
+[metadata]
+name = "psmux-panes"
+description = "Fuzzy pane picker with live content preview"
+requirements = ["psmux"]
+
+[source]
+command = "psmux list-panes -a -F '#{pane_id}\t#{window_name}\t#{pane_shell}\t#{pane_current_path}'"
+display = "{split:\t:0}  {split:\t:1} [{split:\t:2}] {split:\t:3}"
+output = "{split:\t:0}"
+shell = "powershell"
+
+[preview]
+command = "psmux capture-pane -t '{split:\t:0}' -p"
+shell = "powershell"
+
+[ui]
+layout = "landscape"
+
+[ui.preview_panel]
+size = 60
+header = "Pane {split:\t:0} — {split:\t:2} @ {split:\t:3}"
+
+[keybindings]
+enter = "actions:focus"
+ctrl-k = "actions:kill"
+ctrl-c = "actions:capture"
+
+[actions.focus]
+description = "Focus pane"
+command = "psmux select-pane -t '{split:\t:0}'"
+mode = "execute"
+
+[actions.kill]
+description = "Kill pane"
+command = "psmux kill-pane -t '{split:\t:0}'"
+mode = "fork"
+
+[actions.capture]
+description = "Capture pane to clipboard"
+command = "psmux capture-pane -t '{split:\t:0}' -p | Set-Clipboard"
+mode = "fork"
