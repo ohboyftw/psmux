@@ -125,14 +125,13 @@ fn handle_spawn_agent(
 
     // --bare injection: prepend --bare for Claude Code commands
     let mut command = p.command;
-    if p.bare.unwrap_or(false) {
-        if command
+    if p.bare.unwrap_or(false)
+        && command
             .first()
             .map(|c| c.to_lowercase().contains("claude"))
             .unwrap_or(false)
-        {
-            command.insert(1, "--bare".to_string());
-        }
+    {
+        command.insert(1, "--bare".to_string());
     }
 
     let (resp_tx, resp_rx) = mpsc::channel();

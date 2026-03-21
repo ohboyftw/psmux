@@ -5032,6 +5032,17 @@ pub fn run_server(
                 state_dirty = true;
             }
         }
+        // ── display-panes auto-dismiss (#143/#144) ──
+        // When display-panes is active in server/client mode, the server owns
+        // PaneChooser mode but app::run()'s timeout check never fires.
+        // Auto-dismiss here after display_panes_time_ms so pane numbers don't
+        // stay on screen indefinitely.
+        if let Mode::PaneChooser { opened_at } = &app.mode {
+            if opened_at.elapsed() > Duration::from_millis(app.display_panes_time_ms) {
+                app.mode = Mode::Passthrough;
+                state_dirty = true;
+            }
+        }
         // Check if all windows/panes have exited (throttled to every 250ms)
         if last_reap.elapsed() >= Duration::from_millis(100) {
             last_reap = Instant::now();
