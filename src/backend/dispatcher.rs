@@ -10,6 +10,12 @@ use crate::types::CtrlReq;
 
 use super::protocol::*;
 
+/// Parse a "%N" context_id string into a usize pane index.
+/// Returns None if the format is invalid.
+fn parse_pane_id(context_id: &str) -> Option<usize> {
+    context_id.strip_prefix('%').and_then(|s| s.parse().ok())
+}
+
 /// Dispatch a single newline-delimited JSON-RPC request.
 ///
 /// Returns `Some(json_string)` with the response to send back to the client,
@@ -63,8 +69,8 @@ fn handle_initialize(
         .map_err(|_| (-32603, "Server response timeout".to_string()))?;
 
     let result = InitializeResult {
-        protocol_version: "1".into(),
-        capabilities: vec!["events".into(), "capture".into()],
+        protocol_version: "2".into(),
+        capabilities: vec!["events".into(), "capture".into(), "run_shell".into()],
         self_context_id,
     };
 
@@ -112,10 +118,20 @@ fn handle_spawn_agent(
         .map_err(|_| (-32603, "Server response timeout".to_string()))?;
 
     if let Some(err_msg) = context_id.strip_prefix("ERROR:") {
-        return Err((-32603, err_msg.to_string()));
+        let code = if err_msg.contains("too small") {
+            PANE_TOO_SMALL
+        } else {
+            SPAWN_FAILED
+        };
+        return Err((code, err_msg.to_string()));
     }
 
-    let result = SpawnAgentResult { context_id };
+    let result = SpawnAgentResult {
+        context_id,
+        ready: false, // Task 3 will add actual readiness polling
+        elapsed_ms: 0,
+        data_version: 0,
+    };
     serde_json::to_value(result).map_err(|e| (-32603, format!("Internal error: {e}")))
 }
 
@@ -153,6 +169,8 @@ fn handle_capture(
     let p: CaptureParams = serde_json::from_value(params.clone())
         .map_err(|e| (-32602, format!("Invalid params: {e}")))?;
 
+    let context_id = p.context_id.clone();
+
     let (resp_tx, resp_rx) = mpsc::channel();
     tx.send(CtrlReq::BackendCapturePane {
         pane_id: p.context_id,
@@ -166,9 +184,26 @@ fn handle_capture(
         .recv_timeout(std::time::Duration::from_secs(5))
         .map_err(|_| (-32603, "Server response timeout".to_string()))?;
 
+    // Check for PANE_NOT_FOUND sentinel
+    if text == "__PANE_NOT_FOUND__" {
+        return Err((PANE_NOT_FOUND, format!("Pane not found: {}", context_id)));
+    }
+
+    // Read data_version for the response
+    let data_version = if let Some(pid) = parse_pane_id(&context_id) {
+        let (qtx, qrx) = mpsc::channel();
+        let _ = tx.send(CtrlReq::QueryPaneReady(pid, qtx));
+        qrx.recv_timeout(std::time::Duration::from_millis(500))
+            .map(|(dv, _)| dv)
+            .unwrap_or(0)
+    } else {
+        0
+    };
+
     let result = CaptureResult {
-        truncated: false,
         text,
+        data_version,
+        context_id,
     };
     serde_json::to_value(result).map_err(|e| (-32603, format!("Internal error: {e}")))
 }
