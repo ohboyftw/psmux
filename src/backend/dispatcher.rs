@@ -2,13 +2,30 @@
 //!
 //! Each handler validates its parameters, sends the appropriate CtrlReq to
 //! the server's main loop, waits for the response, and returns a
-//! `serde_json::Value` result or an `(error_code, message)` tuple.
+//! `serde_json::Value` result or an `RpcErr`.
 
 use std::sync::mpsc;
 
 use crate::types::CtrlReq;
 
 use super::protocol::*;
+
+/// Structured error type for handler return values, supporting optional `data`.
+struct RpcErr {
+    code: i32,
+    message: String,
+    data: Option<serde_json::Value>,
+}
+
+impl From<(i32, String)> for RpcErr {
+    fn from((code, message): (i32, String)) -> Self {
+        Self {
+            code,
+            message,
+            data: None,
+        }
+    }
+}
 
 /// Parse a "%N" context_id string into a usize pane index.
 /// Returns None if the format is invalid.
@@ -41,12 +58,15 @@ pub fn dispatch_rpc(line: &str, tx: &mpsc::Sender<CtrlReq>) -> Option<String> {
         "kill" => handle_kill(&req.params, tx),
         "kill_all" => handle_kill_all(&req.params, tx),
         "list" => handle_list(&req.params, tx),
-        _ => Err((-32601, format!("Method not found: {}", req.method))),
+        _ => Err(RpcErr::from((-32601, format!("Method not found: {}", req.method)))),
     };
 
     let resp = match result {
         Ok(value) => RpcResponse::success(id, value),
-        Err((code, msg)) => RpcResponse::error(id, code, msg),
+        Err(e) => match e.data {
+            Some(data) => RpcResponse::error_with_data(id, e.code, e.message, data),
+            None => RpcResponse::error(id, e.code, e.message),
+        },
     };
 
     Some(serde_json::to_string(&resp).unwrap())
@@ -56,17 +76,17 @@ pub fn dispatch_rpc(line: &str, tx: &mpsc::Sender<CtrlReq>) -> Option<String> {
 fn handle_initialize(
     params: &serde_json::Value,
     tx: &mpsc::Sender<CtrlReq>,
-) -> Result<serde_json::Value, (i32, String)> {
+) -> Result<serde_json::Value, RpcErr> {
     let _params: InitializeParams = serde_json::from_value(params.clone())
-        .map_err(|e| (-32602, format!("Invalid params: {e}")))?;
+        .map_err(|e| RpcErr::from((-32602, format!("Invalid params: {e}"))))?;
 
     // Ask the server for the active pane's context ID.
     let (resp_tx, resp_rx) = mpsc::channel();
     tx.send(CtrlReq::BackendInitialize { resp: resp_tx })
-        .map_err(|_| (-32603, "Server channel closed".to_string()))?;
+        .map_err(|_| RpcErr::from((-32603, "Server channel closed".to_string())))?;
     let self_context_id = resp_rx
         .recv_timeout(std::time::Duration::from_secs(5))
-        .map_err(|_| (-32603, "Server response timeout".to_string()))?;
+        .map_err(|_| RpcErr::from((-32603, "Server response timeout".to_string())))?;
 
     let result = InitializeResult {
         protocol_version: "2".into(),
@@ -74,19 +94,19 @@ fn handle_initialize(
         self_context_id,
     };
 
-    serde_json::to_value(result).map_err(|e| (-32603, format!("Internal error: {e}")))
+    serde_json::to_value(result).map_err(|e| RpcErr::from((-32603, format!("Internal error: {e}"))))
 }
 
 /// Handle `spawn_agent` — create a new pane with the given command.
 fn handle_spawn_agent(
     params: &serde_json::Value,
     tx: &mpsc::Sender<CtrlReq>,
-) -> Result<serde_json::Value, (i32, String)> {
+) -> Result<serde_json::Value, RpcErr> {
     let p: SpawnAgentParams = serde_json::from_value(params.clone())
-        .map_err(|e| (-32602, format!("Invalid params: {e}")))?;
+        .map_err(|e| RpcErr::from((-32602, format!("Invalid params: {e}"))))?;
 
     if p.command.is_empty() {
-        return Err((-32602, "command must not be empty".into()));
+        return Err(RpcErr::from((-32602, "command must not be empty".into())));
     }
 
     let metadata = p.metadata;
@@ -94,10 +114,10 @@ fn handle_spawn_agent(
         Some("horizontal") => Some(crate::types::LayoutKind::Horizontal),
         Some("vertical") => Some(crate::types::LayoutKind::Vertical),
         Some(_) => {
-            return Err((
+            return Err(RpcErr::from((
                 -32602,
                 "split_direction must be \"horizontal\" or \"vertical\"".into(),
-            ))
+            )))
         }
         None => None,
     };
@@ -111,11 +131,11 @@ fn handle_spawn_agent(
         split_direction,
         resp: resp_tx,
     })
-    .map_err(|_| (-32603, "Server channel closed".to_string()))?;
+    .map_err(|_| RpcErr::from((-32603, "Server channel closed".to_string())))?;
 
     let context_id = resp_rx
         .recv_timeout(std::time::Duration::from_secs(10))
-        .map_err(|_| (-32603, "Server response timeout".to_string()))?;
+        .map_err(|_| RpcErr::from((-32603, "Server response timeout".to_string())))?;
 
     if let Some(err_msg) = context_id.strip_prefix("ERROR:") {
         let code = if err_msg.contains("too small") {
@@ -123,40 +143,106 @@ fn handle_spawn_agent(
         } else {
             SPAWN_FAILED
         };
-        return Err((code, err_msg.to_string()));
+        return Err(RpcErr::from((code, err_msg.to_string())));
+    }
+
+    // --- Readiness polling (runs in dispatcher thread, NOT server loop) ---
+    let ready;
+    let elapsed_ms;
+    let data_version;
+
+    if p.wait_ready {
+        let timeout_ms = p.ready_timeout_ms.unwrap_or(15000) as u64;
+        let deadline = std::time::Instant::now() + std::time::Duration::from_millis(timeout_ms);
+        let start = std::time::Instant::now();
+
+        if let Some(pid) = parse_pane_id(&context_id) {
+            // NOTE: We reuse one (qtx, qrx) channel across loop iterations.
+            // If the server is slow, old responses may queue in qrx. This is
+            // acceptable because data_version and last_output_time only ever
+            // increase — a stale response just delays detection by one iteration.
+            let (qtx, qrx) = mpsc::channel::<(u64, u64)>();
+            loop {
+                let qtx2 = qtx.clone();
+                let _ = tx.send(CtrlReq::QueryPaneReady(pid, qtx2));
+                if let Ok((dv, lot)) = qrx.recv_timeout(std::time::Duration::from_secs(2)) {
+                    if dv > 0 && lot > 0 {
+                        let now_ms = std::time::SystemTime::now()
+                            .duration_since(std::time::UNIX_EPOCH)
+                            .unwrap_or_default()
+                            .as_millis() as u64;
+                        if now_ms.saturating_sub(lot) >= 500 {
+                            ready = true;
+                            elapsed_ms = start.elapsed().as_millis() as u64;
+                            data_version = dv;
+                            break;
+                        }
+                    }
+                }
+                if std::time::Instant::now() >= deadline {
+                    let qtx_final = qtx.clone();
+                    let _ = tx.send(CtrlReq::QueryPaneReady(pid, qtx_final));
+                    data_version = qrx
+                        .recv_timeout(std::time::Duration::from_millis(500))
+                        .map(|(dv, _)| dv)
+                        .unwrap_or(0);
+                    elapsed_ms = start.elapsed().as_millis() as u64;
+                    ready = false;
+                    break;
+                }
+                std::thread::sleep(std::time::Duration::from_millis(200));
+            }
+        } else {
+            ready = false;
+            elapsed_ms = 0;
+            data_version = 0;
+        }
+
+        if !ready {
+            return Err(RpcErr {
+                code: SPAWN_TIMEOUT,
+                message: format!("Pane spawned but not ready within {}ms", timeout_ms),
+                data: Some(serde_json::json!({ "context_id": context_id })),
+            });
+        }
+    } else {
+        ready = false;
+        elapsed_ms = 0;
+        data_version = 0;
     }
 
     let result = SpawnAgentResult {
         context_id,
-        ready: false, // Task 3 will add actual readiness polling
-        elapsed_ms: 0,
-        data_version: 0,
+        ready,
+        elapsed_ms,
+        data_version,
     };
-    serde_json::to_value(result).map_err(|e| (-32603, format!("Internal error: {e}")))
+    serde_json::to_value(result).map_err(|e| RpcErr::from((-32603, format!("Internal error: {e}"))))
 }
 
 /// Handle `write` — validate base64 payload and forward to pane.
 fn handle_write(
     params: &serde_json::Value,
     tx: &mpsc::Sender<CtrlReq>,
-) -> Result<serde_json::Value, (i32, String)> {
+) -> Result<serde_json::Value, RpcErr> {
     let p: WriteParams = serde_json::from_value(params.clone())
-        .map_err(|e| (-32602, format!("Invalid params: {e}")))?;
+        .map_err(|e| RpcErr::from((-32602, format!("Invalid params: {e}"))))?;
 
     // Validate and decode base64.
     use base64::Engine;
     let decoded = base64::engine::general_purpose::STANDARD
         .decode(&p.data)
-        .map_err(|e| (-32602, format!("Invalid base64: {e}")))?;
+        .map_err(|e| RpcErr::from((-32602, format!("Invalid base64: {e}"))))?;
 
-    let text = String::from_utf8(decoded).map_err(|e| (-32602, format!("Invalid UTF-8: {e}")))?;
+    let text = String::from_utf8(decoded)
+        .map_err(|e| RpcErr::from((-32602, format!("Invalid UTF-8: {e}"))))?;
 
     // Fire-and-forget: send text to the pane.
     tx.send(CtrlReq::BackendSendText {
         pane_id: p.context_id,
         text,
     })
-    .map_err(|_| (-32603, "Server channel closed".to_string()))?;
+    .map_err(|_| RpcErr::from((-32603, "Server channel closed".to_string())))?;
 
     Ok(serde_json::json!({}))
 }
@@ -165,9 +251,9 @@ fn handle_write(
 fn handle_capture(
     params: &serde_json::Value,
     tx: &mpsc::Sender<CtrlReq>,
-) -> Result<serde_json::Value, (i32, String)> {
+) -> Result<serde_json::Value, RpcErr> {
     let p: CaptureParams = serde_json::from_value(params.clone())
-        .map_err(|e| (-32602, format!("Invalid params: {e}")))?;
+        .map_err(|e| RpcErr::from((-32602, format!("Invalid params: {e}"))))?;
 
     let context_id = p.context_id.clone();
 
@@ -178,15 +264,18 @@ fn handle_capture(
         clean: p.clean.unwrap_or(false),
         resp: resp_tx,
     })
-    .map_err(|_| (-32603, "Server channel closed".to_string()))?;
+    .map_err(|_| RpcErr::from((-32603, "Server channel closed".to_string())))?;
 
     let text = resp_rx
         .recv_timeout(std::time::Duration::from_secs(5))
-        .map_err(|_| (-32603, "Server response timeout".to_string()))?;
+        .map_err(|_| RpcErr::from((-32603, "Server response timeout".to_string())))?;
 
     // Check for PANE_NOT_FOUND sentinel
     if text == "__PANE_NOT_FOUND__" {
-        return Err((PANE_NOT_FOUND, format!("Pane not found: {}", context_id)));
+        return Err(RpcErr::from((
+            PANE_NOT_FOUND,
+            format!("Pane not found: {}", context_id),
+        )));
     }
 
     // Read data_version for the response
@@ -205,16 +294,16 @@ fn handle_capture(
         data_version,
         context_id,
     };
-    serde_json::to_value(result).map_err(|e| (-32603, format!("Internal error: {e}")))
+    serde_json::to_value(result).map_err(|e| RpcErr::from((-32603, format!("Internal error: {e}"))))
 }
 
 /// Handle `kill` — terminate a context.
 fn handle_kill(
     params: &serde_json::Value,
     tx: &mpsc::Sender<CtrlReq>,
-) -> Result<serde_json::Value, (i32, String)> {
+) -> Result<serde_json::Value, RpcErr> {
     let p: KillParams = serde_json::from_value(params.clone())
-        .map_err(|e| (-32602, format!("Invalid params: {e}")))?;
+        .map_err(|e| RpcErr::from((-32602, format!("Invalid params: {e}"))))?;
 
     let (resp_tx, resp_rx) = mpsc::channel();
     tx.send(CtrlReq::BackendKillPane {
@@ -222,7 +311,7 @@ fn handle_kill(
         grace_ms: p.grace_ms,
         resp: resp_tx,
     })
-    .map_err(|_| (-32603, "Server channel closed".to_string()))?;
+    .map_err(|_| RpcErr::from((-32603, "Server channel closed".to_string())))?;
 
     // Wait for acknowledgement.
     let _ = resp_rx.recv_timeout(std::time::Duration::from_secs(5));
@@ -234,40 +323,41 @@ fn handle_kill(
 fn handle_kill_all(
     params: &serde_json::Value,
     tx: &mpsc::Sender<CtrlReq>,
-) -> Result<serde_json::Value, (i32, String)> {
+) -> Result<serde_json::Value, RpcErr> {
     let p: KillAllParams = serde_json::from_value(params.clone())
-        .map_err(|e| (-32602, format!("Invalid params: {e}")))?;
+        .map_err(|e| RpcErr::from((-32602, format!("Invalid params: {e}"))))?;
 
     let (resp_tx, resp_rx) = mpsc::channel();
     tx.send(CtrlReq::BackendKillAll {
         role: p.role,
         resp: resp_tx,
     })
-    .map_err(|_| (-32603, "Server channel closed".to_string()))?;
+    .map_err(|_| RpcErr::from((-32603, "Server channel closed".to_string())))?;
 
     let killed = resp_rx
         .recv_timeout(std::time::Duration::from_secs(10))
-        .map_err(|_| (-32603, "Server response timeout".to_string()))?;
+        .map_err(|_| RpcErr::from((-32603, "Server response timeout".to_string())))?;
 
     let result = KillAllResult { killed };
-    serde_json::to_value(result).map_err(|e| (-32603, format!("Internal error: {e}")))
+    serde_json::to_value(result).map_err(|e| RpcErr::from((-32603, format!("Internal error: {e}"))))
 }
 
 /// Handle `list` — return all active contexts.
 fn handle_list(
     _params: &serde_json::Value,
     tx: &mpsc::Sender<CtrlReq>,
-) -> Result<serde_json::Value, (i32, String)> {
+) -> Result<serde_json::Value, RpcErr> {
     let (resp_tx, resp_rx) = mpsc::channel();
     tx.send(CtrlReq::BackendListPanes { resp: resp_tx })
-        .map_err(|_| (-32603, "Server channel closed".to_string()))?;
+        .map_err(|_| RpcErr::from((-32603, "Server channel closed".to_string())))?;
 
     let json_str = resp_rx
         .recv_timeout(std::time::Duration::from_secs(5))
-        .map_err(|_| (-32603, "Server response timeout".to_string()))?;
+        .map_err(|_| RpcErr::from((-32603, "Server response timeout".to_string())))?;
 
     // The server returns a pre-serialized JSON string; parse it back to Value.
-    serde_json::from_str(&json_str).map_err(|e| (-32603, format!("Internal error: {e}")))
+    serde_json::from_str(&json_str)
+        .map_err(|e| RpcErr::from((-32603, format!("Internal error: {e}"))))
 }
 
 #[cfg(test)]

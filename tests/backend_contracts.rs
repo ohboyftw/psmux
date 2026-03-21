@@ -187,3 +187,18 @@ fn test_spawn_agent_result_v2_fields() {
     assert_eq!(parsed["elapsed_ms"], 150);
     assert_eq!(parsed["data_version"], 1);
 }
+
+#[test]
+fn spawn_result_has_protocol_v2_fields() {
+    let result = SpawnAgentResult {
+        context_id: "%5".into(),
+        ready: true,
+        elapsed_ms: 1200,
+        data_version: 12,
+    };
+    let json = serde_json::to_value(&result).unwrap();
+    assert_eq!(json["context_id"], "%5");
+    assert_eq!(json["ready"], true);
+    assert!(json["elapsed_ms"].is_number());
+    assert!(json["data_version"].is_number());
+}
