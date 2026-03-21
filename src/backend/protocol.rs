@@ -1,6 +1,16 @@
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
+// ── Error Codes ──
+pub const PANE_NOT_FOUND: i32 = -32001;
+pub const SPAWN_FAILED: i32 = -32002;
+pub const PANE_TOO_SMALL: i32 = -32003;
+pub const SPAWN_TIMEOUT: i32 = -32004;
+pub const CAPTURE_TIMEOUT: i32 = -32005;
+pub const SESSION_NOT_FOUND: i32 = -32006;
+pub const COMMAND_TIMEOUT: i32 = -32007;
+pub const COMMAND_FAILED: i32 = -32008;
+
 // --- Requests ---
 
 #[derive(Debug, Deserialize)]
@@ -25,6 +35,15 @@ pub struct SpawnAgentParams {
     pub env: Option<HashMap<String, String>>,
     pub metadata: Option<AgentMetadata>,
     pub split_direction: Option<String>,
+    #[serde(default = "default_true")]
+    pub wait_ready: bool,
+    pub ready_timeout_ms: Option<u32>,
+    pub shell: Option<String>,
+    pub bare: Option<bool>,
+}
+
+fn default_true() -> bool {
+    true
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -89,6 +108,10 @@ pub struct CaptureParams {
     pub context_id: String,
     pub lines: Option<u32>,
     pub clean: Option<bool>,
+    #[serde(default)]
+    pub wait_for_output: bool,
+    pub since_version: Option<u64>,
+    pub timeout_ms: Option<u32>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -100,6 +123,15 @@ pub struct KillParams {
 #[derive(Debug, Deserialize)]
 pub struct KillAllParams {
     pub role: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct RunShellParams {
+    pub command: Vec<String>,
+    pub cwd: Option<String>,
+    pub context_id: Option<String>,
+    pub timeout_ms: Option<u32>,
+    pub env: Option<HashMap<String, String>>,
 }
 
 // --- Responses ---
@@ -117,6 +149,8 @@ pub struct RpcResponse {
 pub struct RpcError {
     pub code: i32,
     pub message: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub data: Option<serde_json::Value>,
 }
 
 #[derive(Debug, Serialize)]
@@ -129,12 +163,24 @@ pub struct InitializeResult {
 #[derive(Debug, Serialize)]
 pub struct SpawnAgentResult {
     pub context_id: String,
+    pub ready: bool,
+    pub elapsed_ms: u64,
+    pub data_version: u64,
 }
 
 #[derive(Debug, Serialize)]
 pub struct CaptureResult {
     pub text: String,
-    pub truncated: bool,
+    pub data_version: u64,
+    pub context_id: String,
+}
+
+#[derive(Debug, Serialize)]
+pub struct RunShellResult {
+    pub exit_code: i32,
+    pub stdout: String,
+    pub stderr: String,
+    pub elapsed_ms: u64,
 }
 
 #[derive(Debug, Serialize)]
@@ -183,6 +229,24 @@ impl RpcResponse {
             error: Some(RpcError {
                 code,
                 message: message.into(),
+                data: None,
+            }),
+        }
+    }
+
+    pub fn error_with_data(
+        id: serde_json::Value,
+        code: i32,
+        message: impl Into<String>,
+        data: serde_json::Value,
+    ) -> Self {
+        Self {
+            id,
+            result: None,
+            error: Some(RpcError {
+                code,
+                message: message.into(),
+                data: Some(data),
             }),
         }
     }

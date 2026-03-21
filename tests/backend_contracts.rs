@@ -36,12 +36,16 @@ struct InitializeResult {
 #[derive(Debug, Serialize, Deserialize)]
 struct SpawnAgentResult {
     context_id: String,
+    ready: bool,
+    elapsed_ms: u64,
+    data_version: u64,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
 struct CaptureResult {
     text: String,
-    truncated: bool,
+    data_version: u64,
+    context_id: String,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -151,17 +155,35 @@ fn test_rpc_edge_cases() {
 }
 
 #[test]
-fn test_capture_result_truncated_flag() {
-    let full = CaptureResult {
-        text: "hello".into(),
-        truncated: false,
+fn test_capture_result_v2_fields() {
+    let result = CaptureResult {
+        text: "hello world".into(),
+        data_version: 42,
+        context_id: "%1".into(),
     };
-    let truncated = CaptureResult {
-        text: "hel...".into(),
-        truncated: true,
+    let json = serde_json::to_string(&result).unwrap();
+    let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
+    assert_eq!(parsed["text"], "hello world");
+    assert_eq!(parsed["data_version"], 42);
+    assert_eq!(parsed["context_id"], "%1");
+    assert!(
+        parsed.get("truncated").is_none(),
+        "v2 CaptureResult must not have truncated field"
+    );
+}
+
+#[test]
+fn test_spawn_agent_result_v2_fields() {
+    let result = SpawnAgentResult {
+        context_id: "%2".into(),
+        ready: true,
+        elapsed_ms: 150,
+        data_version: 1,
     };
-    let full_json = serde_json::to_string(&full).unwrap();
-    let trunc_json = serde_json::to_string(&truncated).unwrap();
-    assert!(full_json.contains("\"truncated\":false"));
-    assert!(trunc_json.contains("\"truncated\":true"));
+    let json = serde_json::to_string(&result).unwrap();
+    let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
+    assert_eq!(parsed["context_id"], "%2");
+    assert_eq!(parsed["ready"], true);
+    assert_eq!(parsed["elapsed_ms"], 150);
+    assert_eq!(parsed["data_version"], 1);
 }
