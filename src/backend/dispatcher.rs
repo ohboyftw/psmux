@@ -257,6 +257,94 @@ fn handle_capture(
 
     let context_id = p.context_id.clone();
 
+    // --- Freshness polling (dispatcher thread) ---
+    if p.wait_for_output || p.since_version.is_some() {
+        if let Some(pid) = parse_pane_id(&context_id) {
+            // Early pane existence check
+            {
+                let (check_tx, check_rx) = mpsc::channel();
+                let _ = tx.send(CtrlReq::BackendCapturePane {
+                    pane_id: context_id.clone(),
+                    lines: Some(1),
+                    clean: false,
+                    resp: check_tx,
+                });
+                if let Ok(text) = check_rx.recv_timeout(std::time::Duration::from_secs(2)) {
+                    if text == "__PANE_NOT_FOUND__" {
+                        return Err(RpcErr {
+                            code: PANE_NOT_FOUND,
+                            message: format!("Pane not found: {}", context_id),
+                            data: Some(serde_json::json!({ "context_id": context_id })),
+                        });
+                    }
+                }
+            }
+
+            // Get baseline data_version
+            let baseline = if let Some(sv) = p.since_version {
+                sv
+            } else {
+                let (qtx, qrx) = mpsc::channel();
+                let _ = tx.send(CtrlReq::QueryPaneReady(pid, qtx));
+                qrx.recv_timeout(std::time::Duration::from_millis(500))
+                    .map(|(dv, _)| dv)
+                    .unwrap_or(0)
+            };
+
+            let timeout_ms_val = p.timeout_ms.unwrap_or(5000) as u64;
+            let deadline =
+                std::time::Instant::now() + std::time::Duration::from_millis(timeout_ms_val);
+            let (qtx, qrx) = mpsc::channel::<(u64, u64)>();
+            let mut timed_out = true;
+
+            loop {
+                let qtx2 = qtx.clone();
+                let _ = tx.send(CtrlReq::QueryPaneReady(pid, qtx2));
+                if let Ok((dv, _)) = qrx.recv_timeout(std::time::Duration::from_secs(2)) {
+                    if dv > baseline {
+                        timed_out = false;
+                        break;
+                    }
+                }
+                if std::time::Instant::now() >= deadline {
+                    break;
+                }
+                std::thread::sleep(std::time::Duration::from_millis(100));
+            }
+
+            // Even on timeout, we still capture (stale content in error data)
+            if timed_out {
+                let (resp_tx, resp_rx) = mpsc::channel();
+                let _ = tx.send(CtrlReq::BackendCapturePane {
+                    pane_id: p.context_id,
+                    lines: p.lines,
+                    clean: p.clean.unwrap_or(false),
+                    resp: resp_tx,
+                });
+                let text = resp_rx
+                    .recv_timeout(std::time::Duration::from_secs(5))
+                    .unwrap_or_default();
+
+                let qtx_final = qtx.clone();
+                let _ = tx.send(CtrlReq::QueryPaneReady(pid, qtx_final));
+                let current_dv = qrx
+                    .recv_timeout(std::time::Duration::from_millis(500))
+                    .map(|(dv, _)| dv)
+                    .unwrap_or(0);
+
+                return Err(RpcErr {
+                    code: CAPTURE_TIMEOUT,
+                    message: format!("No new output within {}ms", timeout_ms_val),
+                    data: Some(serde_json::json!({
+                        "text": text,
+                        "data_version": current_dv,
+                        "context_id": context_id,
+                    })),
+                });
+            }
+        }
+    }
+
     let (resp_tx, resp_rx) = mpsc::channel();
     tx.send(CtrlReq::BackendCapturePane {
         pane_id: p.context_id,
