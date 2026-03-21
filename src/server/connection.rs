@@ -249,6 +249,7 @@ pub(crate) fn handle_connection(
             None
         };
         let skip_pane_focus = matches!(cmd, "display-message" | "display");
+        let mut target_pane_not_found = false;
         if !skip_pane_focus && targeted_kill_pane_id.is_none() {
             if let Some(pid) = target_pane {
                 if is_focus_cmd {
@@ -258,11 +259,32 @@ pub(crate) fn handle_connection(
                         let _ = tx.send(CtrlReq::FocusPaneByIndex(pid));
                     }
                 } else if pane_is_id {
-                    let _ = tx.send(CtrlReq::FocusPaneTemp(pid));
+                    // Use checked variant to detect non-existent panes
+                    let (check_tx, check_rx) = mpsc::channel();
+                    let _ = tx.send(CtrlReq::FocusPaneTempCheck(pid, check_tx));
+                    if let Ok(found) = check_rx.recv_timeout(std::time::Duration::from_secs(2))
+                    {
+                        if !found {
+                            target_pane_not_found = true;
+                        }
+                    }
                 } else {
                     let _ = tx.send(CtrlReq::FocusPaneByIndexTemp(pid));
                 }
             }
+        }
+        // If target pane doesn't exist, return error and skip command
+        if target_pane_not_found {
+            let pane_id_str = target_pane
+                .map(|p| format!("%{}", p))
+                .unwrap_or_default();
+            let _ = writeln!(
+                write_stream,
+                "can't find pane: {}",
+                raw_target.as_deref().unwrap_or(&pane_id_str)
+            );
+            let _ = write_stream.flush();
+            continue;
         }
         match cmd {
             "new-window" | "neww" => {
@@ -380,7 +402,8 @@ pub(crate) fn handle_connection(
                 if print_info {
                     let (rtx, rrx) = mpsc::channel::<String>();
                     let _ = tx.send(CtrlReq::SplitWindowPrint(
-                        kind, cmd_str, detached, start_dir, size_pct, format_str, env_vars, shell_arg, rtx,
+                        kind, cmd_str, detached, start_dir, size_pct, format_str, env_vars,
+                        shell_arg, rtx,
                     ));
                     if let Ok(text) = rrx.recv_timeout(Duration::from_millis(2000)) {
                         let _ = writeln!(write_stream, "{}", text);

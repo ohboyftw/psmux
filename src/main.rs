@@ -700,8 +700,7 @@ fn run_main() -> io::Result<()> {
                             }
                             // Skip warm servers built from a different version/commit
                             // to avoid stale-binary confusion (#110).
-                            let warm_ver_path =
-                                format!("{}\\.psmux\\{}.version", home, warm_base);
+                            let warm_ver_path = format!("{}\\.psmux\\{}.version", home, warm_base);
                             if let Ok(ver) = std::fs::read_to_string(&warm_ver_path) {
                                 if ver.trim() != crate::types::build_version_stamp() {
                                     // Stale warm server — kill it and clean up
@@ -1389,6 +1388,10 @@ fn run_main() -> io::Result<()> {
             }
             cmd.push('\n');
             let resp = send_control_with_response(cmd)?;
+            if resp.starts_with("can't find") {
+                eprint!("{}", resp);
+                std::process::exit(1);
+            }
             print!("{}", resp);
             return Ok(());
         }

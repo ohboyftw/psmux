@@ -831,6 +831,8 @@ pub enum CtrlReq {
     FocusPaneByIndex(usize),
     /// Temporary pane focus for -t targeting
     FocusPaneTemp(usize),
+    /// Temporary pane focus with existence check — returns true if pane found.
+    FocusPaneTempCheck(usize, mpsc::Sender<bool>),
     FocusPaneByIndexTemp(usize),
     SessionInfo(mpsc::Sender<String>),
     CapturePaneRange(mpsc::Sender<String>, Option<i32>, Option<i32>),

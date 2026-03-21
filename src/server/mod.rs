@@ -736,7 +736,13 @@ pub fn run_server(
     if let Some(ref raw_args) = raw_command {
         create_window_raw(&*pty_system, &mut app, raw_args)?;
     } else {
-        create_window(&*pty_system, &mut app, initial_command.as_deref(), None, None)?;
+        create_window(
+            &*pty_system,
+            &mut app,
+            initial_command.as_deref(),
+            None,
+            None,
+        )?;
     }
     if let Some(prev) = saved_dir {
         env::set_current_dir(prev).ok();
@@ -887,6 +893,7 @@ pub fn run_server(
                         &req,
                         CtrlReq::FocusWindowTemp(_)
                             | CtrlReq::FocusPaneTemp(_)
+                            | CtrlReq::FocusPaneTempCheck(..)
                             | CtrlReq::FocusPaneByIndexTemp(_)
                     );
                     let mut hook_event: Option<&str> = None;
@@ -905,6 +912,7 @@ pub fn run_server(
                         CtrlReq::MouseDownMiddle(..) => "MouseDownMiddle",
                         CtrlReq::FocusPane(_) => "FocusPane",
                         CtrlReq::FocusPaneTemp(_) => "FocusPaneTemp",
+                        CtrlReq::FocusPaneTempCheck(..) => "FocusPaneTempCheck",
                         CtrlReq::NewWindow(..) => "NewWindow",
                         CtrlReq::KillWindow => "KillWindow",
                         CtrlReq::KillPane => "KillPane",
@@ -932,11 +940,12 @@ pub fn run_server(
                             }
                             // Hide the warm pane when an explicit start dir, env vars,
                             // or shell override is requested — the warm pane uses the default shell.
-                            let stashed_warm = if start_dir.is_some() || !env_vars.is_empty() || shell.is_some() {
-                                app.warm_pane.take()
-                            } else {
-                                None
-                            };
+                            let stashed_warm =
+                                if start_dir.is_some() || !env_vars.is_empty() || shell.is_some() {
+                                    app.warm_pane.take()
+                                } else {
+                                    None
+                                };
                             // Inject -e env vars at both levels:
                             // 1) app.environment → apply_user_environment adds to CommandBuilder
                             // 2) process env → get_base_env() captures during CommandBuilder::new()
@@ -1004,11 +1013,12 @@ pub fn run_server(
                             if let Some(dir) = &start_dir {
                                 env::set_current_dir(dir).ok();
                             }
-                            let stashed_warm = if start_dir.is_some() || !env_vars.is_empty() || shell.is_some() {
-                                app.warm_pane.take()
-                            } else {
-                                None
-                            };
+                            let stashed_warm =
+                                if start_dir.is_some() || !env_vars.is_empty() || shell.is_some() {
+                                    app.warm_pane.take()
+                                } else {
+                                    None
+                                };
                             // Inject -e env vars at both levels:
                             // 1) app.environment → apply_user_environment adds to CommandBuilder
                             // 2) process env → get_base_env() captures during CommandBuilder::new()
@@ -1087,11 +1097,12 @@ pub fn run_server(
                             }
                             let prev_path = app.windows[app.active_idx].active_path.clone();
                             // Hide warm pane when explicit start_dir, env vars, or shell override given
-                            let stashed_warm = if start_dir.is_some() || !env_vars.is_empty() || shell.is_some() {
-                                app.warm_pane.take()
-                            } else {
-                                None
-                            };
+                            let stashed_warm =
+                                if start_dir.is_some() || !env_vars.is_empty() || shell.is_some() {
+                                    app.warm_pane.take()
+                                } else {
+                                    None
+                                };
                             // Temporarily inject -e env vars so apply_user_environment picks them up
                             for (k_env, v_env) in &env_vars {
                                 app.environment.insert(k_env.clone(), v_env.clone());
@@ -1196,11 +1207,12 @@ pub fn run_server(
                                 env::set_current_dir(dir).ok();
                             }
                             let prev_path = app.windows[app.active_idx].active_path.clone();
-                            let stashed_warm = if start_dir.is_some() || !env_vars.is_empty() || shell.is_some() {
-                                app.warm_pane.take()
-                            } else {
-                                None
-                            };
+                            let stashed_warm =
+                                if start_dir.is_some() || !env_vars.is_empty() || shell.is_some() {
+                                    app.warm_pane.take()
+                                } else {
+                                    None
+                                };
                             // Temporarily inject -e env vars so apply_user_environment picks them up
                             for (k_env, v_env) in &env_vars {
                                 app.environment.insert(k_env.clone(), v_env.clone());
@@ -1276,9 +1288,8 @@ pub fn run_server(
                                 let _ = resp.send(pane_info);
                             } else {
                                 // Signal error to the client with a prefix it can detect
-                                let err_msg = split_err
-                                    .as_deref()
-                                    .unwrap_or("pane too small to split");
+                                let err_msg =
+                                    split_err.as_deref().unwrap_or("pane too small to split");
                                 let _ = resp.send(format!("ERROR:{err_msg}"));
                             }
                             if let Some(prev) = saved_dir {
@@ -1423,6 +1434,27 @@ pub fn run_server(
                             // Touching MRU here pollutes kill-pane's MRU
                             // fallback (#71, #140).
                             crate::tree::focus_pane_by_id_no_mru(&mut app, pid);
+                        }
+                        CtrlReq::FocusPaneTempCheck(pid, resp) => {
+                            if temp_focus_restore.is_none() {
+                                let pane_id = crate::tree::get_active_pane_id(
+                                    &app.windows[app.active_idx].root,
+                                    &app.windows[app.active_idx].active_path,
+                                )
+                                .unwrap_or(usize::MAX);
+                                temp_focus_restore = Some((app.active_idx, pane_id));
+                            }
+                            let prev_idx = app.active_idx;
+                            let prev_path = app.windows[app.active_idx].active_path.clone();
+                            crate::tree::focus_pane_by_id_no_mru(&mut app, pid);
+                            // Check if focus actually changed — if not, pane wasn't found
+                            let found = app.active_idx != prev_idx
+                                || app.windows[app.active_idx].active_path != prev_path
+                                || crate::tree::get_active_pane_id(
+                                    &app.windows[app.active_idx].root,
+                                    &app.windows[app.active_idx].active_path,
+                                ) == Some(pid);
+                            let _ = resp.send(found);
                         }
                         CtrlReq::FocusPaneByIndexTemp(idx) => {
                             if temp_focus_restore.is_none() {
@@ -3143,8 +3175,7 @@ pub fn run_server(
                             };
                             let new_path = format!("{}\\.psmux\\{}.port", home, new_base);
                             let new_keypath = format!("{}\\.psmux\\{}.key", home, new_base);
-                            let new_verpath =
-                                format!("{}\\.psmux\\{}.version", home, new_base);
+                            let new_verpath = format!("{}\\.psmux\\{}.version", home, new_base);
                             if let Some(port) = app.control_port {
                                 let _ = std::fs::remove_file(&old_path);
                                 let _ = std::fs::write(&new_path, port.to_string());
@@ -4793,7 +4824,11 @@ pub fn run_server(
                             }
                             let _ = resp.send(killed_ids);
                         }
-                        CtrlReq::BackendSendText { pane_id, text, resp } => {
+                        CtrlReq::BackendSendText {
+                            pane_id,
+                            text,
+                            resp,
+                        } => {
                             let id = pane_id
                                 .strip_prefix('%')
                                 .and_then(|s| s.parse::<usize>().ok());
