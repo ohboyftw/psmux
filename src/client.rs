@@ -19,7 +19,7 @@ use crate::rendering::{
 use crate::session::read_session_key;
 use crate::style::parse_tmux_style_components;
 use crate::tree::split_with_gaps;
-use crate::util::{base64_encode, WinTree};
+use crate::util::{base64_encode, quote_arg, WinTree};
 
 /// Build a send-key name with modifier prefix (e.g. "C-Left", "S-Right", "C-S-Up").
 fn modified_key_name(base: &str, mods: KeyModifiers) -> String {
@@ -365,8 +365,9 @@ pub fn run_remote(
     let mut pane_title_buf = String::new();
     let mut command_input = false;
     let mut command_buf = String::new();
-    let mut chooser = false;
-    let mut choices: Vec<(usize, usize)> = Vec::new();
+
+    let mut chooser = false; // local display-panes digit chooser overlay
+    let mut choices: Vec<(usize, usize)> = Vec::new(); // (digit, pane_id) for chooser
     let mut tree_chooser = false;
     let mut tree_entries: Vec<(bool, usize, usize, String, String)> = Vec::new(); // (is_win, id, sub_id, label, session_name)
     let mut tree_selected: usize = 0;
@@ -466,6 +467,8 @@ pub fn run_remote(
     let mut srv_menu_items: Vec<ServerMenuItem> = Vec::new();
     #[allow(unused_assignments)]
     let mut srv_display_panes = false;
+    #[allow(unused_assignments)]
+    let mut srv_pane_base_index: usize = 0;
     #[allow(unused_assignments)]
     let mut clock_active = false;
 
@@ -639,6 +642,9 @@ pub fn run_remote(
         /// Display-panes overlay active
         #[serde(default)]
         display_panes: bool,
+        /// Pane base index for display-panes numbering
+        #[serde(default)]
+        pane_base_index: usize,
         /// Status bar message from display-message (without -p)
         #[serde(default)]
         status_message: Option<String>,
@@ -1177,9 +1183,8 @@ pub fn run_remote(
                         } else if srv_display_panes {
                             match key.code {
                                 KeyCode::Char(d) if d.is_ascii_digit() => {
-                                    let idx = d.to_digit(10).unwrap() as usize;
-                                    cmd_batch.push(format!("select-pane -t {}\n", idx));
-                                    cmd_batch.push("overlay-close\n".into());
+                                    let digit = d.to_digit(10).unwrap() as usize;
+                                    cmd_batch.push(format!("display-panes-select {}\n", digit));
                                 }
                                 KeyCode::Esc => {
                                     cmd_batch.push("overlay-close\n".into());
@@ -1199,7 +1204,6 @@ pub fn run_remote(
                             command_input = false;
                             renaming = false;
                             pane_renaming = false;
-                            chooser = false;
                             tree_chooser = false;
                             session_chooser = false;
                             keys_viewer = false;
@@ -1955,15 +1959,16 @@ pub fn run_remote(
                                 }
                                 KeyCode::Enter if renaming => {
                                     if session_renaming {
-                                        cmd_batch.push(format!("rename-session {}\n", rename_buf));
+                                        cmd_batch.push(format!("rename-session {}\n", quote_arg(&rename_buf)));
                                         session_renaming = false;
                                     } else {
-                                        cmd_batch.push(format!("rename-window {}\n", rename_buf));
+                                        cmd_batch.push(format!("rename-window {}\n", quote_arg(&rename_buf)));
                                     }
                                     renaming = false;
                                 }
                                 KeyCode::Enter if pane_renaming => {
-                                    cmd_batch.push(format!("set-pane-title {}\n", pane_title_buf));
+                                    cmd_batch
+                                        .push(format!("set-pane-title {}\n", quote_arg(&pane_title_buf)));
                                     pane_renaming = false;
                                 }
                                 KeyCode::Enter if command_input => {
@@ -2631,6 +2636,7 @@ pub fn run_remote(
         srv_menu_selected = state.menu_selected;
         srv_menu_items = state.menu_items;
         srv_display_panes = state.display_panes;
+        srv_pane_base_index = state.pane_base_index;
 
         // ── Extract active pane's cursor state ──────────────────────
         // We collect cursor info here but DON'T use
@@ -3678,7 +3684,7 @@ pub fn run_remote(
                         let pane_sel_style = Style::default().fg(Color::Yellow).bg(Color::Black).add_modifier(Modifier::BOLD);
                         let block = Block::default().borders(Borders::ALL).style(pane_sel_style);
                         let inner = block.inner(b);
-                        let disp = idx.to_string();
+                        let disp = ((idx + srv_pane_base_index) % 10).to_string();
                         let para = Paragraph::new(Line::from(Span::styled(
                             format!(" {} ", disp),
                             pane_sel_style,

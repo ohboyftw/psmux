@@ -6,9 +6,80 @@ use crate::copy_mode::{
 };
 use crate::pane::{create_window, kill_active_pane, split_active};
 use crate::session::{list_all_sessions_tree, send_control_to_port};
-use crate::tree::{compute_rects, kill_all_children};
+use crate::tree::{compute_rects, get_active_pane_id, kill_all_children};
 use crate::types::{Action, AppState, FocusDir, LayoutKind, Menu, MenuItem, Mode, Node, PopupPty};
 use crate::window_ops::toggle_zoom;
+
+/// Show text output in a popup overlay (used by list-* commands inside a session).
+fn show_output_popup(app: &mut AppState, title: &str, output: String) {
+    let lines: Vec<&str> = output.lines().collect();
+    let width = lines.iter().map(|l| l.len()).max().unwrap_or(40).max(20) as u16 + 4;
+    let height = (lines.len() as u16 + 2).max(5).min(40);
+    app.mode = Mode::PopupMode {
+        command: title.to_string(),
+        output,
+        process: None,
+        width: width.min(120),
+        height,
+        close_on_exit: false,
+        popup_pty: None,
+    };
+}
+
+/// Generate list-windows output from AppState (tmux-compatible format).
+fn generate_list_windows(app: &AppState) -> String {
+    crate::util::list_windows_tmux(app)
+}
+
+/// Generate list-panes output from AppState.
+fn generate_list_panes(app: &AppState) -> String {
+    let win = &app.windows[app.active_idx];
+    fn collect(node: &Node, panes: &mut Vec<(usize, u16, u16)>) {
+        match node {
+            Node::Leaf(p) => { panes.push((p.id, p.last_cols, p.last_rows)); }
+            Node::Split { children, .. } => { for c in children { collect(c, panes); } }
+        }
+    }
+    let mut panes = Vec::new();
+    collect(&win.root, &mut panes);
+    let active_id = get_active_pane_id(&win.root, &win.active_path);
+    let mut output = String::new();
+    for (pos, (id, cols, rows)) in panes.iter().enumerate() {
+        let idx = pos + app.pane_base_index;
+        let marker = if active_id == Some(*id) { " (active)" } else { "" };
+        output.push_str(&format!("{}: [{}x{}] [history {}/{}, 0 bytes] %{}{}\n",
+            idx, cols, rows, app.history_limit, app.history_limit, id, marker));
+    }
+    output
+}
+
+/// Generate list-clients output from AppState.
+fn generate_list_clients(app: &AppState) -> String {
+    format!("/dev/pts/0: {}: {} [{}x{}] (utf8)\n",
+        app.session_name,
+        app.windows[app.active_idx].name,
+        app.last_window_area.width,
+        app.last_window_area.height)
+}
+
+/// Generate show-hooks output from AppState.
+fn generate_show_hooks(app: &AppState) -> String {
+    let mut output = String::new();
+    for (name, commands) in &app.hooks {
+        for cmd in commands {
+            output.push_str(&format!("{} -> {}\n", name, cmd));
+        }
+    }
+    if output.is_empty() {
+        output.push_str("(no hooks)\n");
+    }
+    output
+}
+
+/// Generate list-commands output.
+fn generate_list_commands() -> String {
+    crate::help::cli_command_lines().join("\n")
+}
 
 /// Build the choose-tree data for the WindowChooser mode.
 pub fn build_choose_tree(app: &AppState) -> Vec<crate::session::TreeEntry> {
@@ -427,6 +498,26 @@ pub fn execute_command_prompt(app: &mut AppState) -> io::Result<()> {
             println!("default");
         }
         "attach-session" => {}
+        "list-windows" | "lsw" => {
+            let output = generate_list_windows(app);
+            show_output_popup(app, "list-windows", output);
+        }
+        "list-panes" | "lsp" => {
+            let output = generate_list_panes(app);
+            show_output_popup(app, "list-panes", output);
+        }
+        "list-clients" | "lsc" => {
+            let output = generate_list_clients(app);
+            show_output_popup(app, "list-clients", output);
+        }
+        "list-commands" | "lscm" => {
+            let output = generate_list_commands();
+            show_output_popup(app, "list-commands", output);
+        }
+        "show-hooks" => {
+            let output = generate_show_hooks(app);
+            show_output_popup(app, "show-hooks", output);
+        }
         "next-window" => {
             app.last_window_idx = app.active_idx;
             app.active_idx = (app.active_idx + 1) % app.windows.len();
@@ -639,6 +730,26 @@ pub fn execute_command_string(app: &mut AppState, cmd: &str) -> io::Result<()> {
                 win.name = name.to_string();
             }
         }
+        "list-windows" | "lsw" => {
+            let output = generate_list_windows(app);
+            show_output_popup(app, "list-windows", output);
+        }
+        "list-panes" | "lsp" => {
+            let output = generate_list_panes(app);
+            show_output_popup(app, "list-panes", output);
+        }
+        "list-clients" | "lsc" => {
+            let output = generate_list_clients(app);
+            show_output_popup(app, "list-clients", output);
+        }
+        "list-commands" | "lscm" => {
+            let output = generate_list_commands();
+            show_output_popup(app, "list-commands", output);
+        }
+        "show-hooks" => {
+            let output = generate_show_hooks(app);
+            show_output_popup(app, "show-hooks", output);
+        }
         "zoom-pane" | "zoom" | "resizep -Z" => {
             toggle_zoom(app);
         }
@@ -646,6 +757,17 @@ pub fn execute_command_string(app: &mut AppState, cmd: &str) -> io::Result<()> {
             enter_copy_mode(app);
         }
         "display-panes" | "displayp" => {
+            let win = &app.windows[app.active_idx];
+            let mut rects: Vec<(Vec<usize>, ratatui::layout::Rect)> = Vec::new();
+            compute_rects(&win.root, app.last_window_area, &mut rects);
+            app.display_map.clear();
+            for (i, (path, _)) in rects.into_iter().enumerate() {
+                if i >= 10 {
+                    break;
+                }
+                let digit = (i + app.pane_base_index) % 10;
+                app.display_map.push((digit, path));
+            }
             app.mode = Mode::PaneChooser {
                 opened_at: Instant::now(),
             };
@@ -955,4 +1077,81 @@ pub fn execute_command_string(app: &mut AppState, cmd: &str) -> io::Result<()> {
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn mock_app() -> AppState {
+        let mut app = AppState::new("test_session".to_string());
+        app.window_base_index = 0;
+        app.pane_base_index = 0;
+        app
+    }
+
+    #[test]
+    fn test_generate_list_clients() {
+        let mut app = mock_app();
+        // Need at least one window for list-clients
+        let win = crate::types::Window {
+            root: Node::Split { kind: LayoutKind::Horizontal, sizes: vec![], children: vec![] },
+            active_path: vec![],
+            name: "shell".to_string(),
+            id: 0,
+            activity_flag: false,
+            bell_flag: false,
+            silence_flag: false,
+            last_output_time: std::time::Instant::now(),
+            last_seen_version: 0,
+            manual_rename: false,
+            layout_index: 0,
+            pane_mru: vec![],
+            zoom_saved: None,
+        };
+        app.windows.push(win);
+        let output = generate_list_clients(&app);
+        assert!(output.contains("test_session"), "should contain session name");
+        assert!(output.contains("(utf8)"), "should contain encoding");
+        assert!(output.contains("shell"), "should contain window name");
+    }
+
+    #[test]
+    fn test_generate_show_hooks_empty() {
+        let app = mock_app();
+        let output = generate_show_hooks(&app);
+        assert_eq!(output, "(no hooks)\n");
+    }
+
+    #[test]
+    fn test_generate_show_hooks_with_hooks() {
+        let mut app = mock_app();
+        app.hooks.insert("after-new-window".to_string(), vec!["run-shell 'echo hello'".to_string()]);
+        let output = generate_show_hooks(&app);
+        assert!(output.contains("after-new-window"), "should contain hook name");
+        assert!(output.contains("run-shell"), "should contain hook command");
+    }
+
+    #[test]
+    fn test_generate_list_commands() {
+        let output = generate_list_commands();
+        assert!(output.contains("list-windows"), "should list list-windows command");
+        assert!(output.contains("show-hooks"), "should list show-hooks command");
+        assert!(output.contains("list-commands"), "should list list-commands command");
+        assert!(output.contains("list-clients"), "should list list-clients command");
+    }
+
+    #[test]
+    fn test_show_output_popup_sets_mode() {
+        let mut app = mock_app();
+        show_output_popup(&mut app, "test-cmd", "line1\nline2\nline3".to_string());
+        match &app.mode {
+            Mode::PopupMode { command, output, .. } => {
+                assert_eq!(command, "test-cmd");
+                assert!(output.contains("line1"));
+                assert!(output.contains("line3"));
+            }
+            _ => panic!("expected PopupMode"),
+        }
+    }
 }

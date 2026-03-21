@@ -33,7 +33,7 @@ mod remote;
 mod mycel;
 
 use std::env;
-use std::io::{self, BufRead as _, Read as _, Write};
+use std::io::{self, BufRead as _, IsTerminal, Read as _, Write};
 use std::time::Duration;
 
 use crossterm::cursor::{DisableBlinking, EnableBlinking};
@@ -1577,7 +1577,7 @@ fn run_main() -> io::Result<()> {
                 i += 1;
             }
             if let Some(name) = new_name {
-                send_control(format!("rename-session {}\n", name))?;
+                send_control(format!("rename-session {}\n", crate::util::quote_arg(&name)))?;
             }
             return Ok(());
         }
@@ -3237,6 +3237,14 @@ fn run_main() -> io::Result<()> {
     // Default behavior (bare `psmux` with no command):
     // tmux-compatible: always create a new session with the next available
     // numeric name (0, 1, 2, ...) and attach to it.
+    //
+    // If stdin is not a terminal (headless/non-interactive environment, e.g.
+    // winget validation pipeline), print version and exit cleanly — starting
+    // a TUI session would fail without an interactive console.
+    if !std::io::stdin().is_terminal() {
+        print_version();
+        return Ok(());
+    }
     if env::var("PSMUX_REMOTE_ATTACH").ok().as_deref() != Some("1") {
         let home = env::var("USERPROFILE")
             .or_else(|_| env::var("HOME"))
@@ -3274,8 +3282,20 @@ fn run_main() -> io::Result<()> {
                     ) {
                         let _ = stream.set_nodelay(true);
                         let _ = stream.set_read_timeout(Some(Duration::from_millis(3000)));
-                        let _ = writeln!(stream, "AUTH {}", warm_key);
-                        let _ = writeln!(stream, "claim-session {}", session_name);
+                        let _ = write!(stream, "AUTH {}\n", warm_key);
+                        let client_cwd = std::env::current_dir()
+                            .ok()
+                            .and_then(|p| p.to_str().map(|s| s.to_string()));
+                        if let Some(ref cwd) = client_cwd {
+                            let _ = write!(
+                                stream,
+                                "claim-session {} \"{}\"\n",
+                                session_name,
+                                cwd.replace('"', "\\\"")
+                            );
+                        } else {
+                            let _ = write!(stream, "claim-session {}\n", session_name);
+                        }
                         let _ = stream.flush();
                         // Use send_auth_cmd_response pattern: read AUTH
                         // "OK" line first, then read the claim-session

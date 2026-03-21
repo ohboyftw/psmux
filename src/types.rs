@@ -913,6 +913,7 @@ pub enum CtrlReq {
     LastPane,
     RotateWindow(bool),
     DisplayPanes,
+    DisplayPaneSelect(usize),
     BreakPane,
     JoinPane(usize),
     RespawnPane,

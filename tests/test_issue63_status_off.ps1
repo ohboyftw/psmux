@@ -62,8 +62,8 @@ Remove-Item "$env:USERPROFILE\.psmux\*.port" -Force -ErrorAction SilentlyContinu
 
 # ─── Start session ────────────────────────────────────────────
 Write-Info "Starting detached session: $SESSION_NAME"
-$proc = Start-Process -FilePath $PSMUX -ArgumentList "new-session", "-d", "-s", $SESSION_NAME -PassThru -WindowStyle Hidden
-Start-Sleep -Seconds 3
+$proc = Start-Process -FilePath $PSMUX -ArgumentList "new-session", "-d", "-s", $SESSION_NAME, "-x", "120", "-y", "30" -PassThru -WindowStyle Hidden
+Start-Sleep -Seconds 4
 
 # ─── Test 1: Default status should be 'on' ───────────────────
 Write-Test "Default status option should be 'on'"

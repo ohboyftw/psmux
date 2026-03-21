@@ -176,6 +176,7 @@ fn serialize_overlay_json(app: &AppState) -> String {
         }
         Mode::PaneChooser { .. } => {
             out.push_str(",\"display_panes\":true");
+            let _ = std::fmt::Write::write_fmt(&mut out, format_args!(",\"pane_base_index\":{}", app.pane_base_index));
         }
         _ => {}
     }
@@ -763,8 +764,8 @@ pub fn run_server(
         }
     }
     // Replenish: spawn a warm pane for the NEXT new-window / split.
-    // For detached sessions without init_size, defer until first ClientSize.
-    if init_size.is_some() && app.warm_pane.is_none() {
+    // Always replenish when no warm pane is available.
+    if app.warm_pane.is_none() {
         match spawn_warm_pane(&*pty_system, &mut app) {
             Ok(wp) => {
                 app.warm_pane = Some(wp);
@@ -3351,10 +3352,34 @@ pub fn run_server(
                             hook_event = Some("after-rotate-window");
                         }
                         CtrlReq::DisplayPanes => {
+                            // Setup display_map and enter PaneChooser mode
+                            let win = &app.windows[app.active_idx];
+                            let mut rects: Vec<(Vec<usize>, ratatui::layout::Rect)> = Vec::new();
+                            crate::tree::compute_rects(&win.root, app.last_window_area, &mut rects);
+                            app.display_map.clear();
+                            for (i, (path, _)) in rects.into_iter().enumerate() {
+                                if i >= 10 { break; }
+                                let digit = (i + app.pane_base_index) % 10;
+                                app.display_map.push((digit, path));
+                            }
                             app.mode = Mode::PaneChooser {
                                 opened_at: std::time::Instant::now(),
                             };
                             state_dirty = true;
+                        }
+                        CtrlReq::DisplayPaneSelect(digit) => {
+                            // User pressed a digit during display-panes overlay: select the matching pane
+                            if let Some((_, path)) = app.display_map.iter().find(|(d, _)| *d == digit) {
+                                let new_path = path.clone();
+                                let old_path = app.windows[app.active_idx].active_path.clone();
+                                app.windows[app.active_idx].active_path = new_path;
+                                if app.windows[app.active_idx].active_path != old_path {
+                                    app.last_pane_path = old_path;
+                                }
+                            }
+                            app.mode = Mode::Passthrough;
+                            state_dirty = true;
+                            meta_dirty = true;
                         }
                         CtrlReq::BreakPane => {
                             unzoom_if_zoomed(&mut app);
@@ -5056,6 +5081,14 @@ pub fn run_server(
                         ),
                     );
                 }
+            }
+        }
+        // ── PaneChooser timeout ──
+        // Auto-close display-panes overlay after display-panes-time (default 1000ms).
+        if let Mode::PaneChooser { opened_at } = &app.mode {
+            if opened_at.elapsed() > Duration::from_millis(app.display_panes_time_ms) {
+                app.mode = Mode::Passthrough;
+                state_dirty = true;
             }
         }
         // ── Popup child exit detection ──

@@ -538,3 +538,107 @@ fn issue134_direct_neighbor_takes_priority_over_wrap() {
         "left pane should have direct Right neighbor (right pane)"
     );
 }
+
+// ── Issue #141: wrapped nav must not jump columns/rows ──
+
+/// Build a three-pane horizontal layout (left | center | right) for issue #141.
+fn three_pane_h_rects() -> Vec<(Vec<usize>, ratatui::layout::Rect)> {
+    use ratatui::layout::Rect;
+    vec![
+        (vec![0], Rect { x: 0,  y: 0, width: 60, height: 30 }), // %1 left
+        (vec![1], Rect { x: 61, y: 0, width: 29, height: 30 }), // %2 center
+        (vec![2], Rect { x: 91, y: 0, width: 30, height: 30 }), // %3 right
+    ]
+}
+
+#[test]
+fn issue141_wrap_up_single_row_stays_on_self() {
+    // Three panes in a single row. From %2 (center), select-pane -U should
+    // not jump to %3 or %1. There is no pane above or below, so wrapping
+    // should return None (stay on the current pane).
+    let rects = three_pane_h_rects();
+    let ai = 1; // center pane
+    let arect = &rects[ai].1;
+    let direct = find_best_pane_in_direction(
+        &rects, ai, arect, crate::types::FocusDir::Up, &[], &[],
+    );
+    assert!(direct.is_none(), "no pane above center in single row");
+    let wrap = find_wrap_target(
+        &rects, ai, arect, crate::types::FocusDir::Up, &[], &[],
+    );
+    assert!(wrap.is_none(), "wrap Up in single row must not jump columns (issue #141)");
+}
+
+#[test]
+fn issue141_wrap_down_single_row_stays_on_self() {
+    let rects = three_pane_h_rects();
+    let ai = 1;
+    let arect = &rects[ai].1;
+    let direct = find_best_pane_in_direction(
+        &rects, ai, arect, crate::types::FocusDir::Down, &[], &[],
+    );
+    assert!(direct.is_none(), "no pane below center in single row");
+    let wrap = find_wrap_target(
+        &rects, ai, arect, crate::types::FocusDir::Down, &[], &[],
+    );
+    assert!(wrap.is_none(), "wrap Down in single row must not jump columns (issue #141)");
+}
+
+/// Build a three-pane vertical layout (top / middle / bottom) for issue #141.
+fn three_pane_v_rects() -> Vec<(Vec<usize>, ratatui::layout::Rect)> {
+    use ratatui::layout::Rect;
+    vec![
+        (vec![0], Rect { x: 0, y: 0,  width: 80, height: 10 }), // top
+        (vec![1], Rect { x: 0, y: 11, width: 80, height: 10 }), // middle
+        (vec![2], Rect { x: 0, y: 22, width: 80, height: 10 }), // bottom
+    ]
+}
+
+#[test]
+fn issue141_wrap_left_single_column_stays_on_self() {
+    // Three panes stacked vertically. From middle, select-pane -L should
+    // stay on self since there are no panes to the left or right.
+    let rects = three_pane_v_rects();
+    let ai = 1;
+    let arect = &rects[ai].1;
+    let direct = find_best_pane_in_direction(
+        &rects, ai, arect, crate::types::FocusDir::Left, &[], &[],
+    );
+    assert!(direct.is_none(), "no pane left of middle in single column");
+    let wrap = find_wrap_target(
+        &rects, ai, arect, crate::types::FocusDir::Left, &[], &[],
+    );
+    assert!(wrap.is_none(), "wrap Left in single column must not jump rows (issue #141)");
+}
+
+#[test]
+fn issue141_wrap_right_single_column_stays_on_self() {
+    let rects = three_pane_v_rects();
+    let ai = 1;
+    let arect = &rects[ai].1;
+    let direct = find_best_pane_in_direction(
+        &rects, ai, arect, crate::types::FocusDir::Right, &[], &[],
+    );
+    assert!(direct.is_none(), "no pane right of middle in single column");
+    let wrap = find_wrap_target(
+        &rects, ai, arect, crate::types::FocusDir::Right, &[], &[],
+    );
+    assert!(wrap.is_none(), "wrap Right in single column must not jump rows (issue #141)");
+}
+
+#[test]
+fn issue141_wrap_up_still_works_with_column_overlap() {
+    // Two panes stacked vertically. Wrap Up from bottom should still reach top
+    // because they overlap on the perpendicular (x) axis.
+    use ratatui::layout::Rect;
+    let rects: Vec<(Vec<usize>, Rect)> = vec![
+        (vec![0], Rect { x: 0, y: 0,  width: 80, height: 12 }),
+        (vec![1], Rect { x: 0, y: 13, width: 80, height: 12 }),
+    ];
+    let ai = 0; // top pane
+    let arect = &rects[ai].1;
+    let wrap = find_wrap_target(
+        &rects, ai, arect, crate::types::FocusDir::Up, &[], &[],
+    );
+    assert_eq!(wrap, Some(1), "wrap Up from top should reach bottom when they share a column");
+}

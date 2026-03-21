@@ -910,22 +910,23 @@ pub fn kill_pane_by_id(app: &mut AppState, pane_id: usize) -> io::Result<()> {
             &app.windows[restore_idx].root,
             &app.windows[restore_idx].active_path,
         );
-        let restore_path = app.windows[restore_idx].active_path.clone();
+        let _restore_path = app.windows[restore_idx].active_path.clone();
 
         {
             let win = &mut app.windows[target_idx];
             kill_pane_at_path(win, &target_path);
         }
 
-        if restore_idx < app.windows.len() {
+        // Only restore focus when the killed pane was in a DIFFERENT window.
+        // For same-window kills, kill_pane_at_path already set the correct
+        // MRU-based focus.  The old restore logic used path_exists() which
+        // can succeed on stale indices that now point to a different pane
+        // after tree restructuring (issue #140).
+        if restore_idx < app.windows.len() && target_idx != restore_idx {
             app.active_idx = restore_idx;
             let restore_win = &mut app.windows[restore_idx];
             let resolved_restore_path = restore_pane_id
                 .and_then(|id| crate::tree::find_path_by_id(&restore_win.root, id))
-                .or_else(|| {
-                    crate::tree::path_exists(&restore_win.root, &restore_path)
-                        .then_some(restore_path.clone())
-                })
                 .unwrap_or_else(|| crate::tree::first_leaf_path(&restore_win.root));
             restore_win.active_path = resolved_restore_path;
         }

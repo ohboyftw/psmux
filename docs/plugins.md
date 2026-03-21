@@ -6,7 +6,7 @@ psmux has a full plugin ecosystem — ports of the most popular tmux plugins, re
 
 **Browse available plugins and themes:** [**psmux-plugins**](https://github.com/psmux/psmux-plugins)
 
-**Install & manage plugins with a TUI:** [**Tmux Plugin Panel (tppanel)**](https://github.com/psmux/tppanel) — a terminal UI for browsing, installing, updating, and removing plugins and themes.
+**Install & manage plugins with a TUI:** [**Tmux Plugin Panel**](https://github.com/psmux/Tmux-Plugin-Panel) — a terminal UI for browsing, installing, updating, and removing plugins and themes.
 
 ## Available Plugins
 

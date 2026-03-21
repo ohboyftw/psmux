@@ -1206,6 +1206,11 @@ pub(crate) fn handle_connection(
             "display-panes" | "displayp" => {
                 let _ = tx.send(CtrlReq::DisplayPanes);
             }
+            "display-panes-select" => {
+                if let Some(idx) = args.first().and_then(|s| s.parse::<usize>().ok()) {
+                    let _ = tx.send(CtrlReq::DisplayPaneSelect(idx));
+                }
+            }
             "break-pane" | "breakp" => {
                 let _ = tx.send(CtrlReq::BreakPane);
             }

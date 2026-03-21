@@ -62,8 +62,8 @@ Kill-Psmux
 # without -t would look for 'default' which wouldn't exist)
 $SESSION = "ctlseq_test"
 Write-Host "Starting psmux session '$SESSION'..." -ForegroundColor Yellow
-$proc = Start-Process psmux -ArgumentList "new-session","-d","-s",$SESSION -PassThru -WindowStyle Hidden
-Start-Sleep -Seconds 2
+$proc = Start-Process psmux -ArgumentList "new-session","-d","-s",$SESSION,"-x","120","-y","30" -PassThru -WindowStyle Hidden
+Start-Sleep -Seconds 3
 
 if (-not (Wait-For-Psmux -SessionName $SESSION)) {
     Write-Host "FATAL: psmux session did not start" -ForegroundColor Red
@@ -151,9 +151,9 @@ Write-Host "`n--- Test Group 3: Capture-Pane Content Verification ---" -Foregrou
 
 # Clear and write test content with all SGR attributes
 Send-Keys "clear Enter" 1000
-Send-Keys "Write-Host `"`e[7mINV`e[0m `e[5mBLK`e[0m `e[8mHID`e[0m VIS`" Enter" 800
+Send-Keys "Write-Host `"`e[7mINV`e[0m `e[5mBLK`e[0m `e[8mHID`e[0m VIS`" Enter" 1500
 
-Start-Sleep -Seconds 1
+Start-Sleep -Seconds 2
 $captureCheck = Capture-Pane
 $captureCheckText = $captureCheck -join "`n"
 
@@ -166,9 +166,9 @@ Report "Capture: visible text present"  ($captureCheckText -match "VIS")
 Write-Host "`n--- Test Group 4: Exact Issue #49 Test Command ---" -ForegroundColor Cyan
 
 Send-Keys "clear Enter" 1000
-Send-Keys 'Write-Host "Blink Text: `e[5mI am Blink`e[0m`nInverse Text: `e[7mI am Inverse`e[0m`nHidden Text: `e[8mI am Hidden`e[0m" Enter' 800
+Send-Keys 'Write-Host "Blink Text: `e[5mI am Blink`e[0m`nInverse Text: `e[7mI am Inverse`e[0m`nHidden Text: `e[8mI am Hidden`e[0m" Enter' 1500
 
-Start-Sleep -Seconds 1
+Start-Sleep -Seconds 2
 $capture3 = Capture-Pane
 $captureText3 = $capture3 -join "`n"
 

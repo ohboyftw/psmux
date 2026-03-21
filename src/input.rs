@@ -1670,7 +1670,12 @@ pub fn find_wrap_target(
         }
     }
 
-    best.map(|(idx, _, _, _, _)| idx)
+    // Tmux parity (#141): wrapped navigation must stay within the same
+    // column (U/D) or row (L/R). If no candidate overlaps on the
+    // perpendicular axis, the pane is alone in its row/column and
+    // navigation should stay put (no-op) rather than jump sideways.
+    best.filter(|(_, _, _, has_overlap, _)| *has_overlap)
+        .map(|(idx, _, _, _, _)| idx)
 }
 
 /// Encode a crossterm `KeyEvent` into the byte sequence that should be
