@@ -59,7 +59,10 @@ pub fn dispatch_rpc(line: &str, tx: &mpsc::Sender<CtrlReq>) -> Option<String> {
         "kill_all" => handle_kill_all(&req.params, tx),
         "list" => handle_list(&req.params, tx),
         "run_shell" => handle_run_shell(&req.params, tx),
-        _ => Err(RpcErr::from((-32601, format!("Method not found: {}", req.method)))),
+        _ => Err(RpcErr::from((
+            -32601,
+            format!("Method not found: {}", req.method),
+        ))),
     };
 
     let resp = match result {
@@ -484,7 +487,10 @@ fn handle_run_shell(
         .map_err(|e| RpcErr::from((-32602, format!("Invalid params: {e}"))))?;
 
     if p.command.is_empty() {
-        return Err(RpcErr::from((-32602, "command must not be empty".to_string())));
+        return Err(RpcErr::from((
+            -32602,
+            "command must not be empty".to_string(),
+        )));
     }
 
     let timeout_ms = p.timeout_ms.unwrap_or(30000) as u64;
