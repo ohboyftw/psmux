@@ -3370,19 +3370,19 @@ fn run_main() -> io::Result<()> {
                     ) {
                         let _ = stream.set_nodelay(true);
                         let _ = stream.set_read_timeout(Some(Duration::from_millis(3000)));
-                        let _ = write!(stream, "AUTH {}\n", warm_key);
+                        let _ = writeln!(stream, "AUTH {}", warm_key);
                         let client_cwd = std::env::current_dir()
                             .ok()
                             .and_then(|p| p.to_str().map(|s| s.to_string()));
                         if let Some(ref cwd) = client_cwd {
-                            let _ = write!(
+                            let _ = writeln!(
                                 stream,
-                                "claim-session {} \"{}\"\n",
+                                "claim-session {} \"{}\"",
                                 session_name,
                                 cwd.replace('"', "\\\"")
                             );
                         } else {
-                            let _ = write!(stream, "claim-session {}\n", session_name);
+                            let _ = writeln!(stream, "claim-session {}", session_name);
                         }
                         let _ = stream.flush();
                         // Use send_auth_cmd_response pattern: read AUTH

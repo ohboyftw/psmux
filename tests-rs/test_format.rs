@@ -325,8 +325,16 @@ fn test_window_flags_include_z_when_zoomed() {
     app.windows.push(win);
     app.active_idx = 0;
     let flags = expand_var("window_flags", &app, 0);
-    assert!(flags.contains('Z'), "window_flags should contain Z when zoomed, got: {}", flags);
-    assert!(flags.contains('*'), "window_flags should contain * for active window, got: {}", flags);
+    assert!(
+        flags.contains('Z'),
+        "window_flags should contain Z when zoomed, got: {}",
+        flags
+    );
+    assert!(
+        flags.contains('*'),
+        "window_flags should contain * for active window, got: {}",
+        flags
+    );
 }
 
 #[test]
@@ -335,7 +343,11 @@ fn test_window_flags_no_z_when_not_zoomed() {
     app.windows.push(mock_window("win0"));
     app.active_idx = 0;
     let flags = expand_var("window_flags", &app, 0);
-    assert!(!flags.contains('Z'), "window_flags should not contain Z when not zoomed, got: {}", flags);
+    assert!(
+        !flags.contains('Z'),
+        "window_flags should not contain Z when not zoomed, got: {}",
+        flags
+    );
 }
 
 #[test]
@@ -346,7 +358,7 @@ fn test_conditional_window_zoomed_flag_per_window() {
     app.windows.push(win0);
     app.windows.push(mock_window("win1"));
     app.active_idx = 1; // active is window 1, but window 0 is zoomed
-    // Conditional format should show ZOOMED for window 0
+                        // Conditional format should show ZOOMED for window 0
     let result0 = expand_format_for_window("#{?window_zoomed_flag,ZOOMED,normal}", &app, 0);
     assert_eq!(result0, "ZOOMED");
     // Conditional format should show normal for window 1

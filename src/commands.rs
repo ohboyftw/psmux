@@ -14,7 +14,7 @@ use crate::window_ops::toggle_zoom;
 fn show_output_popup(app: &mut AppState, title: &str, output: String) {
     let lines: Vec<&str> = output.lines().collect();
     let width = lines.iter().map(|l| l.len()).max().unwrap_or(40).max(20) as u16 + 4;
-    let height = (lines.len() as u16 + 2).max(5).min(40);
+    let height = (lines.len() as u16 + 2).clamp(5, 40);
     app.mode = Mode::PopupMode {
         command: title.to_string(),
         output,
@@ -36,8 +36,14 @@ fn generate_list_panes(app: &AppState) -> String {
     let win = &app.windows[app.active_idx];
     fn collect(node: &Node, panes: &mut Vec<(usize, u16, u16)>) {
         match node {
-            Node::Leaf(p) => { panes.push((p.id, p.last_cols, p.last_rows)); }
-            Node::Split { children, .. } => { for c in children { collect(c, panes); } }
+            Node::Leaf(p) => {
+                panes.push((p.id, p.last_cols, p.last_rows));
+            }
+            Node::Split { children, .. } => {
+                for c in children {
+                    collect(c, panes);
+                }
+            }
         }
     }
     let mut panes = Vec::new();
@@ -46,20 +52,28 @@ fn generate_list_panes(app: &AppState) -> String {
     let mut output = String::new();
     for (pos, (id, cols, rows)) in panes.iter().enumerate() {
         let idx = pos + app.pane_base_index;
-        let marker = if active_id == Some(*id) { " (active)" } else { "" };
-        output.push_str(&format!("{}: [{}x{}] [history {}/{}, 0 bytes] %{}{}\n",
-            idx, cols, rows, app.history_limit, app.history_limit, id, marker));
+        let marker = if active_id == Some(*id) {
+            " (active)"
+        } else {
+            ""
+        };
+        output.push_str(&format!(
+            "{}: [{}x{}] [history {}/{}, 0 bytes] %{}{}\n",
+            idx, cols, rows, app.history_limit, app.history_limit, id, marker
+        ));
     }
     output
 }
 
 /// Generate list-clients output from AppState.
 fn generate_list_clients(app: &AppState) -> String {
-    format!("/dev/pts/0: {}: {} [{}x{}] (utf8)\n",
+    format!(
+        "/dev/pts/0: {}: {} [{}x{}] (utf8)\n",
         app.session_name,
         app.windows[app.active_idx].name,
         app.last_window_area.width,
-        app.last_window_area.height)
+        app.last_window_area.height
+    )
 }
 
 /// Generate show-hooks output from AppState.
@@ -1095,7 +1109,11 @@ mod tests {
         let mut app = mock_app();
         // Need at least one window for list-clients
         let win = crate::types::Window {
-            root: Node::Split { kind: LayoutKind::Horizontal, sizes: vec![], children: vec![] },
+            root: Node::Split {
+                kind: LayoutKind::Horizontal,
+                sizes: vec![],
+                children: vec![],
+            },
             active_path: vec![],
             name: "shell".to_string(),
             id: 0,
@@ -1111,7 +1129,10 @@ mod tests {
         };
         app.windows.push(win);
         let output = generate_list_clients(&app);
-        assert!(output.contains("test_session"), "should contain session name");
+        assert!(
+            output.contains("test_session"),
+            "should contain session name"
+        );
         assert!(output.contains("(utf8)"), "should contain encoding");
         assert!(output.contains("shell"), "should contain window name");
     }
@@ -1126,19 +1147,37 @@ mod tests {
     #[test]
     fn test_generate_show_hooks_with_hooks() {
         let mut app = mock_app();
-        app.hooks.insert("after-new-window".to_string(), vec!["run-shell 'echo hello'".to_string()]);
+        app.hooks.insert(
+            "after-new-window".to_string(),
+            vec!["run-shell 'echo hello'".to_string()],
+        );
         let output = generate_show_hooks(&app);
-        assert!(output.contains("after-new-window"), "should contain hook name");
+        assert!(
+            output.contains("after-new-window"),
+            "should contain hook name"
+        );
         assert!(output.contains("run-shell"), "should contain hook command");
     }
 
     #[test]
     fn test_generate_list_commands() {
         let output = generate_list_commands();
-        assert!(output.contains("list-windows"), "should list list-windows command");
-        assert!(output.contains("show-hooks"), "should list show-hooks command");
-        assert!(output.contains("list-commands"), "should list list-commands command");
-        assert!(output.contains("list-clients"), "should list list-clients command");
+        assert!(
+            output.contains("list-windows"),
+            "should list list-windows command"
+        );
+        assert!(
+            output.contains("show-hooks"),
+            "should list show-hooks command"
+        );
+        assert!(
+            output.contains("list-commands"),
+            "should list list-commands command"
+        );
+        assert!(
+            output.contains("list-clients"),
+            "should list list-clients command"
+        );
     }
 
     #[test]
@@ -1146,7 +1185,9 @@ mod tests {
         let mut app = mock_app();
         show_output_popup(&mut app, "test-cmd", "line1\nline2\nline3".to_string());
         match &app.mode {
-            Mode::PopupMode { command, output, .. } => {
+            Mode::PopupMode {
+                command, output, ..
+            } => {
                 assert_eq!(command, "test-cmd");
                 assert!(output.contains("line1"));
                 assert!(output.contains("line3"));

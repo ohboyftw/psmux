@@ -724,7 +724,13 @@ pub fn yank_selection(app: &mut AppState) -> io::Result<()> {
     parser.screen_mut().set_scrollback(current_scroll);
     // Store in named register if one was selected
     if let Some(reg) = app.copy_register.take() {
-        app.named_registers.insert(reg, text.clone());
+        // Cap register value at 1 MB to prevent unbounded memory growth
+        let capped = if text.len() > 1_048_576 {
+            text[..text.floor_char_boundary(1_048_576)].to_string()
+        } else {
+            text.clone()
+        };
+        app.named_registers.insert(reg, capped);
     }
     app.paste_buffers.insert(0, text.clone());
     if app.paste_buffers.len() > 10 {

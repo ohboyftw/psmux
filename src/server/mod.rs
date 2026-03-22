@@ -4997,8 +4997,11 @@ pub fn run_server(
                                 })
                                 .unwrap_or_else(|| "pwsh".to_string());
 
-                            let env_snapshot: Vec<(String, String)> =
-                                app.environment.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
+                            let env_snapshot: Vec<(String, String)> = app
+                                .environment
+                                .iter()
+                                .map(|(k, v)| (k.clone(), v.clone()))
+                                .collect();
 
                             // Run on a background thread so the server loop stays responsive
                             std::thread::spawn(move || {

@@ -371,7 +371,10 @@ mod tests {
         let path = "C:\\Program Files\\psmux\\config.conf";
         let cmd = format!("source-file {}", quote_arg(path));
         let args = parse_command_line(&cmd);
-        assert_eq!(args, vec!["source-file", "C:\\Program Files\\psmux\\config.conf"]);
+        assert_eq!(
+            args,
+            vec!["source-file", "C:\\Program Files\\psmux\\config.conf"]
+        );
     }
 
     #[test]
@@ -380,7 +383,14 @@ mod tests {
         let cwd = "C:\\Users\\My Name\\Documents";
         let cmd = format!("claim-session {} {}", quote_arg(name), quote_arg(cwd));
         let args = parse_command_line(&cmd);
-        assert_eq!(args, vec!["claim-session", "my session", "C:\\Users\\My Name\\Documents"]);
+        assert_eq!(
+            args,
+            vec![
+                "claim-session",
+                "my session",
+                "C:\\Users\\My Name\\Documents"
+            ]
+        );
     }
 
     #[test]

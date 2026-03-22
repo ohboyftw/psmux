@@ -1959,16 +1959,24 @@ pub fn run_remote(
                                 }
                                 KeyCode::Enter if renaming => {
                                     if session_renaming {
-                                        cmd_batch.push(format!("rename-session {}\n", quote_arg(&rename_buf)));
+                                        cmd_batch.push(format!(
+                                            "rename-session {}\n",
+                                            quote_arg(&rename_buf)
+                                        ));
                                         session_renaming = false;
                                     } else {
-                                        cmd_batch.push(format!("rename-window {}\n", quote_arg(&rename_buf)));
+                                        cmd_batch.push(format!(
+                                            "rename-window {}\n",
+                                            quote_arg(&rename_buf)
+                                        ));
                                     }
                                     renaming = false;
                                 }
                                 KeyCode::Enter if pane_renaming => {
-                                    cmd_batch
-                                        .push(format!("set-pane-title {}\n", quote_arg(&pane_title_buf)));
+                                    cmd_batch.push(format!(
+                                        "set-pane-title {}\n",
+                                        quote_arg(&pane_title_buf)
+                                    ));
                                     pane_renaming = false;
                                 }
                                 KeyCode::Enter if command_input => {

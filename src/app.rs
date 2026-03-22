@@ -360,7 +360,8 @@ pub fn run(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> io::Result<
                                     && args.windows(2).all(|w| !(w[0] == "-n" && w[1] == **a))
                             })
                             .map(|s| s.trim_matches('"').to_string());
-                        let _ = tx.send(CtrlReq::NewWindow(cmd_str, name, false, None, vec![], None));
+                        let _ =
+                            tx.send(CtrlReq::NewWindow(cmd_str, name, false, None, vec![], None));
                         // Write immediate acknowledgment so the client's read()
                         // returns promptly instead of waiting for stream close.
                         let _ = writeln!(stream, "OK");
@@ -432,12 +433,15 @@ pub fn run(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> io::Result<
                     }
                     "list-windows" | "lsw" => {
                         let (rtx, rrx) = mpsc::channel::<String>();
-                        if args.iter().any(|a| *a == "-J") {
+                        if args.contains(&"-J") {
                             let _ = tx.send(CtrlReq::ListWindows(rtx));
                         } else {
                             let _ = tx.send(CtrlReq::ListWindowsTmux(rtx));
                         }
-                        if let Ok(text) = rrx.recv() { let _ = write!(stream, "{}\n", text); let _ = stream.flush(); }
+                        if let Ok(text) = rrx.recv() {
+                            let _ = writeln!(stream, "{}", text);
+                            let _ = stream.flush();
+                        }
                     }
                     "list-panes" | "lsp" => {
                         let all = args.iter().any(|a| *a == "-a" || *a == "-s");
@@ -447,25 +451,41 @@ pub fn run(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> io::Result<
                         } else {
                             let _ = tx.send(CtrlReq::ListPanes(rtx));
                         }
-                        if let Ok(text) = rrx.recv() { let _ = write!(stream, "{}\n", text); let _ = stream.flush(); }
+                        if let Ok(text) = rrx.recv() {
+                            let _ = writeln!(stream, "{}", text);
+                            let _ = stream.flush();
+                        }
                     }
                     "list-clients" | "lsc" => {
                         let (rtx, rrx) = mpsc::channel::<String>();
                         let _ = tx.send(CtrlReq::ListClients(rtx));
-                        if let Ok(text) = rrx.recv() { let _ = write!(stream, "{}\n", text); let _ = stream.flush(); }
+                        if let Ok(text) = rrx.recv() {
+                            let _ = writeln!(stream, "{}", text);
+                            let _ = stream.flush();
+                        }
                     }
                     "show-hooks" => {
                         let (rtx, rrx) = mpsc::channel::<String>();
                         let _ = tx.send(CtrlReq::ShowHooks(rtx));
-                        if let Ok(text) = rrx.recv() { let _ = write!(stream, "{}\n", text); let _ = stream.flush(); }
+                        if let Ok(text) = rrx.recv() {
+                            let _ = writeln!(stream, "{}", text);
+                            let _ = stream.flush();
+                        }
                     }
                     "list-commands" | "lscm" => {
                         let (rtx, rrx) = mpsc::channel::<String>();
                         let _ = tx.send(CtrlReq::ListCommands(rtx));
-                        if let Ok(text) = rrx.recv() { let _ = write!(stream, "{}\n", text); let _ = stream.flush(); }
+                        if let Ok(text) = rrx.recv() {
+                            let _ = writeln!(stream, "{}", text);
+                            let _ = stream.flush();
+                        }
                     }
                     "source-file" | "source" => {
-                        let non_flag_args: Vec<&str> = args.iter().filter(|a| !a.starts_with('-')).copied().collect();
+                        let non_flag_args: Vec<&str> = args
+                            .iter()
+                            .filter(|a| !a.starts_with('-'))
+                            .copied()
+                            .collect();
                         if let Some(path) = non_flag_args.first() {
                             let _ = tx.send(CtrlReq::SourceFile(path.to_string()));
                         }
@@ -1263,7 +1283,13 @@ pub fn run(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> io::Result<
             };
             match req {
                 CtrlReq::NewWindow(cmd, name, _detached, start_dir, _, shell) => {
-                    create_window(&*pty_system, &mut app, cmd.as_deref(), start_dir.as_deref(), shell.as_deref())?;
+                    create_window(
+                        &*pty_system,
+                        &mut app,
+                        cmd.as_deref(),
+                        start_dir.as_deref(),
+                        shell.as_deref(),
+                    )?;
                     if let Some(n) = name {
                         if let Some(w) = app.windows.last_mut() {
                             w.name = n;
@@ -1505,7 +1531,11 @@ pub fn run(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> io::Result<
                     let mut output = String::new();
                     for (pos, (id, cols, rows)) in panes.iter().enumerate() {
                         let idx = pos + app.pane_base_index;
-                        let marker = if active_id == Some(*id) { " (active)" } else { "" };
+                        let marker = if active_id == Some(*id) {
+                            " (active)"
+                        } else {
+                            ""
+                        };
                         output.push_str(&format!(
                             "{}: [{}x{}] [history {}/{}, 0 bytes] %{}{}\n",
                             idx, cols, rows, app.history_limit, app.history_limit, id, marker

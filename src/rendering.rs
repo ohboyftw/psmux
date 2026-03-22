@@ -125,7 +125,10 @@ pub fn render_window(f: &mut Frame, app: &mut AppState, area: Rect) {
     } else {
         None
     };
-    let zoomed = app.windows.get(app.active_idx).is_some_and(|w| w.zoom_saved.is_some());
+    let zoomed = app
+        .windows
+        .get(app.active_idx)
+        .is_some_and(|w| w.zoom_saved.is_some());
     let win = &mut app.windows[app.active_idx];
     let active_rect = compute_active_rect(&win.root, &win.active_path, area);
     render_node(

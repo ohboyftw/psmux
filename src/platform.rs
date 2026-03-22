@@ -1300,14 +1300,18 @@ pub mod mouse_inject {
             FreeConsole();
 
             if AttachConsole(child_pid) == 0 {
-                debug_log(&format!("send_modified_enter_event: AttachConsole({}) FAILED", child_pid));
-                if had_console { AttachConsole(ATTACH_PARENT_PROCESS); }
+                debug_log(&format!(
+                    "send_modified_enter_event: AttachConsole({}) FAILED",
+                    child_pid
+                ));
+                if had_console {
+                    AttachConsole(ATTACH_PARENT_PROCESS);
+                }
                 return false;
             }
 
             let conin: [u16; 7] = [
-                'C' as u16, 'O' as u16, 'N' as u16,
-                'I' as u16, 'N' as u16, '$' as u16, 0,
+                'C' as u16, 'O' as u16, 'N' as u16, 'I' as u16, 'N' as u16, '$' as u16, 0,
             ];
             let handle = CreateFileW(
                 conin.as_ptr(),
@@ -1322,7 +1326,9 @@ pub mod mouse_inject {
             if handle == INVALID_HANDLE || handle == 0 {
                 debug_log("send_modified_enter_event: CreateFileW(CONIN$) FAILED");
                 FreeConsole();
-                if had_console { AttachConsole(ATTACH_PARENT_PROCESS); }
+                if had_console {
+                    AttachConsole(ATTACH_PARENT_PROCESS);
+                }
                 return false;
             }
 
@@ -1356,9 +1362,15 @@ pub mod mouse_inject {
             }
 
             let mut flags: u32 = 0;
-            if ctrl  { flags |= LEFT_CTRL_PRESSED; }
-            if alt   { flags |= LEFT_ALT_PRESSED; }
-            if shift { flags |= SHIFT_PRESSED; }
+            if ctrl {
+                flags |= LEFT_CTRL_PRESSED;
+            }
+            if alt {
+                flags |= LEFT_ALT_PRESSED;
+            }
+            if shift {
+                flags |= SHIFT_PRESSED;
+            }
 
             // MAPVK_VK_TO_VSC = 0
             let scan = MapVirtualKeyW(VK_RETURN as u32, 0) as u16;
@@ -1454,12 +1466,7 @@ pub mod mouse_inject {
     pub fn send_alt_key_event(_pid: u32, _ch: char) -> bool {
         false
     }
-    pub fn send_modified_enter_event(
-        _pid: u32,
-        _ctrl: bool,
-        _alt: bool,
-        _shift: bool,
-    ) -> bool {
+    pub fn send_modified_enter_event(_pid: u32, _ctrl: bool, _alt: bool, _shift: bool) -> bool {
         false
     }
 }

@@ -412,8 +412,10 @@ fn augment_enter_shift_noop_when_already_shift() {
     use crossterm::event::KeyModifiers;
     let mut ev = key(KeyCode::Enter, KeyModifiers::SHIFT);
     crate::platform::augment_enter_shift(&mut ev);
-    assert!(ev.modifiers.contains(KeyModifiers::SHIFT),
-        "augment_enter_shift must preserve existing SHIFT modifier");
+    assert!(
+        ev.modifiers.contains(KeyModifiers::SHIFT),
+        "augment_enter_shift must preserve existing SHIFT modifier"
+    );
 }
 
 #[cfg(windows)]
@@ -422,10 +424,14 @@ fn augment_enter_shift_ignores_non_enter() {
     use crossterm::event::KeyModifiers;
     let mut ev = key(KeyCode::Char('a'), KeyModifiers::ALT);
     crate::platform::augment_enter_shift(&mut ev);
-    assert!(ev.modifiers.contains(KeyModifiers::ALT),
-        "augment_enter_shift must not change non-Enter keys");
-    assert!(!ev.modifiers.contains(KeyModifiers::SHIFT),
-        "augment_enter_shift must not add SHIFT to non-Enter keys");
+    assert!(
+        ev.modifiers.contains(KeyModifiers::ALT),
+        "augment_enter_shift must not change non-Enter keys"
+    );
+    assert!(
+        !ev.modifiers.contains(KeyModifiers::SHIFT),
+        "augment_enter_shift must not add SHIFT to non-Enter keys"
+    );
 }
 
 /// VT fallback encoding for modified Enter still works (encode_key_event path).
@@ -433,16 +439,20 @@ fn augment_enter_shift_ignores_non_enter() {
 fn ctrl_shift_enter_vt_encoding_works() {
     let ev = key(KeyCode::Enter, KeyModifiers::CONTROL | KeyModifiers::SHIFT);
     let bytes = encode_key_event(&ev).unwrap();
-    assert_eq!(bytes, b"\x1b[13;6~",
-        "Ctrl+Shift+Enter VT encoding must be CSI 13;6~");
+    assert_eq!(
+        bytes, b"\x1b[13;6~",
+        "Ctrl+Shift+Enter VT encoding must be CSI 13;6~"
+    );
 }
 
 #[test]
 fn ctrl_alt_enter_vt_encoding_works() {
     let ev = key(KeyCode::Enter, KeyModifiers::CONTROL | KeyModifiers::ALT);
     let bytes = encode_key_event(&ev).unwrap();
-    assert_eq!(bytes, b"\x1b[13;7~",
-        "Ctrl+Alt+Enter VT encoding must be CSI 13;7~");
+    assert_eq!(
+        bytes, b"\x1b[13;7~",
+        "Ctrl+Alt+Enter VT encoding must be CSI 13;7~"
+    );
 }
 
 #[test]
@@ -453,7 +463,10 @@ fn shift_alt_enter_on_non_windows_produces_csi() {
     #[cfg(windows)]
     assert_eq!(bytes, b"\x1b\r", "Shift+Alt+Enter on Windows → ESC+CR");
     #[cfg(not(windows))]
-    assert_eq!(bytes, b"\x1b[13;4~", "Shift+Alt+Enter on non-Windows → CSI 13;4~");
+    assert_eq!(
+        bytes, b"\x1b[13;4~",
+        "Shift+Alt+Enter on non-Windows → CSI 13;4~"
+    );
 }
 
 // ── Issue #134: wrapped directional navigation geometry tests ──
@@ -545,9 +558,33 @@ fn issue134_direct_neighbor_takes_priority_over_wrap() {
 fn three_pane_h_rects() -> Vec<(Vec<usize>, ratatui::layout::Rect)> {
     use ratatui::layout::Rect;
     vec![
-        (vec![0], Rect { x: 0,  y: 0, width: 60, height: 30 }), // %1 left
-        (vec![1], Rect { x: 61, y: 0, width: 29, height: 30 }), // %2 center
-        (vec![2], Rect { x: 91, y: 0, width: 30, height: 30 }), // %3 right
+        (
+            vec![0],
+            Rect {
+                x: 0,
+                y: 0,
+                width: 60,
+                height: 30,
+            },
+        ), // %1 left
+        (
+            vec![1],
+            Rect {
+                x: 61,
+                y: 0,
+                width: 29,
+                height: 30,
+            },
+        ), // %2 center
+        (
+            vec![2],
+            Rect {
+                x: 91,
+                y: 0,
+                width: 30,
+                height: 30,
+            },
+        ), // %3 right
     ]
 }
 
@@ -559,14 +596,14 @@ fn issue141_wrap_up_single_row_stays_on_self() {
     let rects = three_pane_h_rects();
     let ai = 1; // center pane
     let arect = &rects[ai].1;
-    let direct = find_best_pane_in_direction(
-        &rects, ai, arect, crate::types::FocusDir::Up, &[], &[],
-    );
+    let direct =
+        find_best_pane_in_direction(&rects, ai, arect, crate::types::FocusDir::Up, &[], &[]);
     assert!(direct.is_none(), "no pane above center in single row");
-    let wrap = find_wrap_target(
-        &rects, ai, arect, crate::types::FocusDir::Up, &[], &[],
+    let wrap = find_wrap_target(&rects, ai, arect, crate::types::FocusDir::Up, &[], &[]);
+    assert!(
+        wrap.is_none(),
+        "wrap Up in single row must not jump columns (issue #141)"
     );
-    assert!(wrap.is_none(), "wrap Up in single row must not jump columns (issue #141)");
 }
 
 #[test]
@@ -574,23 +611,47 @@ fn issue141_wrap_down_single_row_stays_on_self() {
     let rects = three_pane_h_rects();
     let ai = 1;
     let arect = &rects[ai].1;
-    let direct = find_best_pane_in_direction(
-        &rects, ai, arect, crate::types::FocusDir::Down, &[], &[],
-    );
+    let direct =
+        find_best_pane_in_direction(&rects, ai, arect, crate::types::FocusDir::Down, &[], &[]);
     assert!(direct.is_none(), "no pane below center in single row");
-    let wrap = find_wrap_target(
-        &rects, ai, arect, crate::types::FocusDir::Down, &[], &[],
+    let wrap = find_wrap_target(&rects, ai, arect, crate::types::FocusDir::Down, &[], &[]);
+    assert!(
+        wrap.is_none(),
+        "wrap Down in single row must not jump columns (issue #141)"
     );
-    assert!(wrap.is_none(), "wrap Down in single row must not jump columns (issue #141)");
 }
 
 /// Build a three-pane vertical layout (top / middle / bottom) for issue #141.
 fn three_pane_v_rects() -> Vec<(Vec<usize>, ratatui::layout::Rect)> {
     use ratatui::layout::Rect;
     vec![
-        (vec![0], Rect { x: 0, y: 0,  width: 80, height: 10 }), // top
-        (vec![1], Rect { x: 0, y: 11, width: 80, height: 10 }), // middle
-        (vec![2], Rect { x: 0, y: 22, width: 80, height: 10 }), // bottom
+        (
+            vec![0],
+            Rect {
+                x: 0,
+                y: 0,
+                width: 80,
+                height: 10,
+            },
+        ), // top
+        (
+            vec![1],
+            Rect {
+                x: 0,
+                y: 11,
+                width: 80,
+                height: 10,
+            },
+        ), // middle
+        (
+            vec![2],
+            Rect {
+                x: 0,
+                y: 22,
+                width: 80,
+                height: 10,
+            },
+        ), // bottom
     ]
 }
 
@@ -601,14 +662,14 @@ fn issue141_wrap_left_single_column_stays_on_self() {
     let rects = three_pane_v_rects();
     let ai = 1;
     let arect = &rects[ai].1;
-    let direct = find_best_pane_in_direction(
-        &rects, ai, arect, crate::types::FocusDir::Left, &[], &[],
-    );
+    let direct =
+        find_best_pane_in_direction(&rects, ai, arect, crate::types::FocusDir::Left, &[], &[]);
     assert!(direct.is_none(), "no pane left of middle in single column");
-    let wrap = find_wrap_target(
-        &rects, ai, arect, crate::types::FocusDir::Left, &[], &[],
+    let wrap = find_wrap_target(&rects, ai, arect, crate::types::FocusDir::Left, &[], &[]);
+    assert!(
+        wrap.is_none(),
+        "wrap Left in single column must not jump rows (issue #141)"
     );
-    assert!(wrap.is_none(), "wrap Left in single column must not jump rows (issue #141)");
 }
 
 #[test]
@@ -616,14 +677,14 @@ fn issue141_wrap_right_single_column_stays_on_self() {
     let rects = three_pane_v_rects();
     let ai = 1;
     let arect = &rects[ai].1;
-    let direct = find_best_pane_in_direction(
-        &rects, ai, arect, crate::types::FocusDir::Right, &[], &[],
-    );
+    let direct =
+        find_best_pane_in_direction(&rects, ai, arect, crate::types::FocusDir::Right, &[], &[]);
     assert!(direct.is_none(), "no pane right of middle in single column");
-    let wrap = find_wrap_target(
-        &rects, ai, arect, crate::types::FocusDir::Right, &[], &[],
+    let wrap = find_wrap_target(&rects, ai, arect, crate::types::FocusDir::Right, &[], &[]);
+    assert!(
+        wrap.is_none(),
+        "wrap Right in single column must not jump rows (issue #141)"
     );
-    assert!(wrap.is_none(), "wrap Right in single column must not jump rows (issue #141)");
 }
 
 #[test]
@@ -632,13 +693,31 @@ fn issue141_wrap_up_still_works_with_column_overlap() {
     // because they overlap on the perpendicular (x) axis.
     use ratatui::layout::Rect;
     let rects: Vec<(Vec<usize>, Rect)> = vec![
-        (vec![0], Rect { x: 0, y: 0,  width: 80, height: 12 }),
-        (vec![1], Rect { x: 0, y: 13, width: 80, height: 12 }),
+        (
+            vec![0],
+            Rect {
+                x: 0,
+                y: 0,
+                width: 80,
+                height: 12,
+            },
+        ),
+        (
+            vec![1],
+            Rect {
+                x: 0,
+                y: 13,
+                width: 80,
+                height: 12,
+            },
+        ),
     ];
     let ai = 0; // top pane
     let arect = &rects[ai].1;
-    let wrap = find_wrap_target(
-        &rects, ai, arect, crate::types::FocusDir::Up, &[], &[],
+    let wrap = find_wrap_target(&rects, ai, arect, crate::types::FocusDir::Up, &[], &[]);
+    assert_eq!(
+        wrap,
+        Some(1),
+        "wrap Up from top should reach bottom when they share a column"
     );
-    assert_eq!(wrap, Some(1), "wrap Up from top should reach bottom when they share a column");
 }

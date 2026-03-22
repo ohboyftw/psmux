@@ -450,6 +450,10 @@ pub fn handle_key(app: &mut AppState, key: KeyEvent) -> io::Result<bool> {
                         if !input.is_empty() {
                             let cmd = input.clone();
                             app.command_history.push(cmd);
+                            // Cap history at 1000 entries to prevent unbounded memory growth
+                            if app.command_history.len() > 1000 {
+                                app.command_history.remove(0);
+                            }
                             app.command_history_idx = app.command_history.len();
                         }
                     }
@@ -1976,10 +1980,17 @@ pub fn forward_key_to_active(app: &mut AppState, key: KeyEvent) -> io::Result<()
                     match node {
                         Node::Leaf(p) if !p.dead => {
                             if let Some(pid) = p.child_pid {
-                                if !crate::platform::mouse_inject::send_modified_enter_event(pid, ctrl, alt, shift) {
+                                if !crate::platform::mouse_inject::send_modified_enter_event(
+                                    pid, ctrl, alt, shift,
+                                ) {
                                     // Fallback: VT encoding for non-console apps
-                                    let m: u8 = 1 + (shift as u8) + (alt as u8) * 2 + (ctrl as u8) * 4;
-                                    let bytes = if m > 1 { format!("\x1b[13;{}~", m).into_bytes() } else { b"\r".to_vec() };
+                                    let m: u8 =
+                                        1 + (shift as u8) + (alt as u8) * 2 + (ctrl as u8) * 4;
+                                    let bytes = if m > 1 {
+                                        format!("\x1b[13;{}~", m).into_bytes()
+                                    } else {
+                                        b"\r".to_vec()
+                                    };
                                     let _ = p.writer.write_all(&bytes);
                                     let _ = p.writer.flush();
                                 }
@@ -1987,7 +1998,9 @@ pub fn forward_key_to_active(app: &mut AppState, key: KeyEvent) -> io::Result<()
                         }
                         Node::Leaf(_) => {}
                         Node::Split { children, .. } => {
-                            for c in children { inject_all(c, ctrl, alt, shift); }
+                            for c in children {
+                                inject_all(c, ctrl, alt, shift);
+                            }
                         }
                     }
                 }
@@ -3629,7 +3642,9 @@ pub fn send_key_to_active(app: &mut AppState, k: &str) -> io::Result<()> {
                 let has_ctrl = upper.contains("C-");
                 let has_alt = upper.contains("M-");
                 let injected = if let Some(pid) = p.child_pid {
-                    crate::platform::mouse_inject::send_modified_enter_event(pid, has_ctrl, has_alt, has_shift)
+                    crate::platform::mouse_inject::send_modified_enter_event(
+                        pid, has_ctrl, has_alt, has_shift,
+                    )
                 } else {
                     false
                 };
