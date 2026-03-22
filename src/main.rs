@@ -27,10 +27,10 @@ mod window_ops;
 
 #[allow(unused)]
 mod backend;
-#[allow(unused)]
-mod remote;
 #[cfg(feature = "mycel")]
 mod mycel;
+#[allow(unused)]
+mod remote;
 
 use std::env;
 use std::io::{self, BufRead as _, IsTerminal, Read as _, Write};
@@ -1198,6 +1198,9 @@ fn run_main() -> io::Result<()> {
                     "--clean" => {
                         cmd.push_str(" --clean");
                     }
+                    "--plain" => {
+                        cmd.push_str(" --plain");
+                    }
                     "-b" => {
                         if let Some(buf) = cmd_args.get(i + 1) {
                             cmd.push_str(&format!(" -b {}", buf));
@@ -1390,7 +1393,7 @@ fn run_main() -> io::Result<()> {
             }
             cmd.push('\n');
             let resp = send_control_with_response(cmd)?;
-            if resp.starts_with("can't find") {
+            if resp.starts_with("can't find pane:") || resp.starts_with("can't find window:") {
                 eprint!("{}", resp);
                 std::process::exit(1);
             }
@@ -1430,6 +1433,10 @@ fn run_main() -> io::Result<()> {
             }
             cmd.push('\n');
             let resp = send_control_with_response(cmd)?;
+            if resp.starts_with("can't find pane:") || resp.starts_with("can't find window:") {
+                eprint!("{}", resp);
+                std::process::exit(1);
+            }
             print!("{}", resp);
             return Ok(());
         }
@@ -1577,7 +1584,10 @@ fn run_main() -> io::Result<()> {
                 i += 1;
             }
             if let Some(name) = new_name {
-                send_control(format!("rename-session {}\n", crate::util::quote_arg(&name)))?;
+                send_control(format!(
+                    "rename-session {}\n",
+                    crate::util::quote_arg(&name)
+                ))?;
             }
             return Ok(());
         }
@@ -1973,6 +1983,49 @@ fn run_main() -> io::Result<()> {
             std::process::exit(wait_exit_code);
         }
         // run-shell - Run a shell command
+        "exec" => {
+            let mut cmd = "exec".to_string();
+            let mut i = 1;
+            while i < cmd_args.len() {
+                match cmd_args[i].as_str() {
+                    "-t" => {
+                        if let Some(t) = cmd_args.get(i + 1) {
+                            cmd.push_str(&format!(" -t {}", t));
+                            i += 1;
+                        }
+                    }
+                    "--shell" => {
+                        if let Some(s) = cmd_args.get(i + 1) {
+                            cmd.push_str(&format!(" --shell {}", s));
+                            i += 1;
+                        }
+                    }
+                    "--" => {
+                        // Everything after -- is the command
+                        let rest: Vec<&str> =
+                            cmd_args[i + 1..].iter().map(|s| s.as_str()).collect();
+                        cmd.push_str(&format!(" -- {}", rest.join(" ")));
+                        break;
+                    }
+                    s => {
+                        cmd.push_str(&format!(" {}", s));
+                    }
+                }
+                i += 1;
+            }
+            cmd.push('\n');
+            let resp = send_control_with_response(cmd)?;
+            print!("{}", resp);
+            // Parse exit code from JSON response for proper process exit
+            if let Ok(v) = serde_json::from_str::<serde_json::Value>(&resp) {
+                if let Some(code) = v.get("exit_code").and_then(|c| c.as_i64()) {
+                    if code != 0 {
+                        std::process::exit(code as i32);
+                    }
+                }
+            }
+            return Ok(());
+        }
         "run-shell" => {
             let mut cmd_to_run: Vec<String> = Vec::new();
             let mut background = false;
@@ -2404,18 +2457,33 @@ fn run_main() -> io::Result<()> {
             let mut signal = false;
             let mut unlock = false;
             let mut channel: Option<String> = None;
+            let mut file_path: Option<String> = None;
+            let mut timeout: Option<String> = None;
+            let mut target: Option<String> = None;
             let mut i = 1;
 
             while i < cmd_args.len() {
                 match cmd_args[i].as_str() {
-                    "-L" => {
-                        lock = true;
+                    "-L" => lock = true,
+                    "-S" => signal = true,
+                    "-U" => unlock = true,
+                    "-t" => {
+                        if let Some(t) = cmd_args.get(i + 1) {
+                            target = Some(t.to_string());
+                            i += 1;
+                        }
                     }
-                    "-S" => {
-                        signal = true;
+                    "--file" => {
+                        if let Some(f) = cmd_args.get(i + 1) {
+                            file_path = Some(f.to_string());
+                            i += 1;
+                        }
                     }
-                    "-U" => {
-                        unlock = true;
+                    "--timeout" => {
+                        if let Some(t) = cmd_args.get(i + 1) {
+                            timeout = Some(t.to_string());
+                            i += 1;
+                        }
                     }
                     s if !s.starts_with('-') => {
                         channel = Some(s.to_string());
@@ -2425,7 +2493,27 @@ fn run_main() -> io::Result<()> {
                 i += 1;
             }
 
-            if let Some(ch) = channel {
+            if let Some(ref fp) = file_path {
+                // File-watching mode
+                let mut cmd = "wait-for".to_string();
+                if let Some(ref t) = target {
+                    cmd.push_str(&format!(" -t {}", t));
+                }
+                cmd.push_str(&format!(" --file {}", fp));
+                if let Some(ref to) = timeout {
+                    cmd.push_str(&format!(" --timeout {}", to));
+                }
+                cmd.push('\n');
+                let resp = send_control_with_response(cmd)?;
+                let trimmed = resp.trim();
+                if trimmed == "TIMEOUT" {
+                    eprintln!("wait-for: timed out waiting for file: {}", fp);
+                    std::process::exit(1);
+                }
+                if !resp.is_empty() {
+                    print!("{}", resp);
+                }
+            } else if let Some(ch) = channel {
                 if signal {
                     send_control(format!("wait-for -S {}\n", ch))?;
                 } else if lock {

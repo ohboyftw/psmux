@@ -1535,7 +1535,16 @@ pub fn expand_var(var: &str, app: &AppState, win_idx: usize) -> String {
                 "0".into()
             }
         }
-        "pane_dead_signal" | "pane_dead_status" | "pane_dead_time" => "0".into(),
+        "pane_dead_signal" | "pane_dead_time" => "0".into(),
+        "pane_dead_status" | "pane_exit_code" => {
+            if let Some(p) = target_pane() {
+                p.exit_code
+                    .map(|c| c.to_string())
+                    .unwrap_or_else(|| "".into())
+            } else {
+                "".into()
+            }
+        }
         "pane_format" => "1".into(),
         "pane_input_off" | "pane_pipe" | "pane_unseen_changes" => "0".into(),
         "pane_last" => {

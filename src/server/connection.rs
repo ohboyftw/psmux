@@ -12,6 +12,53 @@ static NEXT_CLIENT_ID: AtomicU64 = AtomicU64::new(1);
 use super::helpers::TMUX_COMMANDS;
 use crate::commands::parse_command_line;
 
+/// Strip all ANSI/VT escape sequences from text, producing clean UTF-8 output.
+/// Handles CSI sequences (\x1b[...X), OSC sequences (\x1b]...BEL/ST), and
+/// simple two-byte escapes (\x1bX).
+fn strip_ansi_escapes(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    let mut chars = s.chars().peekable();
+    while let Some(c) = chars.next() {
+        if c == '\x1b' {
+            match chars.peek() {
+                Some('[') => {
+                    chars.next(); // consume '['
+                                  // CSI: skip until a letter in '@'..='~'
+                    while let Some(&ch) = chars.peek() {
+                        chars.next();
+                        if ch.is_ascii_alphabetic() || ch == '@' || ch == '~' {
+                            break;
+                        }
+                    }
+                }
+                Some(']') => {
+                    chars.next(); // consume ']'
+                                  // OSC: skip until BEL (\x07) or ST (\x1b\\)
+                    while let Some(&ch) = chars.peek() {
+                        chars.next();
+                        if ch == '\x07' {
+                            break;
+                        }
+                        if ch == '\x1b' {
+                            if chars.peek() == Some(&'\\') {
+                                chars.next();
+                            }
+                            break;
+                        }
+                    }
+                }
+                Some(_) => {
+                    chars.next(); // skip single-char escape
+                }
+                None => {}
+            }
+        } else {
+            out.push(c);
+        }
+    }
+    out
+}
+
 /// Handle a single TCP connection from a client.
 /// Parses auth, optional TARGET/PERSISTENT flags, then dispatches commands
 /// to the main server event loop via the `tx` channel.
@@ -262,11 +309,15 @@ pub(crate) fn handle_connection(
                     // Use checked variant to detect non-existent panes
                     let (check_tx, check_rx) = mpsc::channel();
                     let _ = tx.send(CtrlReq::FocusPaneTempCheck(pid, check_tx));
-                    if let Ok(found) = check_rx.recv_timeout(std::time::Duration::from_secs(2))
-                    {
-                        if !found {
+                    match check_rx.recv_timeout(std::time::Duration::from_secs(2)) {
+                        Ok(found) if !found => {
                             target_pane_not_found = true;
                         }
+                        Err(_) => {
+                            // Timeout: treat as not found rather than silently proceeding
+                            target_pane_not_found = true;
+                        }
+                        _ => {}
                     }
                 } else {
                     let _ = tx.send(CtrlReq::FocusPaneByIndexTemp(pid));
@@ -275,9 +326,7 @@ pub(crate) fn handle_connection(
         }
         // If target pane doesn't exist, return error and skip command
         if target_pane_not_found {
-            let pane_id_str = target_pane
-                .map(|p| format!("%{}", p))
-                .unwrap_or_default();
+            let pane_id_str = target_pane.map(|p| format!("%{}", p)).unwrap_or_default();
             let _ = writeln!(
                 write_stream,
                 "can't find pane: {}",
@@ -317,17 +366,31 @@ pub(crate) fn handle_connection(
                     .windows(2)
                     .find(|w| w[0] == "--shell")
                     .map(|w| w[1].trim_matches('"').to_string());
-                let cmd_str: Option<String> = args
-                    .iter()
-                    .find(|a| {
-                        !a.starts_with('-')
-                            && args.windows(2).all(|w| !(w[0] == "-n" && w[1] == **a))
-                            && args.windows(2).all(|w| !(w[0] == "-c" && w[1] == **a))
-                            && args.windows(2).all(|w| !(w[0] == "-F" && w[1] == **a))
-                            && args.windows(2).all(|w| !(w[0] == "-e" && w[1] == **a))
-                            && args.windows(2).all(|w| !(w[0] == "--shell" && w[1] == **a))
-                    })
-                    .map(|s| s.trim_matches('"').to_string());
+                // Parse command: everything after "--" is the command, or
+                // fall back to finding a single positional arg.
+                let cmd_str: Option<String> =
+                    if let Some(pos) = args.iter().position(|a| *a == "--") {
+                        let after: Vec<&str> = args[pos + 1..]
+                            .iter()
+                            .map(|s| s.trim_matches('"'))
+                            .collect();
+                        if after.is_empty() {
+                            None
+                        } else {
+                            Some(after.join(" "))
+                        }
+                    } else {
+                        args.iter()
+                            .find(|a| {
+                                !a.starts_with('-')
+                                    && args.windows(2).all(|w| !(w[0] == "-n" && w[1] == **a))
+                                    && args.windows(2).all(|w| !(w[0] == "-c" && w[1] == **a))
+                                    && args.windows(2).all(|w| !(w[0] == "-F" && w[1] == **a))
+                                    && args.windows(2).all(|w| !(w[0] == "-e" && w[1] == **a))
+                                    && args.windows(2).all(|w| !(w[0] == "--shell" && w[1] == **a))
+                            })
+                            .map(|s| s.trim_matches('"').to_string())
+                    };
                 if print_info {
                     let (rtx, rrx) = mpsc::channel::<String>();
                     let _ = tx.send(CtrlReq::NewWindowPrint(
@@ -387,18 +450,32 @@ pub(crate) fn handle_connection(
                     .windows(2)
                     .find(|w| w[0] == "--shell")
                     .map(|w| w[1].trim_matches('"').to_string());
-                let cmd_str: Option<String> = args
-                    .iter()
-                    .find(|a| {
-                        !a.starts_with('-')
-                            && args.windows(2).all(|w| !(w[0] == "-c" && w[1] == **a))
-                            && args.windows(2).all(|w| !(w[0] == "-p" && w[1] == **a))
-                            && args.windows(2).all(|w| !(w[0] == "-l" && w[1] == **a))
-                            && args.windows(2).all(|w| !(w[0] == "-F" && w[1] == **a))
-                            && args.windows(2).all(|w| !(w[0] == "-e" && w[1] == **a))
-                            && args.windows(2).all(|w| !(w[0] == "--shell" && w[1] == **a))
-                    })
-                    .map(|s| s.trim_matches('"').to_string());
+                // Parse command: everything after "--" is the command, or
+                // fall back to finding a single positional arg.
+                let cmd_str: Option<String> =
+                    if let Some(pos) = args.iter().position(|a| *a == "--") {
+                        let after: Vec<&str> = args[pos + 1..]
+                            .iter()
+                            .map(|s| s.trim_matches('"'))
+                            .collect();
+                        if after.is_empty() {
+                            None
+                        } else {
+                            Some(after.join(" "))
+                        }
+                    } else {
+                        args.iter()
+                            .find(|a| {
+                                !a.starts_with('-')
+                                    && args.windows(2).all(|w| !(w[0] == "-c" && w[1] == **a))
+                                    && args.windows(2).all(|w| !(w[0] == "-p" && w[1] == **a))
+                                    && args.windows(2).all(|w| !(w[0] == "-l" && w[1] == **a))
+                                    && args.windows(2).all(|w| !(w[0] == "-F" && w[1] == **a))
+                                    && args.windows(2).all(|w| !(w[0] == "-e" && w[1] == **a))
+                                    && args.windows(2).all(|w| !(w[0] == "--shell" && w[1] == **a))
+                            })
+                            .map(|s| s.trim_matches('"').to_string())
+                    };
                 if print_info {
                     let (rtx, rrx) = mpsc::channel::<String>();
                     let _ = tx.send(CtrlReq::SplitWindowPrint(
@@ -438,6 +515,7 @@ pub(crate) fn handle_connection(
                 let join_lines = args.contains(&"-J");
                 let escape_seqs = args.contains(&"-e");
                 let clean_mode = args.contains(&"--clean");
+                let plain_mode = args.contains(&"--plain");
                 // Parse -S start and -E end (negative = scrollback offset, - = entire scrollback)
                 let s_arg = args.windows(2).find(|w| w[0] == "-S").map(|w| w[1]);
                 let e_arg = args.windows(2).find(|w| w[0] == "-E").map(|w| w[1]);
@@ -474,6 +552,10 @@ pub(crate) fn handle_connection(
                         let _ = tx.send(CtrlReq::CapturePane(rtx));
                     }
                     if let Ok(mut text) = rrx.recv() {
+                        if plain_mode {
+                            // Strip all ANSI/VT escape sequences for fully clean output
+                            text = strip_ansi_escapes(&text);
+                        }
                         if join_lines {
                             // Remove trailing whitespace from each line (join wrapped lines)
                             text = text
@@ -1633,21 +1715,80 @@ pub(crate) fn handle_connection(
                 let lock = args.contains(&"-L");
                 let signal = args.contains(&"-S");
                 let unlock = args.contains(&"-U");
-                let channel = args
-                    .iter()
-                    .find(|a| !a.starts_with('-'))
-                    .unwrap_or(&"")
-                    .to_string();
-                let op = if lock {
-                    WaitForOp::Lock
-                } else if signal {
-                    WaitForOp::Signal
-                } else if unlock {
-                    WaitForOp::Unlock
+                // Check for --file mode: server-side file watching
+                let file_path: Option<String> = args
+                    .windows(2)
+                    .find(|w| w[0] == "--file")
+                    .map(|w| w[1].trim_matches('"').to_string());
+                let timeout_secs: u64 = args
+                    .windows(2)
+                    .find(|w| w[0] == "--timeout")
+                    .and_then(|w| w[1].parse().ok())
+                    .unwrap_or(3600); // default 1 hour
+                if let Some(file) = file_path {
+                    // File-watching mode: poll for file existence server-side
+                    // Use the pane's cwd as base if the path is relative
+                    let (cwd_tx, cwd_rx) = mpsc::channel::<String>();
+                    let _ = tx.send(CtrlReq::DisplayMessage(
+                        cwd_tx,
+                        "#{pane_current_path}".to_string(),
+                        None,
+                        false,
+                    ));
+                    let base_dir = cwd_rx
+                        .recv_timeout(Duration::from_secs(2))
+                        .unwrap_or_default();
+                    let watch_path = if std::path::Path::new(&file).is_absolute() {
+                        std::path::PathBuf::from(&file)
+                    } else if !base_dir.is_empty() {
+                        std::path::PathBuf::from(&base_dir).join(&file)
+                    } else {
+                        std::path::PathBuf::from(&file)
+                    };
+                    // Check if file already exists
+                    if watch_path.exists() {
+                        let _ = writeln!(write_stream, "OK");
+                        let _ = write_stream.flush();
+                    } else {
+                        // Poll every 250ms until file appears or timeout
+                        let deadline =
+                            std::time::Instant::now() + Duration::from_secs(timeout_secs);
+                        let mut found = false;
+                        while std::time::Instant::now() < deadline {
+                            std::thread::sleep(Duration::from_millis(250));
+                            if watch_path.exists() {
+                                found = true;
+                                break;
+                            }
+                        }
+                        if found {
+                            let _ = writeln!(write_stream, "OK");
+                        } else {
+                            let _ = writeln!(write_stream, "TIMEOUT");
+                        }
+                        let _ = write_stream.flush();
+                    }
+                    if !persistent {
+                        break;
+                    }
                 } else {
-                    WaitForOp::Wait
-                };
-                let _ = tx.send(CtrlReq::WaitFor(channel, op));
+                    // Standard channel-based wait-for
+                    let channel = args
+                        .iter()
+                        .find(|a| !a.starts_with('-'))
+                        .unwrap_or(&"")
+                        .to_string();
+                    let op = if lock {
+                        WaitForOp::Lock
+                    } else if signal {
+                        WaitForOp::Signal
+                    } else if unlock {
+                        WaitForOp::Unlock
+                    } else {
+                        WaitForOp::Wait
+                    };
+                    let _ = tx.send(CtrlReq::WaitFor(channel, op));
+                }
             }
             "display-menu" | "menu" => {
                 let mut x_pos: Option<i16> = None;
@@ -1885,6 +2026,69 @@ pub(crate) fn handle_connection(
                     .map(|w| w[1].to_string())
                     .unwrap_or_default();
                 let _ = tx.send(CtrlReq::CommandPrompt(initial));
+            }
+            "exec" => {
+                // Parse --shell SHELL override
+                let shell_override: Option<String> = args
+                    .windows(2)
+                    .find(|w| w[0] == "--shell")
+                    .map(|w| w[1].trim_matches('"').to_string());
+                // Extract the command from the raw line to preserve quoting.
+                // parse_command_line already stripped quotes from `args`, so
+                // re-joining would lose argument boundaries for multi-word args.
+                let exec_cmd: Option<String> = if let Some(sep_pos) = line.find(" -- ") {
+                    let after = line[sep_pos + 4..].trim();
+                    if after.is_empty() {
+                        None
+                    } else {
+                        Some(after.to_string())
+                    }
+                } else {
+                    // No "--" separator: re-quote args that contain spaces
+                    let positional: Vec<&str> = args
+                        .iter()
+                        .filter(|a| {
+                            !a.starts_with('-')
+                                && args.windows(2).all(|w| !(w[0] == "--shell" && w[1] == **a))
+                        })
+                        .copied()
+                        .collect();
+                    if positional.is_empty() {
+                        None
+                    } else {
+                        Some(
+                            positional
+                                .iter()
+                                .map(|s| {
+                                    if s.contains(' ') {
+                                        format!("\"{}\"", s)
+                                    } else {
+                                        s.to_string()
+                                    }
+                                })
+                                .collect::<Vec<_>>()
+                                .join(" "),
+                        )
+                    }
+                };
+                if let Some(cmd_str) = exec_cmd {
+                    let (rtx, rrx) = mpsc::channel::<String>();
+                    let _ = tx.send(CtrlReq::Exec {
+                        command: cmd_str,
+                        shell: shell_override,
+                        resp: rtx,
+                    });
+                    if let Ok(result) = rrx.recv_timeout(Duration::from_secs(300)) {
+                        let _ = write!(write_stream, "{}", result);
+                        let _ = write_stream.flush();
+                    }
+                } else {
+                    let _ = writeln!(write_stream, "exec: no command specified");
+                    let _ = write_stream.flush();
+                }
+                if !persistent {
+                    break;
+                }
             }
             "run-shell" | "run" => {
                 let background = args.contains(&"-b");

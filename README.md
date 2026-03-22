@@ -164,6 +164,15 @@ No extra configuration needed. Full guide: **[docs/claude-code.md](docs/claude-c
 > - **`-e KEY=VAL`** — Per-pane environment variables on `new-window`/`split-window`
 > - **Launcher script:** [`scripts/Start-ClaudeTeams.ps1`](scripts/Start-ClaudeTeams.ps1) — one-command agent teams setup
 >
+> **Programmatic Execution (v3.3.0):**
+> - **`exec`** — `psmux exec -t %N -- command args...` runs a process in the pane's cwd/env and returns JSON `{"exit_code", "stdout", "stderr"}`. Replaces fragile `send-keys` for programmatic use
+> - **`new-window -- command`** — Launch a command directly as the pane's initial process (like tmux). Supports `split-window --` too
+> - **`#{pane_exit_code}`** — Format variable exposing the exit code of dead panes. Also available as `#{pane_dead_status}`
+> - **`capture-pane --plain`** — Strips all ANSI/VT escape sequences for clean programmatic consumption
+> - **`wait-for --file`** — `psmux wait-for --file .done --timeout 60` watches for file creation server-side (250ms polling). Eliminates client-side sentinel polling
+> - **`kill-pane` fix** — Immediately removes the window when the last pane is killed (no more dead pane lingering)
+> - **Target error handling** — `list-panes -t %nonexistent` and `list-windows -t` return non-zero exit codes
+>
 > These features are on the [`ohboyftw/psmux`](https://github.com/ohboyftw/psmux/tree/ohboy-builds) fork and not yet merged to upstream `master`.
 
 ## Television Integration

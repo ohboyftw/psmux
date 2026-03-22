@@ -77,6 +77,8 @@ pub struct Pane {
     pub last_infer_title: Instant,
     /// True when the child process has exited but remain-on-exit keeps the pane visible.
     pub dead: bool,
+    /// Exit code of the child process, set when the process exits.
+    pub exit_code: Option<i32>,
     /// Cached VT bridge detection result (for mouse injection).
     /// Updated on first mouse event and refreshed every 2 seconds.
     pub vt_bridge_cache: Option<(Instant, bool)>,
@@ -953,6 +955,13 @@ pub enum CtrlReq {
     RemoveHook(String),
     KillServer,
     WaitFor(String, WaitForOp),
+    /// Execute a command in the context of a pane (cwd + env) and return
+    /// structured output.  Unlike send-keys, this spawns a real process.
+    Exec {
+        command: String,
+        shell: Option<String>,
+        resp: mpsc::Sender<String>,
+    },
     DisplayMenu(String, Option<i16>, Option<i16>),
     DisplayMenuDirect(Menu),
     DisplayPopup(String, u16, u16, bool),

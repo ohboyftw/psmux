@@ -134,6 +134,7 @@ pub fn create_window(
             last_title_check: epoch,
             last_infer_title: epoch,
             dead: false,
+            exit_code: None,
             vt_bridge_cache: None,
             vti_mode_cache: None,
             mouse_input_cache: None,
@@ -289,6 +290,7 @@ pub fn create_window(
         last_title_check: epoch,
         last_infer_title: epoch,
         dead: false,
+        exit_code: None,
         vt_bridge_cache: None,
         vti_mode_cache: None,
         mouse_input_cache: None,
@@ -304,9 +306,12 @@ pub fn create_window(
         shell_name: Some(cw_shell_name.clone()),
     };
     #[cfg(feature = "mycel")]
-    crate::mycel::publish_pane_event("psmux/pane/created", &serde_json::json!({
-        "pane_id": format!("%{}", pane_id), "command": command.unwrap_or(""),
-    }));
+    crate::mycel::publish_pane_event(
+        "psmux/pane/created",
+        &serde_json::json!({
+            "pane_id": format!("%{}", pane_id), "command": command.unwrap_or(""),
+        }),
+    );
     app.next_pane_id += 1;
     let win_name = command
         .map(|c| default_shell_name(Some(c), None))
@@ -511,6 +516,7 @@ pub fn create_window_raw(
         last_title_check: epoch,
         last_infer_title: epoch,
         dead: false,
+        exit_code: None,
         vt_bridge_cache: None,
         vti_mode_cache: None,
         mouse_input_cache: None,
@@ -695,6 +701,7 @@ pub fn split_active_with_command(
             last_title_check: epoch,
             last_infer_title: epoch,
             dead: false,
+            exit_code: None,
             vt_bridge_cache: None,
             vti_mode_cache: None,
             mouse_input_cache: None,
@@ -828,6 +835,7 @@ pub fn split_active_with_command(
         last_title_check: epoch,
         last_infer_title: epoch,
         dead: false,
+        exit_code: None,
         vt_bridge_cache: None,
         vti_mode_cache: None,
         mouse_input_cache: None,
@@ -843,9 +851,12 @@ pub fn split_active_with_command(
         shell_name: Some(split_shell_name),
     });
     #[cfg(feature = "mycel")]
-    crate::mycel::publish_pane_event("psmux/pane/created", &serde_json::json!({
-        "pane_id": format!("%{}", split_pane_id), "command": command.unwrap_or(""),
-    }));
+    crate::mycel::publish_pane_event(
+        "psmux/pane/created",
+        &serde_json::json!({
+            "pane_id": format!("%{}", split_pane_id), "command": command.unwrap_or(""),
+        }),
+    );
     app.next_pane_id += 1;
     let win = &mut app.windows[app.active_idx];
     replace_leaf_with_split(&mut win.root, &win.active_path, kind, new_leaf);

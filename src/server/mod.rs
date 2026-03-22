@@ -176,7 +176,10 @@ fn serialize_overlay_json(app: &AppState) -> String {
         }
         Mode::PaneChooser { .. } => {
             out.push_str(",\"display_panes\":true");
-            let _ = std::fmt::Write::write_fmt(&mut out, format_args!(",\"pane_base_index\":{}", app.pane_base_index));
+            let _ = std::fmt::Write::write_fmt(
+                &mut out,
+                format_args!(",\"pane_base_index\":{}", app.pane_base_index),
+            );
         }
         _ => {}
     }
@@ -931,6 +934,7 @@ pub fn run_server(
                         CtrlReq::JoinPane(_) => "JoinPane",
                         CtrlReq::MoveWindow(..) => "MoveWindow",
                         CtrlReq::SwapWindow(_) => "SwapWindow",
+                        CtrlReq::Exec { .. } => "Exec",
                         _ => "",
                     };
                     match req {
@@ -1319,14 +1323,56 @@ pub fn run_server(
                         }
                         CtrlReq::KillPane => {
                             unzoom_if_zoomed(&mut app);
+                            let target_win_idx = app.active_idx;
                             let _ = kill_active_pane(&mut app);
+                            // If the window now has only a single dead pane (root Leaf
+                            // with killed process), remove the window immediately instead
+                            // of waiting for the reaper tick.  This prevents the brief
+                            // "respawn" artifact where the dead pane lingers visibly.
+                            if target_win_idx < app.windows.len()
+                                && crate::tree::count_panes(&app.windows[target_win_idx].root) <= 1
+                            {
+                                if let Node::Leaf(ref mut p) = app.windows[target_win_idx].root {
+                                    if (p.child.try_wait().ok().flatten().is_some() || p.dead)
+                                        && app.windows.len() > 1
+                                    {
+                                        app.windows.remove(target_win_idx);
+                                        if app.active_idx >= app.windows.len() {
+                                            app.active_idx = app.windows.len().saturating_sub(1);
+                                        }
+                                    }
+                                }
+                            }
                             resize_all_panes(&mut app);
                             meta_dirty = true;
                             hook_event = Some("after-kill-pane");
                         }
                         CtrlReq::KillPaneById(pid) => {
                             unzoom_if_zoomed(&mut app);
+                            // Find which window contains the pane before killing it
+                            let target_win_idx = app
+                                .windows
+                                .iter()
+                                .position(|w| crate::tree::find_path_by_id(&w.root, pid).is_some());
                             let _ = kill_pane_by_id(&mut app, pid);
+                            // Immediately remove the window if its last pane was killed
+                            if let Some(wi) = target_win_idx {
+                                if wi < app.windows.len()
+                                    && crate::tree::count_panes(&app.windows[wi].root) <= 1
+                                {
+                                    if let Node::Leaf(ref mut p) = app.windows[wi].root {
+                                        if (p.child.try_wait().ok().flatten().is_some() || p.dead)
+                                            && app.windows.len() > 1
+                                        {
+                                            app.windows.remove(wi);
+                                            if app.active_idx >= app.windows.len() {
+                                                app.active_idx =
+                                                    app.windows.len().saturating_sub(1);
+                                            }
+                                        }
+                                    }
+                                }
+                            }
                             resize_all_panes(&mut app);
                             meta_dirty = true;
                             hook_event = Some("after-kill-pane");
@@ -3358,7 +3404,9 @@ pub fn run_server(
                             crate::tree::compute_rects(&win.root, app.last_window_area, &mut rects);
                             app.display_map.clear();
                             for (i, (path, _)) in rects.into_iter().enumerate() {
-                                if i >= 10 { break; }
+                                if i >= 10 {
+                                    break;
+                                }
                                 let digit = (i + app.pane_base_index) % 10;
                                 app.display_map.push((digit, path));
                             }
@@ -3369,7 +3417,9 @@ pub fn run_server(
                         }
                         CtrlReq::DisplayPaneSelect(digit) => {
                             // User pressed a digit during display-panes overlay: select the matching pane
-                            if let Some((_, path)) = app.display_map.iter().find(|(d, _)| *d == digit) {
+                            if let Some((_, path)) =
+                                app.display_map.iter().find(|(d, _)| *d == digit)
+                            {
                                 let new_path = path.clone();
                                 let old_path = app.windows[app.active_idx].active_path.clone();
                                 app.windows[app.active_idx].active_path = new_path;
@@ -4912,6 +4962,95 @@ pub fn run_server(
                                 None
                             };
                             let _ = resp.send(cwd);
+                        }
+                        CtrlReq::Exec {
+                            command,
+                            shell,
+                            resp,
+                        } => {
+                            // Gather pane context on the server thread (fast),
+                            // then spawn the actual command on a background thread
+                            // to avoid blocking the server event loop.
+                            let win = &app.windows[app.active_idx];
+                            let mut exec_cwd = active_pane(&win.root, &win.active_path)
+                                .and_then(|p| p.spawn_cwd.clone())
+                                .or_else(|| std::env::current_dir().ok());
+                            let pane_pid =
+                                active_pane(&win.root, &win.active_path).and_then(|p| p.child_pid);
+
+                            // Try to get the pane's actual cwd from its process
+                            if let Some(pid) = pane_pid {
+                                if let Some(real_cwd) =
+                                    crate::platform::process_info::get_foreground_cwd(pid)
+                                {
+                                    exec_cwd = Some(std::path::PathBuf::from(real_cwd));
+                                }
+                            }
+
+                            let shell_program = shell
+                                .or_else(|| {
+                                    if app.default_shell.is_empty() {
+                                        None
+                                    } else {
+                                        Some(app.default_shell.clone())
+                                    }
+                                })
+                                .unwrap_or_else(|| "pwsh".to_string());
+
+                            let env_snapshot: Vec<(String, String)> =
+                                app.environment.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
+
+                            // Run on a background thread so the server loop stays responsive
+                            std::thread::spawn(move || {
+                                let lower = shell_program.to_lowercase();
+                                let mut cmd = std::process::Command::new(&shell_program);
+
+                                if lower.contains("pwsh") || lower.contains("powershell") {
+                                    cmd.args(["-NoProfile", "-NoLogo", "-Command", &command]);
+                                } else if lower.contains("bash")
+                                    || lower.contains("sh")
+                                    || lower.contains("zsh")
+                                {
+                                    cmd.args(["-c", &command]);
+                                } else if lower.contains("cmd") {
+                                    cmd.args(["/C", &command]);
+                                } else {
+                                    cmd.args(["-c", &command]);
+                                }
+
+                                if let Some(ref cwd) = exec_cwd {
+                                    cmd.current_dir(cwd);
+                                }
+                                for (k, v) in &env_snapshot {
+                                    cmd.env(k, v);
+                                }
+
+                                let result = match cmd.output() {
+                                    Ok(output) => {
+                                        let stdout =
+                                            String::from_utf8_lossy(&output.stdout).into_owned();
+                                        let stderr =
+                                            String::from_utf8_lossy(&output.stderr).into_owned();
+                                        let exit_code = output.status.code().unwrap_or(-1);
+                                        format!(
+                                            "{{\"exit_code\":{},\"stdout\":{},\"stderr\":{}}}",
+                                            exit_code,
+                                            serde_json::to_string(&stdout)
+                                                .unwrap_or_else(|_| "\"\"".into()),
+                                            serde_json::to_string(&stderr)
+                                                .unwrap_or_else(|_| "\"\"".into()),
+                                        )
+                                    }
+                                    Err(e) => {
+                                        format!(
+                                            "{{\"exit_code\":-1,\"stdout\":\"\",\"stderr\":{}}}",
+                                            serde_json::to_string(&e.to_string())
+                                                .unwrap_or_else(|_| "\"exec failed\"".into()),
+                                        )
+                                    }
+                                };
+                                let _ = resp.send(result);
+                            });
                         }
                     }
                     // Log any active_idx change for debugging window-switch issues

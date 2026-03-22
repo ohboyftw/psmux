@@ -565,6 +565,7 @@ fn prune_exited_inner(
             match p.child.try_wait() {
                 Ok(Some(status)) => {
                     let exit_code = Some(status.exit_code() as i32);
+                    p.exit_code = exit_code;
                     exited.push((p.id, exit_code));
                     if remain_on_exit {
                         p.dead = true;
