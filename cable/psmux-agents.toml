@@ -4,13 +4,13 @@ description = "Browse and manage active agent panes (Claude Code, Pi, Codex)"
 requirements = ["psmux"]
 
 [source]
-command = "psmux list-panes -a -F '#{pane_id}\t#{@agent}\t#{@role}\t#{pane_shell}\t#{pane_current_path}'"
-display = "{split:\t:0}  {split:\t:1} ({split:\t:2}) [{split:\t:3}]"
-output = "{split:\t:0}"
+command = "psmux list-sessions | ForEach-Object { $s = ($_ -split ':')[0]; psmux list-panes -t $s -F \"$s`t#{pane_id}`t#{@agent}`t#{@role}`t#{pane_shell}`t#{pane_current_path}\" 2>$null } | Where-Object { $_ }"
+display = "{split:\t:1} {split:\t:2} ({split:\t:3}) [{split:\t:4}] {split:\t:0}"
+output = "{split:\t:1}"
 shell = "powershell"
 
 [preview]
-command = "psmux capture-pane -t '{split:\t:0}' -p --clean"
+command = "psmux capture-pane -t '{split:\t:1}' -p --clean"
 shell = "powershell"
 
 [ui]
@@ -18,7 +18,7 @@ layout = "landscape"
 
 [ui.preview_panel]
 size = 65
-header = "Agent: {split:\t:1} | Role: {split:\t:2} | {split:\t:4}"
+header = "Agent: {split:\t:2} | Role: {split:\t:3} | {split:\t:5}"
 
 [keybindings]
 enter = "actions:focus"
@@ -28,20 +28,20 @@ ctrl-s = "actions:send"
 
 [actions.focus]
 description = "Focus agent pane"
-command = "psmux select-pane -t '{split:\t:0}'"
+command = "psmux select-pane -t '{split:\t:1}'"
 mode = "execute"
 
 [actions.kill]
 description = "Kill agent"
-command = "psmux kill-pane -t '{split:\t:0}'"
+command = "psmux kill-pane -t '{split:\t:1}'"
 mode = "fork"
 
 [actions.capture]
 description = "Capture agent output to clipboard"
-command = "psmux capture-pane -t '{split:\t:0}' -p --clean | Set-Clipboard"
+command = "psmux capture-pane -t '{split:\t:1}' -p --clean | Set-Clipboard"
 mode = "fork"
 
 [actions.send]
 description = "Send keys to agent"
-command = "psmux send-keys -t '{split:\t:0}'"
+command = "psmux send-keys -t '{split:\t:1}'"
 mode = "execute"

@@ -4,9 +4,9 @@ description = "Fuzzy pane picker with live content preview"
 requirements = ["psmux"]
 
 [source]
-command = "psmux list-panes -a -F '#{pane_id}\t#{window_name}\t#{pane_shell}\t#{pane_current_path}'"
-display = "{split:\t:0}  {split:\t:1} [{split:\t:2}] {split:\t:3}"
-output = "{split:\t:0}"
+command = "psmux list-sessions | ForEach-Object { $s = ($_ -split ':')[0]; psmux list-panes -t $s -F \"$s`t#{pane_id}`t#{window_name}`t#{pane_shell}`t#{pane_current_path}\" 2>$null } | Where-Object { $_ }"
+display = "{split:\t:1} {split:\t:0}/{split:\t:2} [{split:\t:3}] {split:\t:4}"
+output = "{split:\t:1}"
 shell = "powershell"
 
 [preview]
