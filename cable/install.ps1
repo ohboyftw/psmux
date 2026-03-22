@@ -1,7 +1,7 @@
 # Install psmux cable channels for television (tv)
 # Usage: pwsh cable/install.ps1
 
-$cableDir = "$env:LOCALAPPDATA\television\cable"
+$cableDir = "$env:LOCALAPPDATA\television\config\cable"
 if (-not (Test-Path $cableDir)) {
     New-Item -ItemType Directory -Path $cableDir -Force | Out-Null
 }
