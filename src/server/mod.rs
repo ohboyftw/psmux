@@ -669,6 +669,24 @@ pub fn run_server(
 
     load_config(&mut app);
 
+    // Apply --layout file if PSMUX_LAYOUT_FILE env var is set
+    if let Ok(layout_path) = std::env::var("PSMUX_LAYOUT_FILE") {
+        std::env::remove_var("PSMUX_LAYOUT_FILE"); // consume it
+        if !layout_path.is_empty() {
+            match crate::layout::load_layout_file(&layout_path) {
+                Ok(layout) => {
+                    if let Err(e) = crate::layout::apply_layout_file(&mut app, &*pty_system, layout) {
+                        eprintln!("Layout file error: {}", e);
+                    }
+                    resize_all_panes(&mut app);
+                }
+                Err(e) => {
+                    eprintln!("Failed to load layout file '{}': {}", layout_path, e);
+                }
+            }
+        }
+    }
+
     // Execute queued plugin .ps1 scripts (e.g. theme plugins that use
     // PowerShell variables and call back to psmux via CLI).  We spawn
     // them async and then drain the CtrlReq channel in a mini-loop so
@@ -3949,9 +3967,15 @@ pub fn run_server(
                             } else if path.ends_with(".json") {
                                 // JSON layout file — parse and apply
                                 match crate::layout::load_layout_file(&path) {
-                                    Ok(_layout) => {
-                                        // TODO Wave 5: apply_layout_file(&mut app, &*pty_system, layout)
-                                        crate::debug_log::server_log("source-file", &format!("Loaded layout file: {}", path));
+                                    Ok(layout) => {
+                                        if let Err(e) = crate::layout::apply_layout_file(&mut app, &*pty_system, layout) {
+                                            crate::debug_log::server_log("source-file", &format!("Layout apply error: {}", e));
+                                        } else {
+                                            crate::debug_log::server_log("source-file", &format!("Applied layout file: {}", path));
+                                            resize_all_panes(&mut app);
+                                            meta_dirty = true;
+                                            crate::resurrection::save_snapshot(&app);
+                                        }
                                     }
                                     Err(e) => {
                                         crate::debug_log::server_log("source-file", &format!("Failed to load layout file '{}': {}", path, e));

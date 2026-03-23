@@ -205,6 +205,73 @@ pub fn build_snapshot(app: &AppState) -> SessionSnapshot {
     }
 }
 
+/// Rebuild a session from a saved snapshot.
+///
+/// For each window, panes are created with a "Press ENTER to run" banner
+/// wrapping the original command (safety measure — prevents auto-running
+/// destructive commands like `rm -rf`).  Default-shell panes are spawned
+/// directly without the banner.
+pub fn apply_snapshot(
+    app: &mut AppState,
+    pty_system: &dyn portable_pty::PtySystem,
+    snap: SessionSnapshot,
+) -> io::Result<()> {
+    app.session_name = snap.session_name;
+
+    for win_snap in &snap.windows {
+        for (pi, pc) in win_snap.pane_commands.iter().enumerate() {
+            // Wrap non-default commands in a safety banner
+            let cmd: Option<String> = pc.command.as_ref().map(|c| {
+                // bash -c with a "press ENTER" prompt before running the real command
+                format!(
+                    "bash -c 'echo \"Press ENTER to run: {}\" && read && {}'",
+                    c.replace('\'', "'\\''"),
+                    c.replace('\'', "'\\''")
+                )
+            });
+
+            if pi == 0 {
+                // First pane → new window
+                crate::pane::create_window(
+                    pty_system,
+                    app,
+                    cmd.as_deref(),
+                    Some(&pc.cwd),
+                    None,
+                )?;
+            } else {
+                // Additional panes → split
+                crate::pane::split_active_with_command(
+                    app,
+                    LayoutKind::Vertical,
+                    cmd.as_deref(),
+                    Some(pty_system),
+                    Some(&pc.cwd),
+                    None,
+                )?;
+            }
+        }
+
+        // Rearrange panes using tiled layout (MVP — full tree rebuild later)
+        if win_snap.pane_commands.len() > 1 {
+            crate::layout::apply_layout(app, "tiled");
+        }
+
+        // Restore window name
+        if let Some(win) = app.windows.last_mut() {
+            win.name = win_snap.name.clone();
+            win.manual_rename = true;
+        }
+    }
+
+    // Restore active window index
+    if snap.active_window_idx < app.windows.len() {
+        app.active_idx = snap.active_window_idx;
+    }
+
+    Ok(())
+}
+
 /// Best-effort save: build snapshot from AppState and write to disk.
 /// Errors are silently ignored (resurrection is best-effort).
 pub fn save_snapshot(app: &AppState) {

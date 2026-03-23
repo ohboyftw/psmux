@@ -1502,6 +1502,97 @@ pub fn load_layout_file(path: &str) -> io::Result<LayoutFile> {
     serde_json::from_str(&content).map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))
 }
 
+const VALID_LAYOUTS: [&str; 5] = [
+    "even-horizontal",
+    "even-vertical",
+    "main-horizontal",
+    "main-vertical",
+    "tiled",
+];
+
+/// Apply a layout file: create windows and panes from the definition.
+///
+/// Each window in the layout file becomes a new window in the current session.
+/// Panes are spawned with the specified commands and working directories.
+pub fn apply_layout_file(
+    app: &mut AppState,
+    pty_system: &dyn portable_pty::PtySystem,
+    layout: LayoutFile,
+) -> io::Result<()> {
+    for (wi, win_def) in layout.windows.iter().enumerate() {
+        // Validate layout preset name if specified
+        if let Some(ref name) = win_def.layout {
+            if !VALID_LAYOUTS.contains(&name.as_str()) {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    format!(
+                        "Unknown layout '{}'. Valid: {}",
+                        name,
+                        VALID_LAYOUTS.join(", ")
+                    ),
+                ));
+            }
+        }
+
+        if let Some(ref panes) = win_def.panes {
+            if panes.is_empty() {
+                continue;
+            }
+            // First pane creates a new window
+            let first = &panes[0];
+            if wi == 0 && app.windows.is_empty() {
+                // First window of a brand-new session
+                crate::pane::create_window(
+                    pty_system,
+                    app,
+                    first.command.as_deref(),
+                    first.cwd.as_deref(),
+                    None,
+                )?;
+            } else {
+                // Additional windows
+                crate::pane::create_window(
+                    pty_system,
+                    app,
+                    first.command.as_deref(),
+                    first.cwd.as_deref(),
+                    None,
+                )?;
+            }
+
+            // Additional panes via split
+            for pane_def in panes.iter().skip(1) {
+                crate::pane::split_active_with_command(
+                    app,
+                    crate::types::LayoutKind::Vertical,
+                    pane_def.command.as_deref(),
+                    Some(pty_system),
+                    pane_def.cwd.as_deref(),
+                    None,
+                )?;
+            }
+
+            // Apply named layout to rearrange
+            if panes.len() > 1 {
+                let layout_name = win_def.layout.as_deref().unwrap_or("tiled");
+                apply_layout(app, layout_name);
+            }
+        } else {
+            // No panes defined — create default shell window
+            crate::pane::create_window(pty_system, app, None, None, None)?;
+        }
+
+        // Set window name
+        if let Some(ref name) = win_def.name {
+            if let Some(win) = app.windows.last_mut() {
+                win.name = name.clone();
+                win.manual_rename = true;
+            }
+        }
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod layout_file_tests {
     use super::*;

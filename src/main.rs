@@ -433,17 +433,107 @@ fn run_main() -> io::Result<()> {
             let dir = crate::resurrection::resurrect_dir(None);
             match crate::resurrection::load_snapshot_from(&session_name, &dir) {
                 Ok(snap) => {
+                    let win_count = snap.windows.len();
+                    let pane_count: usize = snap.windows.iter().map(|w| w.pane_commands.len()).sum();
                     eprintln!(
                         "Resurrecting session '{}' ({} windows, {} panes)",
-                        snap.session_name,
-                        snap.windows.len(),
-                        snap.windows.iter().map(|w| w.pane_commands.len()).sum::<usize>()
+                        snap.session_name, win_count, pane_count
                     );
-                    // Delete the snapshot now that we're restoring it
+                    // Delete the snapshot now — it'll be re-created by the new server
                     let _ = crate::resurrection::delete_snapshot(&session_name, &dir);
-                    // TODO: apply_snapshot — requires server running
-                    // For now, print the snapshot info
-                    eprintln!("Resurrection restore not yet fully implemented (Wave 5).");
+
+                    // Build a new-session equivalent that applies the snapshot.
+                    // We serialize the snapshot path as an env var so the server
+                    // can pick it up during init.  Simpler approach: write commands
+                    // to a temp config file and source it.
+                    let tmp_config = std::env::temp_dir().join(format!("psmux-resurrect-{}.conf", session_name));
+                    let mut cmds = Vec::new();
+                    for (wi, ws) in snap.windows.iter().enumerate() {
+                        for (pi, pc) in ws.pane_commands.iter().enumerate() {
+                            let cwd_flag = format!("-c \"{}\"", pc.cwd.replace('"', "\\\""));
+                            if pi == 0 && wi > 0 {
+                                // New window for 2nd+ windows
+                                if let Some(ref cmd) = pc.command {
+                                    cmds.push(format!("new-window {} \"{}\"", cwd_flag, cmd.replace('"', "\\\"")));
+                                } else {
+                                    cmds.push(format!("new-window {}", cwd_flag));
+                                }
+                            } else if pi > 0 {
+                                // Split for 2nd+ panes in a window
+                                if let Some(ref cmd) = pc.command {
+                                    cmds.push(format!("split-window {} \"{}\"", cwd_flag, cmd.replace('"', "\\\"")));
+                                } else {
+                                    cmds.push(format!("split-window {}", cwd_flag));
+                                }
+                            }
+                            // First pane of first window is handled by new-session itself
+                        }
+                        // Apply tiled layout to spread panes evenly
+                        if ws.pane_commands.len() > 1 {
+                            cmds.push("select-layout tiled".to_string());
+                        }
+                        // Set window name
+                        if !ws.name.is_empty() {
+                            cmds.push(format!("rename-window \"{}\"", ws.name.replace('"', "\\\"")));
+                        }
+                    }
+                    // Write temp config
+                    let config_content = cmds.join("\n");
+                    std::fs::write(&tmp_config, &config_content).ok();
+
+                    // Build new-session args: -s <name> + source the temp config
+                    // The first pane's command and cwd come from the snapshot
+                    let first_cwd = snap.windows.first()
+                        .and_then(|w| w.pane_commands.first())
+                        .map(|pc| pc.cwd.clone());
+                    let first_cmd = snap.windows.first()
+                        .and_then(|w| w.pane_commands.first())
+                        .and_then(|pc| pc.command.clone());
+
+                    // Reconstruct argv for new-session
+                    let mut new_args = vec!["new-session".to_string(), "-s".to_string(), session_name.clone()];
+                    if let Some(ref cwd) = first_cwd {
+                        new_args.push("-c".to_string());
+                        new_args.push(cwd.clone());
+                    }
+                    // Source the temp config on startup to create remaining windows/panes
+                    eprintln!("Spawning session with {} setup commands...", cmds.len());
+
+                    // Instead of complex argv threading, just launch new-session
+                    // and source the config file through the control port after startup.
+                    // For MVP: create the session, then source.
+                    let exe = std::env::current_exe().unwrap_or_else(|_| "psmux".into());
+                    let status = std::process::Command::new(&exe)
+                        .args(["new-session", "-d", "-s", &session_name])
+                        .args(first_cwd.iter().flat_map(|c| vec!["-c", c.as_str()]))
+                        .args(first_cmd.iter().flat_map(|c| vec!["--", c.as_str()]))
+                        .status();
+
+                    if let Ok(s) = status {
+                        if s.success() || s.code() == Some(0) {
+                            // Give server time to start
+                            std::thread::sleep(Duration::from_millis(800));
+                            // Source the config to create remaining panes
+                            if !cmds.is_empty() {
+                                let source_status = std::process::Command::new(&exe)
+                                    .args(["source-file", tmp_config.to_str().unwrap_or("")])
+                                    .status();
+                                if let Ok(ss) = source_status {
+                                    if !ss.success() {
+                                        eprintln!("Warning: source-file returned {}", ss.code().unwrap_or(-1));
+                                    }
+                                }
+                            }
+                            // Clean up temp file
+                            let _ = std::fs::remove_file(&tmp_config);
+
+                            // Now attach to the session
+                            eprintln!("Attaching to resurrected session '{}'...", session_name);
+                            let _ = std::process::Command::new(&exe)
+                                .args(["attach", "-t", &session_name])
+                                .status();
+                        }
+                    }
                 }
                 Err(e) => {
                     eprintln!("No resurrectable snapshot for '{}': {}", session_name, e);
@@ -569,7 +659,7 @@ fn run_main() -> io::Result<()> {
             let mut init_height: Option<u16> = None;
             let mut positional_args: Vec<String> = Vec::new();
             let mut raw_cmd_after_dd: Option<Vec<String>> = None;
-            let mut _layout_file: Option<String> = None;
+            let mut layout_file_path: Option<String> = None;
 
             {
                 let mut i = 1; // skip command name (cmd_args[0])
@@ -578,7 +668,7 @@ fn run_main() -> io::Result<()> {
                     if a == "--layout" {
                         i += 1;
                         if i < cmd_args.len() {
-                            _layout_file = Some(cmd_args[i].to_string());
+                            layout_file_path = Some(cmd_args[i].to_string());
                         }
                         i += 1;
                         continue;
@@ -683,6 +773,14 @@ fn run_main() -> io::Result<()> {
                 // tmux-compatible: auto-generate numeric name (0, 1, 2, ...)
                 crate::session::next_session_name(l_socket_name.as_deref())
             });
+            // Set layout file env var for the server to pick up during init
+            if let Some(ref lf) = layout_file_path {
+                // Resolve to absolute path before the server starts
+                let abs_path = std::path::Path::new(lf)
+                    .canonicalize()
+                    .unwrap_or_else(|_| std::path::PathBuf::from(lf));
+                std::env::set_var("PSMUX_LAYOUT_FILE", abs_path);
+            }
             // Compute port file base name: with -L namespace prefix if specified
             let port_file_base = if let Some(ref l) = l_socket_name {
                 format!("{}__{}", l, name)
