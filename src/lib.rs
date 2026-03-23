@@ -3,6 +3,8 @@
 #![allow(dead_code)]
 
 pub mod backend;
+pub mod hints;
 pub mod remote;
+pub mod resurrection;
 pub mod session;
 pub mod types;

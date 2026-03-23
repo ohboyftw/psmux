@@ -1446,3 +1446,120 @@ fn parse_children(
 
     Some((children, pos))
 }
+
+// ---------------------------------------------------------------------------
+// Declarative layout file JSON parsing
+// ---------------------------------------------------------------------------
+
+/// Top-level layout file structure.
+#[derive(Deserialize, Debug)]
+pub struct LayoutFile {
+    pub version: Option<u32>,
+    pub session: Option<String>,
+    pub windows: Vec<WindowDef>,
+}
+
+/// A single window definition inside a layout file.
+#[derive(Deserialize, Debug)]
+pub struct WindowDef {
+    pub name: Option<String>,
+    pub layout: Option<String>,
+    pub panes: Option<Vec<PaneDef>>,
+    pub tree: Option<TreeDef>,
+}
+
+/// A flat pane definition (used inside the `panes` array).
+#[derive(Deserialize, Debug)]
+pub struct PaneDef {
+    pub command: Option<String>,
+    pub cwd: Option<String>,
+    pub env: Option<std::collections::HashMap<String, String>>,
+}
+
+/// A recursive tree definition that can represent nested splits and leaf panes.
+#[derive(Deserialize, Debug)]
+#[serde(tag = "type")]
+pub enum TreeDef {
+    /// A split node containing children.
+    #[serde(rename = "split")]
+    Split {
+        split: String,
+        sizes: Vec<u16>,
+        children: Vec<TreeDef>,
+    },
+    /// A leaf pane node.
+    #[serde(rename = "pane")]
+    Leaf {
+        command: Option<String>,
+        cwd: Option<String>,
+        env: Option<std::collections::HashMap<String, String>>,
+    },
+}
+
+/// Load and parse a declarative layout file from the given path.
+pub fn load_layout_file(path: &str) -> io::Result<LayoutFile> {
+    let content = std::fs::read_to_string(path)?;
+    serde_json::from_str(&content).map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))
+}
+
+#[cfg(test)]
+mod layout_file_tests {
+    use super::*;
+
+    #[test]
+    fn parse_simple_layout() {
+        let json = r#"{
+            "session": "test",
+            "windows": [
+                {
+                    "name": "dev",
+                    "layout": "tiled",
+                    "panes": [
+                        { "command": "bash" },
+                        { "command": "htop", "cwd": "/tmp" }
+                    ]
+                }
+            ]
+        }"#;
+
+        let lf: LayoutFile = serde_json::from_str(json).unwrap();
+        assert_eq!(lf.session.as_deref(), Some("test"));
+        assert_eq!(lf.windows.len(), 1);
+        let panes = lf.windows[0].panes.as_ref().unwrap();
+        assert_eq!(panes.len(), 2);
+    }
+
+    #[test]
+    fn parse_tree_layout() {
+        let json = r#"{
+            "windows": [
+                {
+                    "tree": {
+                        "type": "split",
+                        "split": "horizontal",
+                        "sizes": [60, 40],
+                        "children": [
+                            { "type": "pane", "command": "vim" },
+                            { "type": "pane", "command": "bash" }
+                        ]
+                    }
+                }
+            ]
+        }"#;
+
+        let lf: LayoutFile = serde_json::from_str(json).unwrap();
+        assert!(lf.windows[0].tree.is_some());
+    }
+
+    #[test]
+    fn parse_defaults() {
+        let json = r#"{"windows":[{"panes":[{}]}]}"#;
+
+        let lf: LayoutFile = serde_json::from_str(json).unwrap();
+        assert!(lf.version.is_none());
+        assert!(lf.session.is_none());
+        assert!(lf.windows[0].name.is_none());
+        let panes = lf.windows[0].panes.as_ref().unwrap();
+        assert!(panes[0].command.is_none());
+    }
+}
