@@ -68,6 +68,7 @@ pub const PREFIX_DEFAULTS: &[(&str, &str)] = &[
     ("[", "copy-mode"),
     ("]", "paste-buffer"),
     ("=", "choose-buffer"),
+    ("f", "hints (quick-select URLs/paths/hashes)"),
     // ── Misc ──
     (":", "command-prompt"),
     ("?", "list-keys"),

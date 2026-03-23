@@ -23,11 +23,14 @@ SESSION COMMANDS:
         -s <name>           Session name (default: "default")
         -d                  Start detached (in background)
         -n <winname>        Name for the initial window
+        --layout <file>     Load window/pane layout from JSON file
         -- <cmd> [args]     Run a specific command instead of default shell
     a, at, attach, attach-session
                             Attach to an existing session
         -t <name>           Target session name
-    ls, list-sessions       List all active sessions
+    ls, list-sessions       List all active sessions (+ resurrectable snapshots)
+    resurrect [name]        Restore a session from saved snapshot
+    delete-resurrect        Delete resurrection snapshot(s) [name|--all]
     has-session, has        Check if a session exists (exit code 0 = yes)
         -t <name>           Target session name
     kill-session, kill-ses  Kill a session

@@ -3946,6 +3946,17 @@ pub fn run_server(
                                         }
                                     }
                                 }
+                            } else if path.ends_with(".json") {
+                                // JSON layout file — parse and apply
+                                match crate::layout::load_layout_file(&path) {
+                                    Ok(_layout) => {
+                                        // TODO Wave 5: apply_layout_file(&mut app, &*pty_system, layout)
+                                        crate::debug_log::server_log("source-file", &format!("Loaded layout file: {}", path));
+                                    }
+                                    Err(e) => {
+                                        crate::debug_log::server_log("source-file", &format!("Failed to load layout file '{}': {}", path, e));
+                                    }
+                                }
                             } else {
                                 crate::config::source_file(&mut app, &path);
                             }

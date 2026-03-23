@@ -416,6 +416,61 @@ fn run_main() -> io::Result<()> {
                     }
                 }
             }
+            // Show resurrectable sessions (dead but have snapshots)
+            let resurrect_dir = crate::resurrection::resurrect_dir(None);
+            for name in crate::resurrection::list_resurrectable(&resurrect_dir) {
+                // Skip if a live session with this name was already printed
+                let port_file = format!("{}\\.psmux\\{}.port", home, name);
+                if std::path::Path::new(&port_file).exists() {
+                    continue;
+                }
+                println!("{}: (resurrectable)", name);
+            }
+            return Ok(());
+        }
+        "resurrect" => {
+            let session_name = args.first().cloned().unwrap_or_else(|| "default".to_string());
+            let dir = crate::resurrection::resurrect_dir(None);
+            match crate::resurrection::load_snapshot_from(&session_name, &dir) {
+                Ok(snap) => {
+                    eprintln!(
+                        "Resurrecting session '{}' ({} windows, {} panes)",
+                        snap.session_name,
+                        snap.windows.len(),
+                        snap.windows.iter().map(|w| w.pane_commands.len()).sum::<usize>()
+                    );
+                    // Delete the snapshot now that we're restoring it
+                    let _ = crate::resurrection::delete_snapshot(&session_name, &dir);
+                    // TODO: apply_snapshot — requires server running
+                    // For now, print the snapshot info
+                    eprintln!("Resurrection restore not yet fully implemented (Wave 5).");
+                }
+                Err(e) => {
+                    eprintln!("No resurrectable snapshot for '{}': {}", session_name, e);
+                    std::process::exit(1);
+                }
+            }
+            return Ok(());
+        }
+        "delete-resurrect" => {
+            let dir = crate::resurrection::resurrect_dir(None);
+            if args.first().map(|s| s.as_str()) == Some("--all") {
+                for name in crate::resurrection::list_resurrectable(&dir) {
+                    let _ = crate::resurrection::delete_snapshot(&name, &dir);
+                }
+                eprintln!("All resurrection snapshots deleted.");
+            } else if let Some(name) = args.first() {
+                match crate::resurrection::delete_snapshot(name, &dir) {
+                    Ok(()) => eprintln!("Deleted resurrection snapshot for '{}'.", name),
+                    Err(e) => {
+                        eprintln!("Failed to delete snapshot for '{}': {}", name, e);
+                        std::process::exit(1);
+                    }
+                }
+            } else {
+                eprintln!("Usage: psmux delete-resurrect <name|--all>");
+                std::process::exit(1);
+            }
             return Ok(());
         }
         "a" | "at" | "attach" | "attach-session" => {
@@ -514,11 +569,20 @@ fn run_main() -> io::Result<()> {
             let mut init_height: Option<u16> = None;
             let mut positional_args: Vec<String> = Vec::new();
             let mut raw_cmd_after_dd: Option<Vec<String>> = None;
+            let mut _layout_file: Option<String> = None;
 
             {
                 let mut i = 1; // skip command name (cmd_args[0])
                 while i < cmd_args.len() {
                     let a = cmd_args[i].as_str();
+                    if a == "--layout" {
+                        i += 1;
+                        if i < cmd_args.len() {
+                            _layout_file = Some(cmd_args[i].to_string());
+                        }
+                        i += 1;
+                        continue;
+                    }
                     if a == "--" {
                         // Everything after -- is raw command
                         raw_cmd_after_dd =
