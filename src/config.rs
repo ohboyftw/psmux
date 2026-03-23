@@ -726,6 +726,23 @@ pub fn parse_option_value(app: &mut AppState, rest: &str, _is_global: bool) {
         "claude-code-force-interactive" => {
             app.claude_code_force_interactive = matches!(value, "on" | "true" | "1");
         }
+        "hint-keys" => {
+            app.hint_keys = value.to_string();
+        }
+        "hint-style" => {
+            app.hint_style = value.to_string();
+        }
+        "hint-timeout" => {
+            if let Ok(ms) = value.parse::<u64>() {
+                app.hint_timeout = ms;
+            }
+        }
+        "resurrect-on-exit" => {
+            app.resurrect_on_exit = matches!(value, "on" | "true" | "1");
+        }
+        "resurrect-dir" => {
+            app.resurrect_dir = Some(value.to_string());
+        }
         "command-alias" => {
             if let Some(pos) = value.find('=') {
                 let alias = value[..pos].trim().to_string();

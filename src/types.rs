@@ -297,6 +297,15 @@ pub enum Mode {
     BufferChooser {
         selected: usize,
     },
+    /// Quick-select hints overlay for URLs, paths, git hashes.
+    HintsMode(Box<HintsState>),
+}
+
+/// Boxed state for hints mode (keeps Mode enum small).
+pub struct HintsState {
+    pub matches: Vec<crate::hints::HintMatch>,
+    pub input: String,
+    pub entered_at: std::time::Instant,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -582,6 +591,18 @@ pub struct AppState {
     /// Checked during the reap cycle; when a pane exits, the exit code is sent
     /// and the waiter is removed.
     pub wait_pane_queue: Vec<(usize, mpsc::Sender<i32>)>,
+    // ── Resurrection config ──
+    /// Keep snapshot after clean session exit (default: false).
+    pub resurrect_on_exit: bool,
+    /// Custom resurrection snapshot directory (None = ~/.psmux/resurrect/).
+    pub resurrect_dir: Option<String>,
+    // ── Hints mode config ──
+    /// Characters used for hint labels (default: home row "asdfjkl;").
+    pub hint_keys: String,
+    /// Style string for hint labels (default: "fg=yellow,bold").
+    pub hint_style: String,
+    /// Hints mode timeout in milliseconds (0 = no timeout, default: 5000).
+    pub hint_timeout: u64,
 }
 
 impl AppState {
@@ -729,6 +750,11 @@ impl AppState {
             warm_pool_size: 1,
             pending_plugin_scripts: Vec::new(),
             wait_pane_queue: Vec::new(),
+            resurrect_on_exit: false,
+            resurrect_dir: None,
+            hint_keys: "asdfjkl;".to_string(),
+            hint_style: "fg=yellow,bold".to_string(),
+            hint_timeout: 5000,
         }
     }
 
@@ -997,6 +1023,8 @@ pub enum CtrlReq {
     PopupInput(Vec<u8>),
     /// Close the current overlay (popup, menu, confirm, etc.)
     OverlayClose,
+    /// Hints mode: process a character of label input.
+    HintsInput(char),
     /// Respond to confirm-before prompt (true = yes, false = no)
     ConfirmRespond(bool),
     /// Select a menu item by index

@@ -2008,6 +2008,11 @@ pub(crate) fn handle_connection(
                     .unwrap_or(0);
                 let _ = tx.send(CtrlReq::MenuNavigate(delta));
             }
+            "hints-input" => {
+                if let Some(ch) = args.first().and_then(|s| s.chars().next()) {
+                    let _ = tx.send(CtrlReq::HintsInput(ch));
+                }
+            }
             "show-messages" | "showmsgs" => {
                 let (rtx, rrx) = mpsc::channel::<String>();
                 let _ = tx.send(CtrlReq::ShowMessages(rtx));

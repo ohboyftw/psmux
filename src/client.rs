@@ -471,6 +471,8 @@ pub fn run_remote(
     let mut srv_pane_base_index: usize = 0;
     #[allow(unused_assignments)]
     let mut clock_active = false;
+    #[allow(unused_assignments)]
+    let mut srv_hints_active = false;
 
     #[derive(serde::Deserialize, Default)]
     struct WinStatus {
@@ -648,6 +650,9 @@ pub fn run_remote(
         /// Status bar message from display-message (without -p)
         #[serde(default)]
         status_message: Option<String>,
+        /// Hints mode overlay active
+        #[serde(default)]
+        hints_active: bool,
     }
 
     let mut cmd_batch: Vec<String> = Vec::new();
@@ -1177,6 +1182,16 @@ pub fn run_remote(
                                     }) {
                                         cmd_batch.push(format!("menu-select {}\n", idx));
                                     }
+                                }
+                                _ => {}
+                            }
+                        } else if srv_hints_active {
+                            match key.code {
+                                KeyCode::Esc => {
+                                    cmd_batch.push("overlay-close\n".into());
+                                }
+                                KeyCode::Char(c) => {
+                                    cmd_batch.push(format!("hints-input {}\n", c));
                                 }
                                 _ => {}
                             }
@@ -2645,6 +2660,7 @@ pub fn run_remote(
         srv_menu_items = state.menu_items;
         srv_display_panes = state.display_panes;
         srv_pane_base_index = state.pane_base_index;
+        srv_hints_active = state.hints_active;
 
         // ── Extract active pane's cursor state ──────────────────────
         // We collect cursor info here but DON'T use

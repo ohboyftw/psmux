@@ -121,6 +121,72 @@ pub fn has_prefix(matches: &[HintMatch], input: &str) -> bool {
 }
 
 // ---------------------------------------------------------------------------
+// Enter hints mode from AppState
+// ---------------------------------------------------------------------------
+
+use crate::types::{AppState, HintsState, Mode, Node, Pane};
+
+/// Walk the split tree to find the active pane.
+fn find_active_pane<'a>(node: &'a Node, path: &[usize]) -> Option<&'a Pane> {
+    match node {
+        Node::Leaf(p) => Some(p),
+        Node::Split { children, .. } => {
+            let idx = path.first().copied().unwrap_or(0);
+            children
+                .get(idx)
+                .and_then(|child| find_active_pane(child, &path[1..]))
+        }
+    }
+}
+
+/// Extract visible text lines from the active pane's terminal screen.
+fn extract_visible_lines(app: &AppState) -> Vec<String> {
+    let win = match app.windows.get(app.active_idx) {
+        Some(w) => w,
+        None => return Vec::new(),
+    };
+    let pane = match find_active_pane(&win.root, &win.active_path) {
+        Some(p) => p,
+        None => return Vec::new(),
+    };
+    let parser = pane.term.lock().unwrap();
+    let screen = parser.screen();
+    let (rows, cols) = screen.size();
+    let mut lines = Vec::new();
+    for row in 0..rows {
+        let mut line = String::new();
+        for col in 0..cols {
+            if let Some(cell) = screen.cell(row, col) {
+                let contents: &str = cell.contents();
+                if contents.is_empty() {
+                    line.push(' ');
+                } else {
+                    line.push_str(contents);
+                }
+            }
+        }
+        lines.push(line.trim_end().to_string());
+    }
+    lines
+}
+
+/// Enter hints mode: scan the active pane's visible output for patterns.
+/// If no matches are found, the mode is not changed.
+pub fn enter_hints_mode(app: &mut AppState) {
+    let hint_keys = app.hint_keys.clone();
+    let lines = extract_visible_lines(app);
+    let matches = scan_and_label(&lines, &hint_keys);
+    if matches.is_empty() {
+        return;
+    }
+    app.mode = Mode::HintsMode(Box::new(HintsState {
+        matches,
+        input: String::new(),
+        entered_at: std::time::Instant::now(),
+    }));
+}
+
+// ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
 

@@ -131,6 +131,89 @@ pub fn delete_snapshot(session_name: &str, dir: &Path) -> io::Result<()> {
 }
 
 // ---------------------------------------------------------------------------
+// Build snapshot from live AppState
+// ---------------------------------------------------------------------------
+
+use crate::types::{AppState, LayoutKind, Node};
+
+/// Serialize a live `Node` tree into a `LayoutTreeNode` (topology only, no content).
+fn serialize_tree(node: &Node) -> LayoutTreeNode {
+    match node {
+        Node::Leaf(pane) => LayoutTreeNode::Leaf { id: pane.id },
+        Node::Split {
+            kind,
+            sizes,
+            children,
+        } => LayoutTreeNode::Split {
+            kind: match kind {
+                LayoutKind::Horizontal => "horizontal".to_string(),
+                LayoutKind::Vertical => "vertical".to_string(),
+            },
+            sizes: sizes.clone(),
+            children: children.iter().map(serialize_tree).collect(),
+        },
+    }
+}
+
+/// Collect spawn metadata from leaf panes in DFS order.
+fn collect_pane_commands(node: &Node, out: &mut Vec<PaneCommand>) {
+    match node {
+        Node::Leaf(pane) => {
+            let cwd = pane
+                .spawn_cwd
+                .as_ref()
+                .map(|p| p.to_string_lossy().to_string())
+                .unwrap_or_else(|| ".".to_string());
+            out.push(PaneCommand {
+                command: pane.spawn_command.clone(),
+                cwd,
+                env: pane.spawn_env.clone(),
+            });
+        }
+        Node::Split { children, .. } => {
+            for child in children {
+                collect_pane_commands(child, out);
+            }
+        }
+    }
+}
+
+/// Build a complete snapshot from the current server state.
+pub fn build_snapshot(app: &AppState) -> SessionSnapshot {
+    let mut windows = Vec::new();
+    for win in &app.windows {
+        let mut pane_commands = Vec::new();
+        collect_pane_commands(&win.root, &mut pane_commands);
+        let layout_tree = serialize_tree(&win.root);
+        windows.push(WindowSnapshot {
+            name: win.name.clone(),
+            id: win.id,
+            active_path: win.active_path.clone(),
+            layout_tree,
+            pane_commands,
+        });
+    }
+    SessionSnapshot {
+        version: 1,
+        session_name: app.session_name.clone(),
+        timestamp: std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs(),
+        windows,
+        active_window_idx: app.active_idx,
+    }
+}
+
+/// Best-effort save: build snapshot from AppState and write to disk.
+/// Errors are silently ignored (resurrection is best-effort).
+pub fn save_snapshot(app: &AppState) {
+    let snap = build_snapshot(app);
+    let dir = resurrect_dir(app.resurrect_dir.as_deref());
+    let _ = save_snapshot_to(&snap, &dir);
+}
+
+// ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
 

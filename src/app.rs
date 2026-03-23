@@ -546,6 +546,7 @@ pub fn run(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> io::Result<
                 Mode::ConfirmMode { .. } => "CONFIRM",
                 Mode::ClockMode => "CLOCK",
                 Mode::BufferChooser { .. } => "BUF",
+                Mode::HintsMode(_) => "HINTS",
             };
             let time_str = Local::now().format("%H:%M").to_string();
 

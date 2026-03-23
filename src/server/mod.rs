@@ -174,6 +174,29 @@ fn serialize_overlay_json(app: &AppState) -> String {
             }
             out.push(']');
         }
+        Mode::HintsMode(ref state) => {
+            use crate::server::helpers::json_escape_string;
+            out.push_str(",\"hints_active\":true,\"hints_input\":\"");
+            out.push_str(&json_escape_string(&state.input));
+            out.push_str("\",\"hints\":[");
+            for (i, m) in state.matches.iter().enumerate() {
+                if i > 0 {
+                    out.push(',');
+                }
+                let _ = std::fmt::Write::write_fmt(
+                    &mut out,
+                    format_args!(
+                        r#"{{"row":{},"start_col":{},"end_col":{},"label":"{}","text":"{}"}}"#,
+                        m.row,
+                        m.start_col,
+                        m.end_col,
+                        json_escape_string(&m.label),
+                        json_escape_string(&m.text)
+                    ),
+                );
+            }
+            out.push(']');
+        }
         Mode::PaneChooser { .. } => {
             out.push_str(",\"display_panes\":true");
             let _ = std::fmt::Write::write_fmt(
@@ -1004,6 +1027,7 @@ pub fn run_server(
                             resize_all_panes(&mut app);
                             meta_dirty = true;
                             hook_event = Some("after-new-window");
+                            crate::resurrection::save_snapshot(&app);
                         }
                         CtrlReq::NewWindowPrint(
                             cmd,
@@ -1196,6 +1220,7 @@ pub fn run_server(
                             resize_all_panes(&mut app);
                             meta_dirty = true;
                             hook_event = Some("after-split-window");
+                            crate::resurrection::save_snapshot(&app);
                         }
                         CtrlReq::SplitWindowPrint(
                             k,
@@ -1346,6 +1371,7 @@ pub fn run_server(
                             resize_all_panes(&mut app);
                             meta_dirty = true;
                             hook_event = Some("after-kill-pane");
+                            crate::resurrection::save_snapshot(&app);
                         }
                         CtrlReq::KillPaneById(pid) => {
                             unzoom_if_zoomed(&mut app);
@@ -4094,6 +4120,7 @@ pub fn run_server(
                             unzoom_if_zoomed(&mut app);
                             apply_layout(&mut app, &layout);
                             state_dirty = true;
+                            crate::resurrection::save_snapshot(&app);
                         }
                         CtrlReq::NextLayout => {
                             unzoom_if_zoomed(&mut app);
@@ -4558,7 +4585,8 @@ pub fn run_server(
                             | Mode::MenuMode { .. }
                             | Mode::ConfirmMode { .. }
                             | Mode::PaneChooser { .. }
-                            | Mode::ClockMode => {
+                            | Mode::ClockMode
+                            | Mode::HintsMode(_) => {
                                 app.mode = Mode::Passthrough;
                                 state_dirty = true;
                             }
@@ -4619,6 +4647,24 @@ pub fn run_server(
                                     }
                                     state_dirty = true;
                                 }
+                            }
+                        }
+
+                        CtrlReq::HintsInput(ch) => {
+                            if let Mode::HintsMode(ref mut state) = app.mode {
+                                state.input.push(ch);
+                                if let Some(m) = crate::hints::find_match(&state.matches, &state.input) {
+                                    let text = m.text.clone();
+                                    crate::copy_mode::copy_to_system_clipboard(&text);
+                                    if app.set_clipboard != "off" {
+                                        app.clipboard_osc52 = Some(text.clone());
+                                    }
+                                    app.status_message = Some((format!("Copied: {}", text), std::time::Instant::now()));
+                                    app.mode = Mode::Passthrough;
+                                } else if !crate::hints::has_prefix(&state.matches, &state.input) {
+                                    state.input.clear();
+                                }
+                                state_dirty = true;
                             }
                         }
 
@@ -5229,6 +5275,15 @@ pub fn run_server(
         // Auto-close display-panes overlay after display-panes-time (default 1000ms).
         if let Mode::PaneChooser { opened_at } = &app.mode {
             if opened_at.elapsed() > Duration::from_millis(app.display_panes_time_ms) {
+                app.mode = Mode::Passthrough;
+                state_dirty = true;
+            }
+        }
+        // ── Hints mode timeout ──
+        if let Mode::HintsMode(ref state) = app.mode {
+            if app.hint_timeout > 0
+                && state.entered_at.elapsed().as_millis() as u64 >= app.hint_timeout
+            {
                 app.mode = Mode::Passthrough;
                 state_dirty = true;
             }

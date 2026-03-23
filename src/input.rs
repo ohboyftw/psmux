@@ -415,6 +415,11 @@ pub fn handle_key(app: &mut AppState, key: KeyEvent) -> io::Result<bool> {
                     app.mode = Mode::BufferChooser { selected: 0 };
                     true
                 }
+                // --- hints mode (f) ---
+                KeyCode::Char('f') => {
+                    crate::hints::enter_hints_mode(app);
+                    true
+                }
                 _ => false,
             };
 
@@ -1424,6 +1429,29 @@ pub fn handle_key(app: &mut AppState, key: KeyEvent) -> io::Result<bool> {
                     }
                 }
                 _ => {}
+            }
+            Ok(false)
+        }
+        Mode::HintsMode(_) => {
+            // Hints input is handled server-side via CtrlReq::HintsInput.
+            // In direct-attach mode, handle Esc locally.
+            if key.code == KeyCode::Esc {
+                app.mode = Mode::Passthrough;
+            } else if let KeyCode::Char(c) = key.code {
+                if let Mode::HintsMode(ref mut state) = app.mode {
+                    state.input.push(c);
+                    if let Some(m) = crate::hints::find_match(&state.matches, &state.input) {
+                        let text = m.text.clone();
+                        crate::copy_mode::copy_to_system_clipboard(&text);
+                        if app.set_clipboard != "off" {
+                            app.clipboard_osc52 = Some(text.clone());
+                        }
+                        app.status_message = Some((format!("Copied: {}", text), std::time::Instant::now()));
+                        app.mode = Mode::Passthrough;
+                    } else if !crate::hints::has_prefix(&state.matches, &state.input) {
+                        state.input.clear();
+                    }
+                }
             }
             Ok(false)
         }

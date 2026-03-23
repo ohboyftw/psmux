@@ -153,6 +153,7 @@ pub fn parse_command_to_action(cmd: &str) -> Option<Action> {
         "next-window" | "next" => Some(Action::NextWindow),
         "previous-window" | "prev" => Some(Action::PrevWindow),
         "copy-mode" => Some(Action::CopyMode),
+        "hints" => Some(Action::Command("hints".to_string())),
         "paste-buffer" | "pasteb" => Some(Action::Paste),
         "detach-client" | "detach" => Some(Action::Detach),
         "rename-window" | "renamew" => Some(Action::RenameWindow),
@@ -769,6 +770,9 @@ pub fn execute_command_string(app: &mut AppState, cmd: &str) -> io::Result<()> {
         }
         "copy-mode" => {
             enter_copy_mode(app);
+        }
+        "hints" => {
+            crate::hints::enter_hints_mode(app);
         }
         "display-panes" | "displayp" => {
             let win = &app.windows[app.active_idx];
