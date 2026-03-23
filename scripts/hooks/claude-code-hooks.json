@@ -1,0 +1,16 @@
+{
+  "hooks": {
+    "Notification": [
+      {
+        "matcher": "",
+        "command": "bash D:/Home/psmux/scripts/hooks/on-notification.sh \"$CLAUDE_NOTIFICATION\""
+      }
+    ],
+    "Stop": [
+      {
+        "matcher": "",
+        "command": "bash D:/Home/psmux/scripts/hooks/on-agent-stop.sh"
+      }
+    ]
+  }
+}

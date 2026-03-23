@@ -142,6 +142,52 @@ claude                       # Run Claude Code — agent teams just work
 
 No extra configuration needed. Full guide: **[docs/claude-code.md](docs/claude-code.md)**
 
+### Claude Code Hooks Integration
+
+Wire psmux into Claude Code's lifecycle with hooks for automatic notifications and output capture.
+
+**Add to `~/.claude/settings.json`:**
+
+```json
+{
+  "hooks": {
+    "Notification": [
+      {
+        "matcher": "",
+        "command": "bash /path/to/psmux/scripts/hooks/on-notification.sh"
+      }
+    ],
+    "Stop": [
+      {
+        "matcher": "",
+        "command": "bash /path/to/psmux/scripts/hooks/on-agent-stop.sh"
+      }
+    ]
+  }
+}
+```
+
+**What each hook does:**
+
+| Hook | Script | Behavior |
+|------|--------|----------|
+| `Notification` | `on-notification.sh` | Routes Claude Code notifications to the psmux status bar instead of the system tray |
+| `Stop` | `on-agent-stop.sh` | Auto-captures pane scrollback to `~/.psmux/agent-logs/` when an agent finishes |
+| (optional) | `on-agent-spawn.sh` | Tags panes with `@agent` metadata on TeammateTool spawn |
+
+Agent logs are saved as `~/.psmux/agent-logs/YYYYMMDD-HHMMSS_<session>_<pane>.log` for post-mortem analysis.
+
+### Power Pack Features (`ohboy-builds`)
+
+| Feature | Keybinding | Description |
+|---------|-----------|-------------|
+| **Hints mode** | `Ctrl+b f` | Scan pane for URLs, file paths, git hashes — type a label to copy |
+| **Session resurrection** | auto | Snapshots saved on structural changes, `psmux resurrect <name>` to restore |
+| **Declarative layouts** | `--layout file.json` | Define multi-pane workspaces in JSON, apply with `source-file` |
+| **Zoxide picker** | `Ctrl+b z` | Frecency-ranked directory popup via zoxide + fzf |
+
+See [docs/power-pack-tools.md](docs/power-pack-tools.md) for the full tool stack guide (ripgrep, fd, bat, zoxide, fzf, starship, fastfetch).
+
 > **[`ohboy-builds` branch](https://github.com/ohboyftw/psmux/tree/ohboy-builds)** adds production-grade agent orchestration on top of `master`:
 >
 > **Agent Backend (Protocol v2):**
