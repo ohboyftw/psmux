@@ -2011,6 +2011,13 @@ pub fn run_remote(
                                 KeyCode::Esc if command_input => {
                                     command_input = false;
                                 }
+                                // Ctrl+C cancels command prompt (same as Esc)
+                                KeyCode::Char('c')
+                                    if command_input
+                                        && key.modifiers.contains(KeyModifiers::CONTROL) =>
+                                {
+                                    command_input = false;
+                                }
                                 KeyCode::Char(d) if chooser && d.is_ascii_digit() => {
                                     let raw = d.to_digit(10).unwrap() as usize;
                                     let choice = if raw == 0 { 10 } else { raw };
@@ -2023,6 +2030,15 @@ pub fn run_remote(
                                 }
                                 KeyCode::Esc if chooser => {
                                     chooser = false;
+                                }
+                                KeyCode::Char(' ') if command_input => {
+                                    command_buf.push(' ');
+                                }
+                                KeyCode::Char(' ') if renaming => {
+                                    rename_buf.push(' ');
+                                }
+                                KeyCode::Char(' ') if pane_renaming => {
+                                    pane_title_buf.push(' ');
                                 }
                                 KeyCode::Char(' ') => {
                                     #[cfg(windows)]
@@ -2082,6 +2098,18 @@ pub fn run_remote(
                                 KeyCode::Char(c) if (c as u32) >= 0x01 && (c as u32) <= 0x1A => {
                                     let ctrl_letter = ((c as u8) + b'a' - 1) as char;
                                     cmd_batch.push(format!("send-key C-{}\n", ctrl_letter));
+                                }
+                                // Catch-all for overlay input modes: swallow chars
+                                // that weren't caught by the specific overlay handlers above.
+                                // Prevents paste/key leaks to the underlying pane.
+                                KeyCode::Char(c) if command_input || renaming || pane_renaming => {
+                                    if command_input {
+                                        command_buf.push(c);
+                                    } else if renaming {
+                                        rename_buf.push(c);
+                                    } else if pane_renaming {
+                                        pane_title_buf.push(c);
+                                    }
                                 }
                                 KeyCode::Char(c) => {
                                     #[cfg(windows)]
