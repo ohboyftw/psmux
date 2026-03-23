@@ -120,6 +120,12 @@ pub struct Pane {
     /// Shell binary basename used for this pane (e.g. "bash", "pwsh").
     /// Set at spawn time from the --shell flag, default-shell, or system default.
     pub shell_name: Option<String>,
+    /// Original command string used to spawn this pane (None = default shell).
+    /// Stored for session resurrection — allows re-spawning the same command.
+    pub spawn_command: Option<String>,
+    /// Custom environment variables passed via -e at spawn time.
+    /// Stored for session resurrection.
+    pub spawn_env: Vec<(String, String)>,
 }
 
 /// Pre-spawned shell ready to be transplanted into a new window instantly.

@@ -146,6 +146,8 @@ pub fn create_window(
             passthrough_queue: PassthroughQueue::new(64),
             spawn_cwd: std::env::current_dir().ok(),
             shell_name: Some(warm_shell_name.clone()),
+            spawn_command: command.map(|s| s.to_string()),
+            spawn_env: Vec::new(),
         };
         let win_name = warm_shell_name;
         let initial_pane_id = wp.pane_id;
@@ -304,6 +306,8 @@ pub fn create_window(
             .map(std::path::PathBuf::from)
             .or_else(|| std::env::current_dir().ok()),
         shell_name: Some(cw_shell_name.clone()),
+        spawn_command: command.map(|s| s.to_string()),
+        spawn_env: Vec::new(),
     };
     #[cfg(feature = "mycel")]
     crate::mycel::publish_pane_event(
@@ -528,6 +532,8 @@ pub fn create_window_raw(
         passthrough_queue: PassthroughQueue::new(64),
         spawn_cwd: std::env::current_dir().ok(),
         shell_name: Some(raw_win_name.clone()),
+        spawn_command: Some(raw_args.join(" ")),
+        spawn_env: Vec::new(),
     };
     app.next_pane_id += 1;
     let win_name = raw_win_name;
@@ -713,6 +719,8 @@ pub fn split_active_with_command(
             passthrough_queue: PassthroughQueue::new(64),
             spawn_cwd: std::env::current_dir().ok(),
             shell_name: Some(configured_shell_name),
+            spawn_command: command.map(|s| s.to_string()),
+            spawn_env: Vec::new(),
         });
         let win = &mut app.windows[app.active_idx];
         replace_leaf_with_split(&mut win.root, &win.active_path, kind, new_leaf);
@@ -849,6 +857,8 @@ pub fn split_active_with_command(
             .map(std::path::PathBuf::from)
             .or_else(|| std::env::current_dir().ok()),
         shell_name: Some(split_shell_name),
+        spawn_command: command.map(|s| s.to_string()),
+        spawn_env: Vec::new(),
     });
     #[cfg(feature = "mycel")]
     crate::mycel::publish_pane_event(
