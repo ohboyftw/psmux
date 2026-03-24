@@ -221,6 +221,21 @@ See [docs/power-pack-tools.md](docs/power-pack-tools.md) for the full tool stack
 >
 > These features are on the [`ohboyftw/psmux`](https://github.com/ohboyftw/psmux/tree/ohboy-builds) fork and not yet merged to upstream `master`.
 
+### Stability & Performance Fixes (`ohboy-builds` v3.3.0)
+
+Critical fixes for production use with Claude Code and agent swarms:
+
+| Fix | Problem | Solution |
+|-----|---------|----------|
+| **DCS buffer cap** | Malformed DCS sequences grew unboundedly (28GB+ observed) | 10MB hard cap with overflow guard in VT parser |
+| **Non-blocking pane writes** | `write_all()` to ConPTY blocked the event loop for 5-10 min when child was busy | AsyncPaneWriter: bounded channel + background drain thread per pane |
+| **Server poll debounce** | Continuous PTY output locked server at 1ms polling (58% CPU idle) | 5-tick debounce ramp — responsive during bursts, relaxes when idle |
+| **Async snapshot saves** | `save_snapshot()` did synchronous disk I/O on the event loop (50ms antivirus retry) | Background writer thread with 100ms debounce |
+| **Passthrough entry limit** | DCS passthrough queue entries had no size limit | 1MB per-entry cap, oversized entries dropped |
+| **Env var echo fix** | `SetEnvironment` wrote PowerShell commands to warm pane PTY, echoing visibly | Kill+respawn warm pane with process-level env vars |
+
+These fixes compound: the DCS buffer growth caused memory pressure, which slowed child processes, which filled ConPTY input buffers, which blocked the event loop, which buffered all keybindings for minutes.
+
 ## Television Integration
 
 psmux ships with a [cable channel pack](cable/) for [television](https://github.com/alexpasmantier/television) (`tv`) — a fast Rust fuzzy finder. Fuzzy-search your sessions, windows, and panes with live `capture-pane` preview.
