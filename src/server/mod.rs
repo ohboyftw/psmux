@@ -4239,26 +4239,31 @@ pub fn run_server(
                         CtrlReq::SetEnvironment(key, value) => {
                             app.environment.insert(key.clone(), value.clone());
                             crate::util::set_env(&key, &value);
-                            // Also inject into the waiting warm pane so it has the
-                            // latest env when transplanted for split/new-window.
-                            if let Some(ref mut wp) = app.warm_pane {
-                                let escaped = value.replace('\'', "''");
-                                let cmd = format!("${{env:{}}}='{}'\r\n", key, escaped);
-                                use std::io::Write as _;
-                                let _ = wp.writer.write_all(cmd.as_bytes());
+                            // Kill the warm pane and respawn so it picks up the new
+                            // env var at process level — avoids PTY echo (#137).
+                            if app.warm_pane.is_some() {
+                                if let Some(mut old_wp) = app.warm_pane.take() {
+                                    old_wp.child.kill().ok();
+                                }
+                                match spawn_warm_pane(&*pty_system, &mut app) {
+                                    Ok(new_wp) => { app.warm_pane = Some(new_wp); }
+                                    Err(e) => { eprintln!("psmux: warm pane respawn (SetEnv) failed: {e}"); }
+                                }
                             }
                         }
                         CtrlReq::UnsetEnvironment(key) => {
                             app.environment.remove(&key);
                             crate::util::remove_env(&key);
-                            // Clear the var in the waiting warm pane too.
-                            if let Some(ref mut wp) = app.warm_pane {
-                                let cmd = format!(
-                                    "Remove-Item Env:{} -ErrorAction SilentlyContinue\r\n",
-                                    key
-                                );
-                                use std::io::Write as _;
-                                let _ = wp.writer.write_all(cmd.as_bytes());
+                            // Kill the warm pane and respawn so the removed var is
+                            // absent at process level — avoids PTY echo (#137).
+                            if app.warm_pane.is_some() {
+                                if let Some(mut old_wp) = app.warm_pane.take() {
+                                    old_wp.child.kill().ok();
+                                }
+                                match spawn_warm_pane(&*pty_system, &mut app) {
+                                    Ok(new_wp) => { app.warm_pane = Some(new_wp); }
+                                    Err(e) => { eprintln!("psmux: warm pane respawn (UnsetEnv) failed: {e}"); }
+                                }
                             }
                         }
                         CtrlReq::ShowEnvironment(resp) => {
