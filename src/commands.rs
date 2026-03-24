@@ -880,7 +880,7 @@ pub fn execute_command_string(app: &mut AppState, cmd: &str) -> io::Result<()> {
                     crate::pane::conpty_preemptive_dsr_response(&mut *pty_writer);
                     Some(PopupPty {
                         master: pair.master,
-                        writer: pty_writer,
+                        writer: Box::new(crate::types::AsyncPaneWriter::new(pty_writer)),
                         child,
                         term,
                     })

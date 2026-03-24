@@ -273,11 +273,49 @@ pub fn apply_snapshot(
 }
 
 /// Best-effort save: build snapshot from AppState and write to disk.
-/// Errors are silently ignored (resurrection is best-effort).
+///
+/// The snapshot is serialized on the calling thread (cheap — just cloning
+/// small metadata), then sent to a background writer thread.  Rapid
+/// structural changes (split → resize → split) coalesce: the writer uses a
+/// 100ms debounce so at most ~10 writes/sec hit disk.
 pub fn save_snapshot(app: &AppState) {
     let snap = build_snapshot(app);
     let dir = resurrect_dir(app.resurrect_dir.as_deref());
-    let _ = save_snapshot_to(&snap, &dir);
+    spawn_or_send(snap, dir);
+}
+
+/// Lazily initialized channel to the background snapshot writer thread.
+static SNAPSHOT_TX: std::sync::OnceLock<std::sync::mpsc::Sender<(SessionSnapshot, PathBuf)>> =
+    std::sync::OnceLock::new();
+
+fn spawn_or_send(snap: SessionSnapshot, dir: PathBuf) {
+    let tx = SNAPSHOT_TX.get_or_init(|| {
+        let (tx, rx) = std::sync::mpsc::channel::<(SessionSnapshot, PathBuf)>();
+        thread::Builder::new()
+            .name("snapshot-writer".into())
+            .spawn(move || {
+                // Debounce: drain all pending snapshots, write only the latest.
+                while let Ok((mut snap, mut dir)) = rx.recv() {
+                    // Drain any queued snapshots (keep the newest)
+                    while let Ok((s, d)) = rx.try_recv() {
+                        snap = s;
+                        dir = d;
+                    }
+                    // Small delay to coalesce rapid changes
+                    thread::sleep(Duration::from_millis(100));
+                    // Drain again after the delay
+                    while let Ok((s, d)) = rx.try_recv() {
+                        snap = s;
+                        dir = d;
+                    }
+                    let _ = save_snapshot_to(&snap, &dir);
+                }
+            })
+            .expect("failed to spawn snapshot writer thread");
+        tx
+    });
+    // Best-effort: if the channel is disconnected, silently drop.
+    let _ = tx.send((snap, dir));
 }
 
 // ---------------------------------------------------------------------------

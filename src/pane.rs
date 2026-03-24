@@ -121,7 +121,7 @@ pub fn create_window(
         let warm_shell_name = default_shell_name(None, configured_shell);
         let pane = Pane {
             master: wp.master,
-            writer: wp.writer,
+            writer: Box::new(crate::types::AsyncPaneWriter::new(wp.writer)),
             child: wp.child,
             term: wp.term,
             last_rows: rows,
@@ -279,7 +279,7 @@ pub fn create_window(
     };
     let pane = Pane {
         master: pair.master,
-        writer: pty_writer,
+        writer: Box::new(crate::types::AsyncPaneWriter::new(pty_writer)),
         child,
         term,
         last_rows: size.rows,
@@ -507,7 +507,7 @@ pub fn create_window_raw(
         .to_string();
     let pane = Pane {
         master: pair.master,
-        writer: pty_writer,
+        writer: Box::new(crate::types::AsyncPaneWriter::new(pty_writer)),
         child,
         term,
         last_rows: size.rows,
@@ -694,7 +694,7 @@ pub fn split_active_with_command(
         };
         let new_leaf = Node::Leaf(Pane {
             master: wp.master,
-            writer: wp.writer,
+            writer: Box::new(crate::types::AsyncPaneWriter::new(wp.writer)),
             child: wp.child,
             term: wp.term,
             last_rows: rows,
@@ -830,7 +830,7 @@ pub fn split_active_with_command(
     };
     let new_leaf = Node::Leaf(Pane {
         master: pair.master,
-        writer: pty_writer,
+        writer: Box::new(crate::types::AsyncPaneWriter::new(pty_writer)),
         child,
         term,
         last_rows: size.rows,

@@ -83,3 +83,6 @@ psmux-windows-x86_64.zip
 release/
 *.nupkg
 test-reports/
+
+# upstream-pulse state and reports (per-machine, not source)
+.claude/upstream-pulse/

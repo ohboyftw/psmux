@@ -1,12 +1,18 @@
 const BASE64: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/=";
 const CLIPBOARD_SELECTOR: &[u8] = b"cpqs01234567";
 
+/// Maximum DCS buffer size (10 MB). Sequences exceeding this are truncated
+/// and the buffer is cleared to prevent unbounded memory growth from
+/// malformed or missing DCS terminators.
+const MAX_DCS_BUF_SIZE: usize = 10 * 1024 * 1024;
+
 pub struct WrappedScreen<CB: crate::callbacks::Callbacks = ()> {
     pub screen: crate::screen::Screen,
     pub callbacks: CB,
     dcs_buf: Vec<u8>,
     dcs_is_tmux: bool,
     dcs_action: char,
+    dcs_overflow: bool,
 }
 
 impl WrappedScreen<()> {
@@ -23,6 +29,7 @@ impl<CB: crate::callbacks::Callbacks> WrappedScreen<CB> {
             dcs_buf: Vec::new(),
             dcs_is_tmux: false,
             dcs_action: '\0',
+            dcs_overflow: false,
         }
     }
 }
@@ -220,10 +227,26 @@ impl<CB: crate::callbacks::Callbacks> vte::Perform for WrappedScreen<CB> {
     fn hook(&mut self, _params: &vte::Params, _intermediates: &[u8], _ignore: bool, action: char) {
         self.dcs_buf.clear();
         self.dcs_is_tmux = false;
+        self.dcs_overflow = false;
         self.dcs_action = action;
     }
 
     fn put(&mut self, byte: u8) {
+        // Guard against unbounded growth from malformed DCS sequences
+        // (missing terminator). Once overflow is detected, discard all
+        // further bytes until unhook() resets the state.
+        if self.dcs_overflow {
+            return;
+        }
+        if self.dcs_buf.len() >= MAX_DCS_BUF_SIZE {
+            eprintln!(
+                "psmux: DCS buffer exceeded {}MB limit, truncating sequence",
+                MAX_DCS_BUF_SIZE / (1024 * 1024)
+            );
+            self.dcs_buf.clear();
+            self.dcs_overflow = true;
+            return;
+        }
         self.dcs_buf.push(byte);
         // vte consumes the first printable char as the action in hook(),
         // so for "\x1bPtmux;..." the action is 't' and put receives "mux;...".
@@ -234,7 +257,7 @@ impl<CB: crate::callbacks::Callbacks> vte::Perform for WrappedScreen<CB> {
     }
 
     fn unhook(&mut self) {
-        if self.dcs_is_tmux {
+        if self.dcs_is_tmux && !self.dcs_overflow {
             // vte terminates DCS on ESC, so the inner passthrough content
             // may be empty when escaped ESC sequences cause early DCS exit.
             // We still fire the callback so consumers know a tmux
@@ -245,6 +268,7 @@ impl<CB: crate::callbacks::Callbacks> vte::Perform for WrappedScreen<CB> {
         }
         self.dcs_buf.clear();
         self.dcs_is_tmux = false;
+        self.dcs_overflow = false;
     }
 }
 
@@ -324,6 +348,37 @@ mod dcs_tests {
         assert!(
             !data.is_empty(),
             "DCS tmux passthrough should trigger callback"
+        );
+    }
+
+    #[test]
+    fn test_dcs_buffer_overflow_capped() {
+        let captured = Arc::new(Mutex::new(Vec::new()));
+        let callbacks = DcsCapture {
+            captured: captured.clone(),
+        };
+        let mut parser = crate::Parser::new_with_callbacks(80, 24, 0, callbacks);
+
+        // Start a DCS tmux passthrough
+        let header = b"\x1bPtmux;";
+        parser.process(header);
+
+        // Feed more than MAX_DCS_BUF_SIZE bytes without a terminator.
+        // Use a chunk size to avoid allocating a huge single buffer.
+        let chunk = vec![b'A'; 64 * 1024]; // 64KB chunks
+        let iterations = (super::MAX_DCS_BUF_SIZE / chunk.len()) + 2;
+        for _ in 0..iterations {
+            parser.process(&chunk);
+        }
+
+        // Terminate the DCS sequence
+        parser.process(b"\x1b\\");
+
+        // The overflow should have been detected — no callback fired
+        let data = captured.lock().unwrap();
+        assert!(
+            data.is_empty(),
+            "Overflowed DCS passthrough should not trigger callback"
         );
     }
 

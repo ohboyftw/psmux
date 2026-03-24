@@ -15,6 +15,77 @@ pub fn build_version_stamp() -> String {
     format!("{}-{}", VERSION, GIT_HASH)
 }
 
+/// Async writer that wraps a PTY writer and offloads blocking pipe writes to a
+/// background thread.  Implements `std::io::Write` so it's a drop-in replacement
+/// for `Box<dyn Write + Send>` throughout the codebase.
+///
+/// When the child process is slow to consume input (e.g., Claude Code running
+/// tool calls), the OS pipe buffer fills and `write_all()` blocks.  This wrapper
+/// prevents the main event loop from stalling by sending data through a bounded
+/// channel instead.  If the channel is full (child is severely backlogged),
+/// writes are silently dropped — this is preferable to freezing the entire UI.
+pub struct AsyncPaneWriter {
+    tx: Option<mpsc::SyncSender<Vec<u8>>>,
+    handle: Option<std::thread::JoinHandle<()>>,
+}
+
+impl AsyncPaneWriter {
+    /// Wrap a raw PTY writer.  The background drain thread starts immediately.
+    pub fn new(mut inner: Box<dyn std::io::Write + Send>) -> Self {
+        // Bounded channel: 1024 slots × typical ~512 bytes = ~512KB max queued.
+        let (tx, rx) = mpsc::sync_channel::<Vec<u8>>(1024);
+        let handle = std::thread::Builder::new()
+            .name("pane-writer".into())
+            .spawn(move || {
+                while let Ok(data) = rx.recv() {
+                    // Best-effort write — if the pipe errors, the pane is dead.
+                    if inner.write_all(&data).is_err() {
+                        break;
+                    }
+                    let _ = inner.flush();
+                }
+            })
+            .expect("failed to spawn pane writer thread");
+        Self {
+            tx: Some(tx),
+            handle: Some(handle),
+        }
+    }
+}
+
+impl std::io::Write for AsyncPaneWriter {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        if let Some(ref tx) = self.tx {
+            match tx.try_send(buf.to_vec()) {
+                Ok(()) => Ok(buf.len()),
+                // Channel full — drop the data rather than blocking the UI
+                Err(mpsc::TrySendError::Full(_)) => Ok(buf.len()),
+                // Writer thread exited — pane is dead
+                Err(mpsc::TrySendError::Disconnected(_)) => {
+                    Err(std::io::Error::new(std::io::ErrorKind::BrokenPipe, "pane writer exited"))
+                }
+            }
+        } else {
+            Err(std::io::Error::new(std::io::ErrorKind::BrokenPipe, "writer closed"))
+        }
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        // No-op: the background thread flushes after each write.
+        Ok(())
+    }
+}
+
+impl Drop for AsyncPaneWriter {
+    fn drop(&mut self) {
+        // Drop the sender to signal the writer thread to exit
+        self.tx.take();
+        if let Some(h) = self.handle.take() {
+            let _ = h.join();
+        }
+    }
+}
+
 /// Thread-safe bounded queue for DCS passthrough sequences captured by the
 /// vt100 parser's `dcs_passthrough` callback.  Shared between the PTY reader
 /// thread (producer) and the client render loop (consumer).
@@ -22,17 +93,32 @@ pub fn build_version_stamp() -> String {
 pub struct PassthroughQueue {
     entries: Arc<Mutex<Vec<Vec<u8>>>>,
     max_depth: usize,
+    /// Maximum size in bytes for a single entry.  Oversized entries are dropped.
+    max_entry_bytes: usize,
 }
+
+/// 1 MB per entry — any single DCS passthrough sequence larger than this is
+/// almost certainly malformed or not useful for forwarding.
+const DEFAULT_MAX_ENTRY_BYTES: usize = 1024 * 1024;
 
 impl PassthroughQueue {
     pub fn new(max_depth: usize) -> Self {
         Self {
             entries: Arc::new(Mutex::new(Vec::new())),
             max_depth,
+            max_entry_bytes: DEFAULT_MAX_ENTRY_BYTES,
         }
     }
 
     pub fn push(&self, data: Vec<u8>) {
+        if data.len() > self.max_entry_bytes {
+            eprintln!(
+                "psmux: dropping oversized DCS passthrough entry ({}KB > {}KB limit)",
+                data.len() / 1024,
+                self.max_entry_bytes / 1024
+            );
+            return;
+        }
         if let Ok(mut entries) = self.entries.lock() {
             if entries.len() >= self.max_depth {
                 entries.remove(0);

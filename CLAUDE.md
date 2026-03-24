@@ -59,10 +59,14 @@ Full scripting support including `send-keys`, `capture-pane`, `pipe-pane`,
 - Pane rendering uses Windows Console Virtual Terminal Sequences (VT100)
 - Key prefix system mirrors tmux: Ctrl+b default, configurable via `~/.psmux.conf`
 - Configuration parsing supports tmux `set -g` syntax
-- Copy mode implements vim-like keybindings with scrollback buffer (1000 lines default)
+- Copy mode implements vim-like keybindings with scrollback buffer (2000 lines default)
 - **CustomPaneBackend** (`src/backend/`): JSON-RPC over named pipes — `protocol.rs` (types), `pipe.rs` (listener), `dispatcher.rs` (routing)
 - **Remote control mode** (`src/remote/`): SSH transport + tmux `-CC` parser + pane manager for rendering remote sessions locally
 - **DCS passthrough** (`crates/vt100-psmux/`): VT parser hook/put/unhook DCS handlers with `PassthroughQueue` forwarding
+
+## Upstream Sync
+At session start, check `.claude/upstream-pulse/state.json` — if `last_check` is >3 days old,
+nudge: "Run `/upstream-pulse` to check for upstream changes."
 
 ## Swarm Backend Context
 psmux can serve as the tmux spawn backend for Claude Code's TeammateTool on Windows.
