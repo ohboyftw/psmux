@@ -846,8 +846,10 @@ fn run_main() -> io::Result<()> {
                 // Only eligible when no custom command/dir is requested.
                 // Searches the warm pool: tries `__warm__` first (pool size 1),
                 // then `__warm__0`, `__warm__1`, ... (pool size > 1).
+                // Skipped when PSMUX_NO_WARM=1 is set.
+                let warm_disabled = std::env::var("PSMUX_NO_WARM").map(|v| v == "1" || v == "true").unwrap_or(false);
                 let claimed_warm =
-                    if initial_cmd.is_none() && raw_cmd_args.is_none() && start_dir.is_none() {
+                    if !warm_disabled && initial_cmd.is_none() && raw_cmd_args.is_none() && start_dir.is_none() {
                         // Build list of candidate warm session names to try
                         let mut candidates: Vec<String> = vec!["__warm__".to_string()];
                         for i in 0..10usize {
@@ -3511,6 +3513,8 @@ fn run_main() -> io::Result<()> {
         let port_path = format!("{}\\.psmux\\{}.port", home, port_file_base);
 
         // Try warm server claim first (fast path)
+        // Skipped when PSMUX_NO_WARM=1 is set.
+        let warm_disabled = std::env::var("PSMUX_NO_WARM").map(|v| v == "1" || v == "true").unwrap_or(false);
         let warm_base = if let Some(ref l) = l_socket_name {
             format!("{}____warm__", l)
         } else {
@@ -3523,7 +3527,7 @@ fn run_main() -> io::Result<()> {
         let warm_version_ok = std::fs::read_to_string(&warm_ver_path)
             .map(|v| v.trim() == crate::types::build_version_stamp())
             .unwrap_or(true); // no version file = legacy warm server, allow
-        if warm_version_ok && std::path::Path::new(&warm_port_path).exists() {
+        if !warm_disabled && warm_version_ok && std::path::Path::new(&warm_port_path).exists() {
             let warm_key = crate::session::read_session_key(&warm_base).unwrap_or_default();
             if let Ok(port_str) = std::fs::read_to_string(&warm_port_path) {
                 if let Ok(port) = port_str.trim().parse::<u16>() {

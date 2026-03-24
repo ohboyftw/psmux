@@ -458,6 +458,27 @@ pub fn reap_children_placeholder() -> io::Result<bool> {
     Ok(false)
 }
 
+/// Return the names of all live sessions by scanning .psmux/*.port files.
+pub fn list_session_names() -> Vec<String> {
+    let home = std::env::var("USERPROFILE").or_else(|_| std::env::var("HOME")).unwrap_or_default();
+    let dir = format!("{}\\.psmux", home);
+    let mut names = Vec::new();
+    if let Ok(entries) = std::fs::read_dir(&dir) {
+        for e in entries.flatten() {
+            if let Some(fname) = e.file_name().to_str().map(|s| s.to_string()) {
+                if let Some((base, ext)) = fname.rsplit_once('.') {
+                    if ext == "port" {
+                        if is_warm_session(base) { continue; }
+                        names.push(base.to_string());
+                    }
+                }
+            }
+        }
+    }
+    names.sort();
+    names
+}
+
 /// A tree entry used by choose-tree: either a session header or a window under a session.
 #[derive(Clone, Debug)]
 pub struct TreeEntry {

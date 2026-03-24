@@ -134,6 +134,13 @@ pub(crate) fn get_option_value(app: &AppState, name: &str) -> String {
                 "off".into()
             }
         }
+        "allow-predictions" => {
+            if app.allow_predictions {
+                "on".into()
+            } else {
+                "off".into()
+            }
+        }
         "cursor-style" => std::env::var("PSMUX_CURSOR_STYLE").unwrap_or_else(|_| "bar".to_string()),
         "cursor-blink" => {
             if std::env::var("PSMUX_CURSOR_BLINK").unwrap_or_else(|_| "1".to_string()) != "0" {
@@ -197,6 +204,20 @@ pub(crate) fn get_option_value(app: &AppState, name: &str) -> String {
             }
         }
         "warm-pool-size" => app.warm_pool_size.to_string(),
+        "warm" => {
+            if app.warm_enabled {
+                "on".into()
+            } else {
+                "off".into()
+            }
+        }
+        "claude-code-fix-tty" => {
+            if app.claude_code_fix_tty {
+                "on".into()
+            } else {
+                "off".into()
+            }
+        }
         _ => {
             // Check user_options first (@-prefixed), then environment
             app.user_options
@@ -439,6 +460,9 @@ pub(crate) fn apply_set_option(app: &mut AppState, option: &str, value: &str, _q
         "prediction-dimming" | "dim-predictions" => {
             app.prediction_dimming = !matches!(value, "off" | "false" | "0");
         }
+        "allow-predictions" => {
+            app.allow_predictions = matches!(value, "on" | "true" | "1");
+        }
         "cursor-style" => {
             std::env::set_var("PSMUX_CURSOR_STYLE", value);
         }
@@ -534,6 +558,18 @@ pub(crate) fn apply_set_option(app: &mut AppState, option: &str, value: &str, _q
                 let expansion = value[pos + 1..].trim().to_string();
                 app.command_aliases.insert(alias, expansion);
             }
+        }
+        "warm" => {
+            app.warm_enabled = matches!(value, "on" | "true" | "1");
+            // When warm is disabled, kill any existing warm pane
+            if !app.warm_enabled {
+                if let Some(mut wp) = app.warm_pane.take() {
+                    wp.child.kill().ok();
+                }
+            }
+        }
+        "claude-code-fix-tty" => {
+            app.claude_code_fix_tty = matches!(value, "on" | "true" | "1");
         }
         "claude-code-force-interactive" => {
             app.claude_code_force_interactive = matches!(value, "on" | "true" | "1");

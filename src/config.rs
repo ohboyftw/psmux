@@ -293,14 +293,18 @@ pub fn parse_config_line(app: &mut AppState, line: &str) {
     } else if l.starts_with("if-shell ") || l.starts_with("if ") {
         parse_if_shell(app, l);
     } else if l.starts_with("set-hook ") {
-        // Parse set-hook: set-hook [-g] [-u] hook-name [command]
+        // Parse set-hook: set-hook [-g] [-a] [-u] hook-name [command]
         // -gu or -u: unset (remove) the hook for the given event
         let parts: Vec<&str> = l.split_whitespace().collect();
         let mut i = 1;
         let mut unset = false;
+        let mut append = false;
         while i < parts.len() && parts[i].starts_with('-') {
             if parts[i].contains('u') {
                 unset = true;
+            }
+            if parts[i].contains('a') {
+                append = true;
             }
             i += 1;
         }
@@ -328,9 +332,14 @@ pub fn parse_config_line(app: &mut AppState, line: &str) {
                     cmd
                 }
             };
-            // Replace (not append) to match tmux – prevents duplicates on
-            // config reload (issue #133).
-            app.hooks.insert(hook, vec![cmd]);
+            if append {
+                // -a/-ga: append to existing hook list (tmux multi-handler)
+                app.hooks.entry(hook).or_default().push(cmd);
+            } else {
+                // Replace (not append) to match tmux – prevents duplicates on
+                // config reload (issue #133).
+                app.hooks.insert(hook, vec![cmd]);
+            }
         }
     } else if l.starts_with("set-environment ") || l.starts_with("setenv ") {
         let parts: Vec<&str> = l.split_whitespace().collect();
@@ -722,6 +731,12 @@ pub fn parse_option_value(app: &mut AppState, rest: &str, _is_global: bool) {
         }
         "env-shim" => {
             app.env_shim = matches!(value, "on" | "true" | "1");
+        }
+        "allow-predictions" => {
+            app.allow_predictions = matches!(value, "on" | "true" | "1");
+        }
+        "claude-code-fix-tty" => {
+            app.claude_code_fix_tty = matches!(value, "on" | "true" | "1");
         }
         "claude-code-force-interactive" => {
             app.claude_code_force_interactive = matches!(value, "on" | "true" | "1");

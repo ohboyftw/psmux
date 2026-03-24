@@ -365,6 +365,9 @@ pub fn run_remote(
     let mut pane_title_buf = String::new();
     let mut command_input = false;
     let mut command_buf = String::new();
+    let mut command_cursor: usize = 0;
+    let mut command_history: Vec<String> = Vec::new();
+    let mut command_history_idx: usize = 0;
 
     let mut chooser = false; // local display-panes digit chooser overlay
     let mut choices: Vec<(usize, usize)> = Vec::new(); // (digit, pane_id) for chooser
@@ -453,6 +456,9 @@ pub fn run_remote(
     let mut srv_popup_height: u16 = 24;
     #[allow(unused_assignments)]
     let mut srv_popup_lines: Vec<String> = Vec::new();
+    #[allow(unused_assignments)]
+    let mut srv_popup_has_pty = false;
+    let mut srv_popup_scroll: u16 = 0;
     #[allow(unused_assignments)]
     let mut srv_confirm_active = false;
     #[allow(unused_assignments)]
@@ -627,6 +633,8 @@ pub fn run_remote(
         popup_height: Option<u16>,
         #[serde(default)]
         popup_lines: Vec<String>,
+        #[serde(default)]
+        popup_has_pty: bool,
         /// Confirm overlay active
         #[serde(default)]
         confirm_active: bool,
@@ -1078,75 +1086,108 @@ pub fn run_remote(
                         // When a server overlay is active, intercept ALL keys and
                         // forward them to the server via overlay-specific commands.
                         if srv_popup_active {
-                            match key.code {
-                                KeyCode::Esc => {
-                                    cmd_batch.push("overlay-close\n".into());
+                            if srv_popup_has_pty {
+                                // PTY popup: forward all keys to server
+                                match key.code {
+                                    KeyCode::Esc => {
+                                        cmd_batch.push("overlay-close\n".into());
+                                    }
+                                    KeyCode::Char(c) => {
+                                        let bytes = if key
+                                            .modifiers
+                                            .contains(crossterm::event::KeyModifiers::CONTROL)
+                                        {
+                                            vec![(c as u8) & 0x1F]
+                                        } else {
+                                            let mut buf = [0u8; 4];
+                                            let s = c.encode_utf8(&mut buf);
+                                            s.as_bytes().to_vec()
+                                        };
+                                        let encoded = crate::util::base64_encode(
+                                            std::str::from_utf8(&bytes).unwrap_or(""),
+                                        );
+                                        cmd_batch.push(format!("popup-input {}\n", encoded));
+                                    }
+                                    KeyCode::Enter => {
+                                        let encoded = crate::util::base64_encode("\r");
+                                        cmd_batch.push(format!("popup-input {}\n", encoded));
+                                    }
+                                    KeyCode::Backspace => {
+                                        let encoded = crate::util::base64_encode("\x7f");
+                                        cmd_batch.push(format!("popup-input {}\n", encoded));
+                                    }
+                                    KeyCode::Tab => {
+                                        let encoded = crate::util::base64_encode("\t");
+                                        cmd_batch.push(format!("popup-input {}\n", encoded));
+                                    }
+                                    KeyCode::Up => {
+                                        let encoded = crate::util::base64_encode("\x1b[A");
+                                        cmd_batch.push(format!("popup-input {}\n", encoded));
+                                    }
+                                    KeyCode::Down => {
+                                        let encoded = crate::util::base64_encode("\x1b[B");
+                                        cmd_batch.push(format!("popup-input {}\n", encoded));
+                                    }
+                                    KeyCode::Right => {
+                                        let encoded = crate::util::base64_encode("\x1b[C");
+                                        cmd_batch.push(format!("popup-input {}\n", encoded));
+                                    }
+                                    KeyCode::Left => {
+                                        let encoded = crate::util::base64_encode("\x1b[D");
+                                        cmd_batch.push(format!("popup-input {}\n", encoded));
+                                    }
+                                    KeyCode::Home => {
+                                        let encoded = crate::util::base64_encode("\x1b[H");
+                                        cmd_batch.push(format!("popup-input {}\n", encoded));
+                                    }
+                                    KeyCode::End => {
+                                        let encoded = crate::util::base64_encode("\x1b[F");
+                                        cmd_batch.push(format!("popup-input {}\n", encoded));
+                                    }
+                                    KeyCode::PageUp => {
+                                        let encoded = crate::util::base64_encode("\x1b[5~");
+                                        cmd_batch.push(format!("popup-input {}\n", encoded));
+                                    }
+                                    KeyCode::PageDown => {
+                                        let encoded = crate::util::base64_encode("\x1b[6~");
+                                        cmd_batch.push(format!("popup-input {}\n", encoded));
+                                    }
+                                    KeyCode::Delete => {
+                                        let encoded = crate::util::base64_encode("\x1b[3~");
+                                        cmd_batch.push(format!("popup-input {}\n", encoded));
+                                    }
+                                    _ => {}
                                 }
-                                KeyCode::Char(c) => {
-                                    let bytes = if key
-                                        .modifiers
-                                        .contains(crossterm::event::KeyModifiers::CONTROL)
-                                    {
-                                        vec![(c as u8) & 0x1F]
-                                    } else {
-                                        let mut buf = [0u8; 4];
-                                        let s = c.encode_utf8(&mut buf);
-                                        s.as_bytes().to_vec()
-                                    };
-                                    let encoded = crate::util::base64_encode(
-                                        std::str::from_utf8(&bytes).unwrap_or(""),
-                                    );
-                                    cmd_batch.push(format!("popup-input {}\n", encoded));
+                            } else {
+                                // Static (non-PTY) popup: handle scroll locally, q/Esc close
+                                let total_lines = srv_popup_lines.len() as u16;
+                                match key.code {
+                                    KeyCode::Esc | KeyCode::Char('q') => {
+                                        cmd_batch.push("overlay-close\n".into());
+                                        srv_popup_scroll = 0;
+                                    }
+                                    KeyCode::Up | KeyCode::Char('k') => {
+                                        srv_popup_scroll = srv_popup_scroll.saturating_sub(1);
+                                    }
+                                    KeyCode::Down | KeyCode::Char('j') => {
+                                        if srv_popup_scroll < total_lines.saturating_sub(1) {
+                                            srv_popup_scroll += 1;
+                                        }
+                                    }
+                                    KeyCode::PageUp => {
+                                        srv_popup_scroll = srv_popup_scroll.saturating_sub(10);
+                                    }
+                                    KeyCode::PageDown => {
+                                        srv_popup_scroll = (srv_popup_scroll + 10).min(total_lines.saturating_sub(1));
+                                    }
+                                    KeyCode::Home | KeyCode::Char('g') => {
+                                        srv_popup_scroll = 0;
+                                    }
+                                    KeyCode::End | KeyCode::Char('G') => {
+                                        srv_popup_scroll = total_lines.saturating_sub(1);
+                                    }
+                                    _ => {}
                                 }
-                                KeyCode::Enter => {
-                                    let encoded = crate::util::base64_encode("\r");
-                                    cmd_batch.push(format!("popup-input {}\n", encoded));
-                                }
-                                KeyCode::Backspace => {
-                                    let encoded = crate::util::base64_encode("\x7f");
-                                    cmd_batch.push(format!("popup-input {}\n", encoded));
-                                }
-                                KeyCode::Tab => {
-                                    let encoded = crate::util::base64_encode("\t");
-                                    cmd_batch.push(format!("popup-input {}\n", encoded));
-                                }
-                                KeyCode::Up => {
-                                    let encoded = crate::util::base64_encode("\x1b[A");
-                                    cmd_batch.push(format!("popup-input {}\n", encoded));
-                                }
-                                KeyCode::Down => {
-                                    let encoded = crate::util::base64_encode("\x1b[B");
-                                    cmd_batch.push(format!("popup-input {}\n", encoded));
-                                }
-                                KeyCode::Right => {
-                                    let encoded = crate::util::base64_encode("\x1b[C");
-                                    cmd_batch.push(format!("popup-input {}\n", encoded));
-                                }
-                                KeyCode::Left => {
-                                    let encoded = crate::util::base64_encode("\x1b[D");
-                                    cmd_batch.push(format!("popup-input {}\n", encoded));
-                                }
-                                KeyCode::Home => {
-                                    let encoded = crate::util::base64_encode("\x1b[H");
-                                    cmd_batch.push(format!("popup-input {}\n", encoded));
-                                }
-                                KeyCode::End => {
-                                    let encoded = crate::util::base64_encode("\x1b[F");
-                                    cmd_batch.push(format!("popup-input {}\n", encoded));
-                                }
-                                KeyCode::PageUp => {
-                                    let encoded = crate::util::base64_encode("\x1b[5~");
-                                    cmd_batch.push(format!("popup-input {}\n", encoded));
-                                }
-                                KeyCode::PageDown => {
-                                    let encoded = crate::util::base64_encode("\x1b[6~");
-                                    cmd_batch.push(format!("popup-input {}\n", encoded));
-                                }
-                                KeyCode::Delete => {
-                                    let encoded = crate::util::base64_encode("\x1b[3~");
-                                    cmd_batch.push(format!("popup-input {}\n", encoded));
-                                }
-                                _ => {}
                             }
                         } else if srv_confirm_active {
                             match key.code {
@@ -1217,6 +1258,7 @@ pub fn run_remote(
                                 || keys_viewer)
                         {
                             command_input = false;
+                            command_cursor = 0;
                             renaming = false;
                             pane_renaming = false;
                             tree_chooser = false;
@@ -1433,6 +1475,8 @@ pub fn run_remote(
                                     KeyCode::Char(':') => {
                                         command_input = true;
                                         command_buf.clear();
+                                        command_cursor = 0;
+                                        command_history_idx = command_history.len();
                                     }
                                     KeyCode::Char('w') => {
                                         tree_chooser = true;
@@ -1961,7 +2005,8 @@ pub fn run_remote(
                                     if command_input
                                         && !key.modifiers.contains(KeyModifiers::CONTROL) =>
                                 {
-                                    command_buf.push(c);
+                                    command_buf.insert(command_cursor, c);
+                                    command_cursor += 1;
                                 }
                                 KeyCode::Backspace if renaming => {
                                     let _ = rename_buf.pop();
@@ -1970,7 +2015,10 @@ pub fn run_remote(
                                     let _ = pane_title_buf.pop();
                                 }
                                 KeyCode::Backspace if command_input => {
-                                    let _ = command_buf.pop();
+                                    if command_cursor > 0 {
+                                        command_buf.remove(command_cursor - 1);
+                                        command_cursor -= 1;
+                                    }
                                 }
                                 KeyCode::Enter if renaming => {
                                     if session_renaming {
@@ -1997,9 +2045,12 @@ pub fn run_remote(
                                 KeyCode::Enter if command_input => {
                                     let trimmed = command_buf.trim().to_string();
                                     if !trimmed.is_empty() {
+                                        command_history.push(trimmed.clone());
+                                        command_history_idx = command_history.len();
                                         cmd_batch.push(format!("{}\n", trimmed));
                                     }
                                     command_input = false;
+                                    command_cursor = 0;
                                 }
                                 KeyCode::Esc if renaming => {
                                     renaming = false;
@@ -2010,7 +2061,93 @@ pub fn run_remote(
                                 }
                                 KeyCode::Esc if command_input => {
                                     command_input = false;
+                                    command_cursor = 0;
                                 }
+
+                                // Command prompt: cursor movement, history, and editing keys
+                                KeyCode::Left if command_input => {
+                                    command_cursor = command_cursor.saturating_sub(1);
+                                }
+                                KeyCode::Right if command_input => {
+                                    if command_cursor < command_buf.len() {
+                                        command_cursor += 1;
+                                    }
+                                }
+                                KeyCode::Home if command_input => {
+                                    command_cursor = 0;
+                                }
+                                KeyCode::End if command_input => {
+                                    command_cursor = command_buf.len();
+                                }
+                                KeyCode::Delete if command_input => {
+                                    if command_cursor < command_buf.len() {
+                                        command_buf.remove(command_cursor);
+                                    }
+                                }
+                                KeyCode::Up if command_input => {
+                                    if command_history_idx > 0 {
+                                        command_history_idx -= 1;
+                                        command_buf =
+                                            command_history[command_history_idx].clone();
+                                        command_cursor = command_buf.len();
+                                    }
+                                }
+                                KeyCode::Down if command_input => {
+                                    if command_history_idx < command_history.len() {
+                                        command_history_idx += 1;
+                                        command_buf =
+                                            if command_history_idx < command_history.len() {
+                                                command_history[command_history_idx].clone()
+                                            } else {
+                                                String::new()
+                                            };
+                                        command_cursor = command_buf.len();
+                                    }
+                                }
+                                KeyCode::Char('a')
+                                    if command_input
+                                        && key.modifiers.contains(KeyModifiers::CONTROL) =>
+                                {
+                                    command_cursor = 0;
+                                }
+                                KeyCode::Char('e')
+                                    if command_input
+                                        && key.modifiers.contains(KeyModifiers::CONTROL) =>
+                                {
+                                    command_cursor = command_buf.len();
+                                }
+                                KeyCode::Char('u')
+                                    if command_input
+                                        && key.modifiers.contains(KeyModifiers::CONTROL) =>
+                                {
+                                    command_buf.drain(..command_cursor);
+                                    command_cursor = 0;
+                                }
+                                KeyCode::Char('k')
+                                    if command_input
+                                        && key.modifiers.contains(KeyModifiers::CONTROL) =>
+                                {
+                                    command_buf.truncate(command_cursor);
+                                }
+                                KeyCode::Char('w')
+                                    if command_input
+                                        && key.modifiers.contains(KeyModifiers::CONTROL) =>
+                                {
+                                    let mut pos = command_cursor;
+                                    while pos > 0
+                                        && command_buf.as_bytes().get(pos - 1) == Some(&b' ')
+                                    {
+                                        pos -= 1;
+                                    }
+                                    while pos > 0
+                                        && command_buf.as_bytes().get(pos - 1) != Some(&b' ')
+                                    {
+                                        pos -= 1;
+                                    }
+                                    command_buf.drain(pos..command_cursor);
+                                    command_cursor = pos;
+                                }
+
                                 KeyCode::Char(d) if chooser && d.is_ascii_digit() => {
                                     let raw = d.to_digit(10).unwrap() as usize;
                                     let choice = if raw == 0 { 10 } else { raw };
@@ -2652,6 +2789,11 @@ pub fn run_remote(
         srv_popup_width = state.popup_width.unwrap_or(80);
         srv_popup_height = state.popup_height.unwrap_or(24);
         srv_popup_lines = state.popup_lines;
+        let new_popup_has_pty = state.popup_has_pty;
+        if !srv_popup_active || new_popup_has_pty != srv_popup_has_pty {
+            srv_popup_scroll = 0;
+        }
+        srv_popup_has_pty = new_popup_has_pty;
         srv_confirm_active = state.confirm_active;
         srv_confirm_prompt = state.confirm_prompt.unwrap_or_default();
         srv_menu_active = state.menu_active;
@@ -3011,11 +3153,17 @@ pub fn run_remote(
                                     if cell.underline { style = style.add_modifier(Modifier::UNDERLINED); }
                                     let text: &str = if cell.text.is_empty() { " " } else { &cell.text };
                                     let char_width = unicode_width::UnicodeWidthStr::width(text) as u16;
-                                    spans.push(Span::styled(text, style));
-                                    if char_width >= 2 {
-                                        c += 2;
-                                    } else {
+                                    if char_width >= 2 && c + char_width > max_c {
+                                        // Wide char at boundary would overflow
+                                        spans.push(Span::styled(" ", style));
                                         c += 1;
+                                    } else {
+                                        spans.push(Span::styled(text, style));
+                                        if char_width >= 2 {
+                                            c += 2;
+                                        } else {
+                                            c += 1;
+                                        }
                                     }
                                 }
                                 // Pad remaining columns so the Line fills the
@@ -3056,8 +3204,26 @@ pub fn run_remote(
                                     if run.flags & 32 != 0 { style = style.add_modifier(Modifier::SLOW_BLINK); }
                                     if run.flags & 64 != 0 { style = style.add_modifier(Modifier::HIDDEN); }
                                     let text: &str = if run.text.is_empty() { " " } else { &run.text };
-                                    spans.push(Span::styled(text, style));
-                                    c = c.saturating_add(run.width.max(1));
+                                    // Truncate run text if it extends past the pane width
+                                    let run_w = run.width.max(1);
+                                    if c + run_w > inner.width {
+                                        let avail = (inner.width - c) as usize;
+                                        let mut truncated = String::new();
+                                        let mut used = 0usize;
+                                        for ch in text.chars() {
+                                            let cw = unicode_width::UnicodeWidthChar::width(ch).unwrap_or(1);
+                                            if used + cw > avail { break; }
+                                            used += cw;
+                                            truncated.push(ch);
+                                        }
+                                        if !truncated.is_empty() {
+                                            spans.push(Span::styled(truncated, style));
+                                        }
+                                        c = inner.width;
+                                    } else {
+                                        spans.push(Span::styled(text, style));
+                                        c = c.saturating_add(run_w);
+                                    }
                                 }
                                 // Pad remaining columns with the last run's bg
                                 // so every Line fills the full pane width.
@@ -3442,7 +3608,7 @@ pub fn run_remote(
                 client_log("status", &format!("parsing left_prefix ({} chars): [{}]",
                     left_prefix.len(), left_prefix.chars().take(100).collect::<String>()));
             }
-            let left_spans: Vec<Span> = crate::rendering::parse_inline_styles(&left_prefix, sb_base);
+            let mut left_spans: Vec<Span> = crate::rendering::parse_inline_styles(&left_prefix, sb_base);
 
             // Window tabs (the window list)
             let mut tab_spans_all: Vec<Span> = Vec::new();
@@ -3495,7 +3661,11 @@ pub fn run_remote(
                 client_log("status", &format!("parsing right_text ({} chars): [{}]",
                     right_text.len(), right_text.chars().take(100).collect::<String>()));
             }
-            let right_spans = crate::rendering::parse_inline_styles(&right_text, sb_base);
+            let mut right_spans = crate::rendering::parse_inline_styles(&right_text, sb_base);
+
+            // Enforce status-left-length / status-right-length truncation (tmux parity)
+            crate::style::truncate_spans_to_width(&mut left_spans, state.status_left_length);
+            crate::style::truncate_spans_to_width(&mut right_spans, state.status_right_length);
 
             // Measure widths using Unicode display width
             let left_w: usize = left_spans.iter().map(|s| UnicodeWidthStr::width(s.content.as_ref())).sum();
@@ -3549,6 +3719,8 @@ pub fn run_remote(
                     status_spans.extend(right_spans);
                 }
             }
+            // Truncate overall status line to fit the available width
+            crate::style::truncate_spans_to_width(&mut status_spans, total_width);
             // If a display-message is active, show it on the status bar
             // instead of the normal status content (tmux parity).
             // Uses message-style (default: bg=yellow,fg=black) matching tmux.
@@ -3607,8 +3779,12 @@ pub fn run_remote(
                 let oa = centered_rect(60, 3, content_chunk);
                 f.render_widget(Clear, oa);
                 f.render_widget(&overlay, oa);
+                let inner = overlay.inner(oa);
                 let para = Paragraph::new(format!(": {}", command_buf));
-                f.render_widget(para, overlay.inner(oa));
+                f.render_widget(para, inner);
+                // Show cursor at the correct position within the prompt
+                let cx = inner.x + 2 + command_cursor as u16; // +2 for ": "
+                f.set_cursor_position((cx, inner.y));
             }
             if let Some(ref cmd) = confirm_cmd {
                 let overlay = Block::default().borders(Borders::ALL).title("confirm");
@@ -3638,7 +3814,7 @@ pub fn run_remote(
                 for line_str in &srv_popup_lines {
                     lines.push(Line::from(line_str.clone()));
                 }
-                let para = Paragraph::new(Text::from(lines)).block(block);
+                let para = Paragraph::new(Text::from(lines)).block(block).scroll((srv_popup_scroll, 0));
                 f.render_widget(Clear, popup_area);
                 f.render_widget(para, popup_area);
             }

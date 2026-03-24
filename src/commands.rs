@@ -14,7 +14,7 @@ use crate::window_ops::toggle_zoom;
 fn show_output_popup(app: &mut AppState, title: &str, output: String) {
     let lines: Vec<&str> = output.lines().collect();
     let width = lines.iter().map(|l| l.len()).max().unwrap_or(40).max(20) as u16 + 4;
-    let height = (lines.len() as u16 + 2).clamp(5, 40);
+    let height = (lines.len() as u16 + 2).max(5);
     app.mode = Mode::PopupMode {
         command: title.to_string(),
         output,
@@ -23,6 +23,7 @@ fn show_output_popup(app: &mut AppState, title: &str, output: String) {
         height,
         close_on_exit: false,
         popup_pty: None,
+        scroll_offset: 0,
     };
 }
 
@@ -80,8 +81,12 @@ fn generate_list_clients(app: &AppState) -> String {
 fn generate_show_hooks(app: &AppState) -> String {
     let mut output = String::new();
     for (name, commands) in &app.hooks {
-        for cmd in commands {
-            output.push_str(&format!("{} -> {}\n", name, cmd));
+        if commands.len() == 1 {
+            output.push_str(&format!("{} -> {}\n", name, commands[0]));
+        } else {
+            for (i, cmd) in commands.iter().enumerate() {
+                output.push_str(&format!("{}[{}] -> {}\n", name, i, cmd));
+            }
         }
     }
     if output.is_empty() {
@@ -180,26 +185,75 @@ pub fn parse_command_to_action(cmd: &str) -> Option<Action> {
         "rotate-window" | "rotatew" => Some(Action::Command(cmd.to_string())),
         "break-pane" | "breakp" => Some(Action::Command(cmd.to_string())),
         "respawn-pane" | "respawnp" => Some(Action::Command(cmd.to_string())),
+        "respawn-window" | "respawnw" => Some(Action::Command(cmd.to_string())),
         "kill-window" | "killw" => Some(Action::Command(cmd.to_string())),
-        "kill-session" => Some(Action::Command(cmd.to_string())),
+        "kill-session" | "kill-ses" => Some(Action::Command(cmd.to_string())),
+        "kill-server" => Some(Action::Command(cmd.to_string())),
         "select-window" | "selectw" => Some(Action::Command(cmd.to_string())),
         "toggle-sync" => Some(Action::Command("toggle-sync".to_string())),
-        "send-keys" => Some(Action::Command(cmd.to_string())),
+        "send-keys" | "send" => Some(Action::Command(cmd.to_string())),
+        "send-prefix" => Some(Action::Command(cmd.to_string())),
         "set-option" | "set" | "setw" | "set-window-option" => {
+            Some(Action::Command(cmd.to_string()))
+        }
+        "show-options" | "show" | "show-window-options" | "showw" => {
             Some(Action::Command(cmd.to_string()))
         }
         "source-file" | "source" => Some(Action::Command(cmd.to_string())),
         "select-layout" | "selectl" => Some(Action::Command(cmd.to_string())),
-        "next-layout" => Some(Action::Command("next-layout".to_string())),
+        "next-layout" | "nextl" => Some(Action::Command("next-layout".to_string())),
+        "previous-layout" | "prevl" => Some(Action::Command("previous-layout".to_string())),
         "confirm-before" | "confirm" => Some(Action::Command(cmd.to_string())),
         "display-menu" | "menu" => Some(Action::Command(cmd.to_string())),
         "display-popup" | "popup" => Some(Action::Command(cmd.to_string())),
+        "display-message" | "display" => Some(Action::Command(cmd.to_string())),
         "pipe-pane" | "pipep" => Some(Action::Command(cmd.to_string())),
         "rename-session" | "rename" => Some(Action::Command(cmd.to_string())),
-        "clear-history" => Some(Action::Command("clear-history".to_string())),
+        "clear-history" | "clearhist" => Some(Action::Command("clear-history".to_string())),
         "set-buffer" | "setb" => Some(Action::Command(cmd.to_string())),
         "delete-buffer" | "deleteb" => Some(Action::Command("delete-buffer".to_string())),
-        "display-message" | "display" => Some(Action::Command(cmd.to_string())),
+        "list-buffers" | "lsb" => Some(Action::Command(cmd.to_string())),
+        "show-buffer" | "showb" => Some(Action::Command(cmd.to_string())),
+        "choose-buffer" | "chooseb" => Some(Action::Command(cmd.to_string())),
+        "load-buffer" | "loadb" => Some(Action::Command(cmd.to_string())),
+        "save-buffer" | "saveb" => Some(Action::Command(cmd.to_string())),
+        "capture-pane" | "capturep" => Some(Action::Command(cmd.to_string())),
+        "list-windows" | "lsw" => Some(Action::Command(cmd.to_string())),
+        "list-panes" | "lsp" => Some(Action::Command(cmd.to_string())),
+        "list-clients" | "lsc" => Some(Action::Command(cmd.to_string())),
+        "list-commands" | "lscm" => Some(Action::Command(cmd.to_string())),
+        "list-keys" | "lsk" => Some(Action::Command(cmd.to_string())),
+        "list-sessions" | "ls" => Some(Action::Command(cmd.to_string())),
+        "show-hooks" => Some(Action::Command(cmd.to_string())),
+        "show-messages" | "showmsgs" => Some(Action::Command(cmd.to_string())),
+        "clock-mode" => Some(Action::Command(cmd.to_string())),
+        "command-prompt" => Some(Action::Command(cmd.to_string())),
+        "has-session" | "has" => Some(Action::Command(cmd.to_string())),
+        "move-window" | "movew" => Some(Action::Command(cmd.to_string())),
+        "swap-window" | "swapw" => Some(Action::Command(cmd.to_string())),
+        "link-window" | "linkw" => Some(Action::Command(cmd.to_string())),
+        "unlink-window" | "unlinkw" => Some(Action::Command(cmd.to_string())),
+        "find-window" | "findw" => Some(Action::Command(cmd.to_string())),
+        "move-pane" | "movep" => Some(Action::Command(cmd.to_string())),
+        "join-pane" | "joinp" => Some(Action::Command(cmd.to_string())),
+        "resize-window" | "resizew" => Some(Action::Command(cmd.to_string())),
+        "run-shell" | "run" => Some(Action::Command(cmd.to_string())),
+        "if-shell" | "if" => Some(Action::Command(cmd.to_string())),
+        "wait-for" | "wait" => Some(Action::Command(cmd.to_string())),
+        "set-environment" | "setenv" => Some(Action::Command(cmd.to_string())),
+        "show-environment" | "showenv" => Some(Action::Command(cmd.to_string())),
+        "set-hook" => Some(Action::Command(cmd.to_string())),
+        "bind-key" | "bind" => Some(Action::Command(cmd.to_string())),
+        "unbind-key" | "unbind" => Some(Action::Command(cmd.to_string())),
+        "attach-session" | "attach" | "a" | "at" => Some(Action::Command(cmd.to_string())),
+        "new-session" | "new" => Some(Action::Command(cmd.to_string())),
+        "server-info" | "info" => Some(Action::Command(cmd.to_string())),
+        "start-server" | "start" => Some(Action::Command(cmd.to_string())),
+        "lock-client" | "lockc" => Some(Action::Command(cmd.to_string())),
+        "lock-server" | "lock" => Some(Action::Command(cmd.to_string())),
+        "lock-session" | "locks" => Some(Action::Command(cmd.to_string())),
+        "refresh-client" | "refresh" => Some(Action::Command(cmd.to_string())),
+        "suspend-client" | "suspendc" => Some(Action::Command(cmd.to_string())),
         "switch-client" | "switchc" => {
             // Check for -T flag to switch key table
             if let Some(pos) = parts.iter().position(|p| *p == "-T") {
@@ -486,11 +540,14 @@ pub fn execute_command_prompt(app: &mut AppState) -> io::Result<()> {
         return Ok(());
     }
     match parts[0] {
-        "new-window" => {
+        // Commands that need local (embedded-mode) handling.
+        // In server mode the client sends these via TCP directly, so
+        // execute_command_prompt() is only reached in embedded mode.
+        "new-window" | "neww" => {
             let pty_system = portable_pty::native_pty_system();
             create_window(&*pty_system, app, None, None, None)?;
         }
-        "split-window" => {
+        "split-window" | "splitw" => {
             let kind = if parts.contains(&"-h") {
                 LayoutKind::Horizontal
             } else {
@@ -498,21 +555,21 @@ pub fn execute_command_prompt(app: &mut AppState) -> io::Result<()> {
             };
             split_active(app, kind)?;
         }
-        "kill-pane" => {
+        "kill-pane" | "killp" => {
             kill_active_pane(app)?;
         }
-        "capture-pane" => {
+        "capture-pane" | "capturep" => {
             capture_active_pane(app)?;
         }
-        "save-buffer" => {
+        "save-buffer" | "saveb" => {
             if let Some(file) = parts.get(1) {
                 save_latest_buffer(app, file)?;
             }
         }
-        "list-sessions" => {
+        "list-sessions" | "ls" => {
             println!("default");
         }
-        "attach-session" => {}
+        "attach-session" | "attach" | "a" | "at" => {}
         "list-windows" | "lsw" => {
             let output = generate_list_windows(app);
             show_output_popup(app, "list-windows", output);
@@ -559,12 +616,7 @@ pub fn execute_command_prompt(app: &mut AppState) -> io::Result<()> {
             }
         }
         _ => {
-            // Apply config change locally (client-side state) and also
-            // forward to the server so it takes effect for pane spawning.
-            crate::config::parse_config_line(app, &cmdline);
-            if let Some(port) = app.control_port {
-                let _ = send_control_to_port(port, &format!("{}\n", cmdline), &app.session_key);
-            }
+            execute_command_string(app, &cmdline)?;
         }
     }
     Ok(())
@@ -897,6 +949,7 @@ pub fn execute_command_string(app: &mut AppState, cmd: &str) -> io::Result<()> {
                 height,
                 close_on_exit,
                 popup_pty: pty_result,
+                scroll_offset: 0,
             };
         }
         "resize-pane" | "resizep" => {
@@ -960,7 +1013,7 @@ pub fn execute_command_string(app: &mut AppState, cmd: &str) -> io::Result<()> {
                 let _ = send_control_to_port(port, &format!("{}\n", cmd), &app.session_key);
             }
         }
-        "send-keys" => {
+        "send-keys" | "send" => {
             if let Some(port) = app.control_port {
                 let _ = send_control_to_port(port, &format!("{}\n", cmd), &app.session_key);
             }
@@ -988,7 +1041,7 @@ pub fn execute_command_string(app: &mut AppState, cmd: &str) -> io::Result<()> {
                 let _ = send_control_to_port(port, &format!("{}\n", cmd), &app.session_key);
             }
         }
-        "choose-tree" | "choose-window" => {
+        "choose-tree" | "choose-window" | "choose-session" => {
             let tree = build_choose_tree(app);
             let selected = tree
                 .iter()
@@ -1011,7 +1064,7 @@ pub fn execute_command_string(app: &mut AppState, cmd: &str) -> io::Result<()> {
         "paste-buffer" | "pasteb" => {
             paste_latest(app)?;
         }
-        "set-buffer" => {
+        "set-buffer" | "setb" => {
             if let Some(text) = parts.get(1) {
                 app.paste_buffers.insert(0, text.to_string());
                 if app.paste_buffers.len() > 10 {
@@ -1019,20 +1072,214 @@ pub fn execute_command_string(app: &mut AppState, cmd: &str) -> io::Result<()> {
                 }
             }
         }
-        "delete-buffer" => {
+        "delete-buffer" | "deleteb" => {
             if !app.paste_buffers.is_empty() {
                 app.paste_buffers.remove(0);
             }
         }
-        "clear-history" => {
+        "list-buffers" | "lsb" => {
+            let mut output = String::new();
+            for (i, buf) in app.paste_buffers.iter().enumerate() {
+                output.push_str(&format!("buffer{}: {} bytes: \"{}\"\n", i,
+                    buf.len(), &buf.chars().take(50).collect::<String>()));
+            }
+            if output.is_empty() { output.push_str("(no buffers)\n"); }
+            show_output_popup(app, "list-buffers", output);
+        }
+        "show-buffer" | "showb" => {
+            if let Some(buf) = app.paste_buffers.first() {
+                show_output_popup(app, "show-buffer", buf.clone());
+            }
+        }
+        "choose-buffer" | "chooseb" => {
+            // Enter buffer chooser mode
+            app.mode = Mode::BufferChooser { selected: 0 };
+        }
+        "clear-history" | "clearhist" => {
             if let Some(port) = app.control_port {
                 let _ = send_control_to_port(port, "clear-history\n", &app.session_key);
             }
         }
-        "kill-session" => {
+        "kill-session" | "kill-ses" => {
             if let Some(port) = app.control_port {
                 let _ = send_control_to_port(port, "kill-session\n", &app.session_key);
             }
+        }
+        "kill-server" => {
+            if let Some(port) = app.control_port {
+                let _ = send_control_to_port(port, "kill-server\n", &app.session_key);
+            }
+        }
+        "has-session" | "has" => {
+            // In embedded mode we ARE the session; always succeeds
+        }
+        "capture-pane" | "capturep" => {
+            capture_active_pane(app)?;
+        }
+        "save-buffer" | "saveb" => {
+            if let Some(file) = parts.get(1) {
+                save_latest_buffer(app, file)?;
+            }
+        }
+        "load-buffer" | "loadb" => {
+            if let Some(path) = parts.get(1) {
+                if let Ok(data) = std::fs::read_to_string(path) {
+                    app.paste_buffers.insert(0, data);
+                    if app.paste_buffers.len() > 10 { app.paste_buffers.pop(); }
+                }
+            }
+        }
+        "clock-mode" => {
+            app.mode = Mode::ClockMode;
+        }
+        "list-sessions" | "ls" => {
+            // Show all sessions from filesystem
+            let output = crate::session::list_session_names().join("\n") + "\n";
+            show_output_popup(app, "list-sessions", output);
+        }
+        "list-keys" | "lsk" => {
+            let mut output = String::new();
+            for (table_name, binds) in &app.key_tables {
+                for bind in binds {
+                    let key_str = crate::config::format_key_binding(&bind.key);
+                    let cmd_str = format_action(&bind.action);
+                    output.push_str(&format!("bind-key -T {} {} {}\n", table_name, key_str, cmd_str));
+                }
+            }
+            if output.is_empty() { output.push_str("(no bindings)\n"); }
+            show_output_popup(app, "list-keys", output);
+        }
+        "show-options" | "show" | "show-window-options" | "showw" => {
+            if let Some(port) = app.control_port {
+                let _ = send_control_to_port(port, &format!("{}\n", cmd), &app.session_key);
+            }
+        }
+        "display-message" | "display" => {
+            if let Some(port) = app.control_port {
+                let _ = send_control_to_port(port, &format!("{}\n", cmd), &app.session_key);
+            }
+        }
+        "show-messages" | "showmsgs" => {
+            if let Some(port) = app.control_port {
+                let _ = send_control_to_port(port, &format!("{}\n", cmd), &app.session_key);
+            }
+        }
+        "set-environment" | "setenv" => {
+            if let Some(port) = app.control_port {
+                let _ = send_control_to_port(port, &format!("{}\n", cmd), &app.session_key);
+            }
+        }
+        "show-environment" | "showenv" => {
+            if let Some(port) = app.control_port {
+                let _ = send_control_to_port(port, &format!("{}\n", cmd), &app.session_key);
+            }
+        }
+        "set-hook" => {
+            if let Some(port) = app.control_port {
+                let _ = send_control_to_port(port, &format!("{}\n", cmd), &app.session_key);
+            }
+        }
+        "send-prefix" => {
+            if let Some(port) = app.control_port {
+                let _ = send_control_to_port(port, "send-prefix\n", &app.session_key);
+            }
+        }
+        "if-shell" | "if" => {
+            if let Some(port) = app.control_port {
+                let _ = send_control_to_port(port, &format!("{}\n", cmd), &app.session_key);
+            }
+        }
+        "wait-for" | "wait" => {
+            if let Some(port) = app.control_port {
+                let _ = send_control_to_port(port, &format!("{}\n", cmd), &app.session_key);
+            }
+        }
+        "find-window" | "findw" => {
+            if let Some(port) = app.control_port {
+                let _ = send_control_to_port(port, &format!("{}\n", cmd), &app.session_key);
+            }
+        }
+        "move-window" | "movew" => {
+            if let Some(port) = app.control_port {
+                let _ = send_control_to_port(port, &format!("{}\n", cmd), &app.session_key);
+            }
+        }
+        "swap-window" | "swapw" => {
+            if let Some(port) = app.control_port {
+                let _ = send_control_to_port(port, &format!("{}\n", cmd), &app.session_key);
+            }
+        }
+        "link-window" | "linkw" => {
+            if let Some(port) = app.control_port {
+                let _ = send_control_to_port(port, &format!("{}\n", cmd), &app.session_key);
+            }
+        }
+        "unlink-window" | "unlinkw" => {
+            if let Some(port) = app.control_port {
+                let _ = send_control_to_port(port, &format!("{}\n", cmd), &app.session_key);
+            }
+        }
+        "move-pane" | "movep" => {
+            if let Some(port) = app.control_port {
+                let _ = send_control_to_port(port, &format!("{}\n", cmd), &app.session_key);
+            }
+        }
+        "join-pane" | "joinp" => {
+            if let Some(port) = app.control_port {
+                let _ = send_control_to_port(port, &format!("{}\n", cmd), &app.session_key);
+            }
+        }
+        "resize-window" | "resizew" => {
+            if let Some(port) = app.control_port {
+                let _ = send_control_to_port(port, &format!("{}\n", cmd), &app.session_key);
+            }
+        }
+        "respawn-window" | "respawnw" => {
+            if let Some(port) = app.control_port {
+                let _ = send_control_to_port(port, &format!("{}\n", cmd), &app.session_key);
+            }
+        }
+        "previous-layout" | "prevl" => {
+            if let Some(port) = app.control_port {
+                let _ = send_control_to_port(port, "previous-layout\n", &app.session_key);
+            }
+        }
+        "attach-session" | "attach" | "a" | "at" => {
+            // Already attached in a running session; no-op
+        }
+        "start-server" | "start" => {
+            // Already running
+        }
+        "server-info" | "info" => {
+            if let Some(port) = app.control_port {
+                let _ = send_control_to_port(port, "server-info\n", &app.session_key);
+            }
+        }
+        "new-session" | "new" => {
+            // Cannot create a session from inside a session; show feedback
+            show_output_popup(app, "new-session", "(cannot create a new session from inside a session)\n".to_string());
+        }
+        "lock-client" | "lockc" | "lock-server" | "lock" | "lock-session" | "locks" => {
+            if let Some(port) = app.control_port {
+                let _ = send_control_to_port(port, "lock-server\n", &app.session_key);
+            }
+        }
+        "refresh-client" | "refresh" => {
+            // Trigger a redraw; no explicit action needed in embedded mode
+            if let Some(port) = app.control_port {
+                let _ = send_control_to_port(port, "refresh-client\n", &app.session_key);
+            }
+        }
+        "suspend-client" | "suspendc" => {
+            if let Some(port) = app.control_port {
+                let _ = send_control_to_port(port, "suspend-client\n", &app.session_key);
+            }
+        }
+        "choose-client" => {
+            // Single-client model; no-op
+        }
+        "customize-mode" => {
+            // tmux 3.2+ customize-mode; stub for compatibility
         }
         "run-shell" | "run" => {
             // Parse with quote-aware parser to handle nested quotes properly
@@ -1098,105 +1345,10 @@ pub fn execute_command_string(app: &mut AppState, cmd: &str) -> io::Result<()> {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
+#[path = "../tests-rs/test_commands.rs"]
+mod tests;
 
-    fn mock_app() -> AppState {
-        let mut app = AppState::new("test_session".to_string());
-        app.window_base_index = 0;
-        app.pane_base_index = 0;
-        app
-    }
 
-    #[test]
-    fn test_generate_list_clients() {
-        let mut app = mock_app();
-        // Need at least one window for list-clients
-        let win = crate::types::Window {
-            root: Node::Split {
-                kind: LayoutKind::Horizontal,
-                sizes: vec![],
-                children: vec![],
-            },
-            active_path: vec![],
-            name: "shell".to_string(),
-            id: 0,
-            activity_flag: false,
-            bell_flag: false,
-            silence_flag: false,
-            last_output_time: std::time::Instant::now(),
-            last_seen_version: 0,
-            manual_rename: false,
-            layout_index: 0,
-            pane_mru: vec![],
-            zoom_saved: None,
-        };
-        app.windows.push(win);
-        let output = generate_list_clients(&app);
-        assert!(
-            output.contains("test_session"),
-            "should contain session name"
-        );
-        assert!(output.contains("(utf8)"), "should contain encoding");
-        assert!(output.contains("shell"), "should contain window name");
-    }
-
-    #[test]
-    fn test_generate_show_hooks_empty() {
-        let app = mock_app();
-        let output = generate_show_hooks(&app);
-        assert_eq!(output, "(no hooks)\n");
-    }
-
-    #[test]
-    fn test_generate_show_hooks_with_hooks() {
-        let mut app = mock_app();
-        app.hooks.insert(
-            "after-new-window".to_string(),
-            vec!["run-shell 'echo hello'".to_string()],
-        );
-        let output = generate_show_hooks(&app);
-        assert!(
-            output.contains("after-new-window"),
-            "should contain hook name"
-        );
-        assert!(output.contains("run-shell"), "should contain hook command");
-    }
-
-    #[test]
-    fn test_generate_list_commands() {
-        let output = generate_list_commands();
-        assert!(
-            output.contains("list-windows"),
-            "should list list-windows command"
-        );
-        assert!(
-            output.contains("show-hooks"),
-            "should list show-hooks command"
-        );
-        assert!(
-            output.contains("list-commands"),
-            "should list list-commands command"
-        );
-        assert!(
-            output.contains("list-clients"),
-            "should list list-clients command"
-        );
-    }
-
-    #[test]
-    fn test_show_output_popup_sets_mode() {
-        let mut app = mock_app();
-        show_output_popup(&mut app, "test-cmd", "line1\nline2\nline3".to_string());
-        match &app.mode {
-            Mode::PopupMode {
-                command, output, ..
-            } => {
-                assert_eq!(command, "test-cmd");
-                assert!(output.contains("line1"));
-                assert!(output.contains("line3"));
-            }
-            _ => panic!("expected PopupMode"),
-        }
-    }
-}
+#[cfg(test)]
+#[path = "../tests-rs/test_commands_new.rs"]
+mod tests_new_commands;

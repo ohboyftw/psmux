@@ -51,6 +51,61 @@ fn set_hook_unset_with_u_flag() {
     assert!(!app.hooks.contains_key("client-attached"), "hook should be removed by -u");
 }
 
+// ── Hook -ga (append) tests (issue #133 follow-up) ─────────────
+
+#[test]
+fn set_hook_ga_appends_to_existing() {
+    let mut app = AppState::new("test".to_string());
+    crate::config::parse_config_line(&mut app, "set-hook -g client-attached 'display-message first'");
+    crate::config::parse_config_line(&mut app, "set-hook -ga client-attached 'display-message second'");
+    let cmds = app.hooks.get("client-attached").unwrap();
+    assert_eq!(cmds.len(), 2, "-ga should append, giving 2 handlers");
+    assert_eq!(cmds[0], "display-message first");
+    assert_eq!(cmds[1], "display-message second");
+}
+
+#[test]
+fn set_hook_ga_creates_if_missing() {
+    let mut app = AppState::new("test".to_string());
+    crate::config::parse_config_line(&mut app, "set-hook -ga client-attached 'display-message only'");
+    let cmds = app.hooks.get("client-attached").unwrap();
+    assert_eq!(cmds.len(), 1, "-ga on missing hook should create it");
+    assert_eq!(cmds[0], "display-message only");
+}
+
+#[test]
+fn set_hook_g_replaces_appended_hooks() {
+    let mut app = AppState::new("test".to_string());
+    crate::config::parse_config_line(&mut app, "set-hook -g client-attached 'cmd-a'");
+    crate::config::parse_config_line(&mut app, "set-hook -ga client-attached 'cmd-b'");
+    crate::config::parse_config_line(&mut app, "set-hook -ga client-attached 'cmd-c'");
+    assert_eq!(app.hooks["client-attached"].len(), 3);
+    // Now -g (without -a) should replace all of them
+    crate::config::parse_config_line(&mut app, "set-hook -g client-attached 'cmd-new'");
+    let cmds = app.hooks.get("client-attached").unwrap();
+    assert_eq!(cmds.len(), 1, "-g should replace entire list");
+    assert_eq!(cmds[0], "cmd-new");
+}
+
+#[test]
+fn set_hook_gu_removes_all_appended_hooks() {
+    let mut app = AppState::new("test".to_string());
+    crate::config::parse_config_line(&mut app, "set-hook -g client-attached 'cmd-a'");
+    crate::config::parse_config_line(&mut app, "set-hook -ga client-attached 'cmd-b'");
+    assert_eq!(app.hooks["client-attached"].len(), 2);
+    crate::config::parse_config_line(&mut app, "set-hook -gu client-attached");
+    assert!(!app.hooks.contains_key("client-attached"), "-gu should remove all handlers");
+}
+
+#[test]
+fn set_hook_a_flag_without_g() {
+    let mut app = AppState::new("test".to_string());
+    crate::config::parse_config_line(&mut app, "set-hook client-attached 'cmd-a'");
+    crate::config::parse_config_line(&mut app, "set-hook -a client-attached 'cmd-b'");
+    let cmds = app.hooks.get("client-attached").unwrap();
+    assert_eq!(cmds.len(), 2, "-a without -g should also append");
+}
+
 #[test]
 fn warm_server_is_disabled_for_destroy_unattached_sessions() {
     let mut app = AppState::new("demo".to_string());
@@ -132,7 +187,7 @@ fn set_option_silence_action() {
 // ── Root table binding tests (discussion #130: vim-style C-hjkl nav) ────
 
 use crossterm::event::{KeyCode, KeyModifiers};
-use crate::config::{parse_key_string, normalize_key_for_binding, parse_bind_key};
+use crate::config::{normalize_key_for_binding, parse_bind_key};
 use crate::types::{Action, FocusDir};
 
 #[test]

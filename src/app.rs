@@ -26,7 +26,7 @@ use crate::input::{
 use crate::layout::dump_layout_json;
 use crate::pane::{create_window, kill_active_pane, kill_pane_by_id, split_active_with_command};
 use crate::rendering::{centered_rect, parse_status, render_window};
-use crate::style::{parse_inline_styles, parse_tmux_style, spans_visual_width};
+use crate::style::{parse_inline_styles, parse_tmux_style, spans_visual_width, truncate_spans_to_width};
 use crate::tree::{
     active_pane_mut, compute_rects, find_window_index_by_id, focus_pane_by_id, focus_pane_by_index,
     kill_all_children, reap_children, resize_all_panes,
@@ -578,6 +578,8 @@ pub fn run(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> io::Result<
                     }
                 })
                 .collect();
+            // Enforce status-left-length (tmux truncates left portion to this width)
+            truncate_spans_to_width(&mut combined, app.status_left_length);
             combined.push(Span::styled(" ".to_string(), base_status_style));
 
             // Track x position for tab click detection
@@ -662,14 +664,17 @@ pub fn run(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> io::Result<
             } else {
                 parse_tmux_style(&app.status_right_style)
             };
-            combined.push(Span::styled(" ".to_string(), base_status_style));
-            for s in right_spans.drain(..) {
+            // Enforce status-right-length (tmux truncates right portion to this width)
+            let mut right_styled: Vec<Span<'static>> = right_spans.drain(..).map(|s| {
                 if s.style == Style::default() {
-                    combined.push(Span::styled(s.content.into_owned(), right_style));
-                } else {
-                    combined.push(s);
-                }
-            }
+                    Span::styled(s.content.into_owned(), right_style)
+                } else { s }
+            }).collect();
+            truncate_spans_to_width(&mut right_styled, app.status_right_length);
+            combined.push(Span::styled(" ".to_string(), base_status_style));
+            combined.extend(right_styled);
+            // Truncate overall status line to fit the available width
+            truncate_spans_to_width(&mut combined, status_chunk.width as usize);
             let status_bar = Paragraph::new(Line::from(combined)).style(base_status_style);
             f.render_widget(Clear, status_chunk);
             f.render_widget(status_bar, status_chunk);
@@ -847,14 +852,15 @@ pub fn run(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> io::Result<
             if let Mode::MenuMode { menu } = &app.mode {
                 let item_count = menu.items.len();
                 let height = (item_count as u16 + 2).min(20);
-                let width = menu
+                let width = (menu
                     .items
                     .iter()
-                    .map(|i| i.name.len())
+                    .map(|i| unicode_width::UnicodeWidthStr::width(i.name.as_str()))
                     .max()
                     .unwrap_or(10)
-                    .max(menu.title.len()) as u16
-                    + 8;
+                    .max(unicode_width::UnicodeWidthStr::width(menu.title.as_str())) as u16
+                    + 8)
+                    .min(area.width.saturating_sub(2));
 
                 // Calculate position based on x/y or center
                 let menu_area = if let (Some(x), Some(y)) = (menu.x, menu.y) {
@@ -868,10 +874,12 @@ pub fn run(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> io::Result<
                     } else {
                         y as u16
                     };
+                    let clamped_x = x.min(area.width.saturating_sub(width));
+                    let clamped_w = width.min(area.width.saturating_sub(clamped_x));
                     Rect {
-                        x: x.min(area.width.saturating_sub(width)),
+                        x: clamped_x,
                         y: y.min(area.height.saturating_sub(height)),
-                        width,
+                        width: clamped_w,
                         height,
                     }
                 } else {
@@ -919,6 +927,7 @@ pub fn run(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> io::Result<
                 width,
                 height,
                 ref popup_pty,
+                scroll_offset,
                 ..
             } = &app.mode
             {
@@ -1020,7 +1029,9 @@ pub fn run(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> io::Result<
                     Text::from(output.as_str())
                 };
 
-                let para = Paragraph::new(content).block(block);
+                let para = Paragraph::new(content)
+                    .block(block)
+                    .scroll((*scroll_offset, 0));
 
                 f.render_widget(Clear, popup_area);
                 f.render_widget(para, popup_area);
@@ -1596,8 +1607,12 @@ pub fn run(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> io::Result<
                 CtrlReq::ShowHooks(resp) => {
                     let mut output = String::new();
                     for (name, commands) in &app.hooks {
-                        for cmd in commands {
-                            output.push_str(&format!("{} -> {}\n", name, cmd));
+                        if commands.len() == 1 {
+                            output.push_str(&format!("{} -> {}\n", name, commands[0]));
+                        } else {
+                            for (i, cmd) in commands.iter().enumerate() {
+                                output.push_str(&format!("{}[{}] -> {}\n", name, i, cmd));
+                            }
                         }
                     }
                     if output.is_empty() {

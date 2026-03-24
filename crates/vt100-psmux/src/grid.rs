@@ -410,6 +410,11 @@ impl Grid {
         }
     }
 
+    pub fn clear_scrollback(&mut self) {
+        self.scrollback.clear();
+        self.scrollback_offset = 0;
+    }
+
     pub fn erase_all(&mut self, attrs: crate::attrs::Attrs) {
         for row in self.drawing_rows_mut() {
             row.clear(attrs);

@@ -294,8 +294,14 @@ pub fn render_node(
                             spans.push(Span::styled(" ", style));
                             c += 1;
                         } else if w >= 2 {
-                            spans.push(Span::styled(text, style));
-                            c += 2;
+                            // Wide char at the last column would overflow the pane boundary
+                            if c + w > target_cols {
+                                spans.push(Span::styled(" ", style));
+                                c += 1;
+                            } else {
+                                spans.push(Span::styled(text, style));
+                                c += 2;
+                            }
                         } else {
                             spans.push(Span::styled(text, style));
                             c += 1;

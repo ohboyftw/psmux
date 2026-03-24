@@ -365,6 +365,8 @@ pub enum Mode {
         close_on_exit: bool,
         /// Optional: interactive PTY for the popup (fzf, etc.)  
         popup_pty: Option<PopupPty>,
+        /// Scroll offset for static text popups (lines from top)
+        scroll_offset: u16,
     },
     /// Confirmation prompt before command
     ConfirmMode {
@@ -446,6 +448,11 @@ pub struct AppState {
     pub prefix_key: (KeyCode, KeyModifiers),
     pub prefix2_key: Option<(KeyCode, KeyModifiers)>,
     pub prediction_dimming: bool,
+    /// allow-predictions: when on, do not force PSReadLine PredictionSource to
+    /// None after the profile loads, letting the user's own prediction settings
+    /// take effect.  The pre-profile crash prevention (#109) still runs.
+    /// Default: off
+    pub allow_predictions: bool,
     pub drag: Option<DragState>,
     pub last_window_area: Rect,
     pub mouse_enabled: bool,
@@ -659,12 +666,18 @@ pub struct AppState {
     ///   set -g claude-code-force-interactive off
     /// Default: on
     pub claude_code_force_interactive: bool,
+    /// When on, psmux applies TTY fix workarounds for Claude Code.
+    /// Default: on
+    pub claude_code_fix_tty: bool,
     /// Last mouse hover position (col, row) for same-coordinate deduplication.
     /// Windows Terminal suppresses consecutive MOUSE_MOVED at the same position.
     pub last_hover_pos: Option<(u16, u16)>,
     /// Transient status-bar message from display-message (without -p).
     /// Tuple of (message_text, timestamp_when_set).
     pub status_message: Option<(String, std::time::Instant)>,
+    /// Whether warm pane/server pre-spawning is enabled (default: on).
+    /// When off, new sessions/windows always cold-spawn a fresh shell.
+    pub warm_enabled: bool,
     /// Pre-spawned warm pane: shell already loaded, ready for instant new-window.
     pub warm_pane: Option<WarmPane>,
     /// Number of warm (standby) servers to keep in the pool for instant
@@ -707,6 +720,7 @@ impl AppState {
             prediction_dimming: std::env::var("PSMUX_DIM_PREDICTIONS")
                 .map(|v| v == "1" || v.to_lowercase() == "true")
                 .unwrap_or(false),
+            allow_predictions: false,
             drag: None,
             last_window_area: Rect { x: 0, y: 0, width: 120, height: 30 },
             mouse_enabled: true,
@@ -830,8 +844,10 @@ impl AppState {
             clipboard_osc52: None,
             env_shim: true,
             claude_code_force_interactive: true,
+            claude_code_fix_tty: true,
             last_hover_pos: None,
             status_message: None,
+            warm_enabled: std::env::var("PSMUX_NO_WARM").map(|v| v != "1" && v != "true").unwrap_or(true),
             warm_pane: None,
             warm_pool_size: 1,
             pending_plugin_scripts: Vec::new(),
@@ -1069,6 +1085,7 @@ pub enum CtrlReq {
     UnsetEnvironment(String),
     ShowEnvironment(mpsc::Sender<String>),
     SetHook(String, String),
+    AppendHook(String, String),
     ShowHooks(mpsc::Sender<String>),
     RemoveHook(String),
     KillServer,
@@ -1123,6 +1140,9 @@ pub enum CtrlReq {
     /// Query a pane's readiness state: returns (data_version, last_output_time_ms).
     /// Used by `wait-pane --ready` to poll until the shell prompt has appeared.
     QueryPaneReady(usize, mpsc::Sender<(u64, u64)>),
+    /// Show static text in a popup overlay (title, content).
+    /// Used by the persistent client command prompt for list-* commands.
+    ShowTextPopup(String, String),
 
     // ── Backend JSON-RPC variants (CustomPaneBackend pipe protocol) ──
     /// Backend `initialize` — return the active pane's context ID.

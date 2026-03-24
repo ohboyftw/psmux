@@ -3,6 +3,7 @@
 # Validates fix for GitHub issue #133:
 # - set-hook -g should replace (not append) existing hooks
 # - set-hook -gu should remove hooks
+# - set-hook -ga should append (multi-handler support)
 $ErrorActionPreference = 'Continue'
 $pass = 0; $fail = 0; $total = 0
 

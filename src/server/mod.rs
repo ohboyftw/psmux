@@ -139,6 +139,7 @@ fn serialize_overlay_json(app: &AppState) -> String {
                 }
             }
             out.push(']');
+            out.push_str(if popup_pty.is_some() { ",\"popup_has_pty\":true" } else { ",\"popup_has_pty\":false" });
         }
         Mode::ConfirmMode { prompt, .. } => {
             out.push_str(",\"confirm_active\":true,\"confirm_prompt\":\"");
@@ -220,7 +221,7 @@ fn serialize_overlay_json(app: &AppState) -> String {
 }
 
 fn should_spawn_warm_server(app: &AppState) -> bool {
-    !is_warm_server(app) && !app.destroy_unattached
+    app.warm_enabled && !is_warm_server(app) && !app.destroy_unattached
 }
 
 /// Returns true when this server instance is a warm (standby) server.
@@ -739,8 +740,13 @@ pub fn run_server(
     // If the user configured a custom default-shell in their config, the
     // early warm pane has the wrong shell — kill it so create_window falls
     // through to a cold spawn with the correct shell.
+    // Also kill it if warm was disabled via config (set -g warm off).
     if let Some(wp) = early_warm {
-        if app.default_shell.is_empty() {
+        if !app.warm_enabled {
+            // Warm disabled by config — kill the early warm pane
+            let mut wp = wp;
+            wp.child.kill().ok();
+        } else if app.default_shell.is_empty() {
             // No custom shell — the pre-spawned default (pwsh) is correct.
             // Check if config loaded env vars that the early warm pane is missing.
             let needs_env = app.environment.iter().any(|(k, _)| {
@@ -4272,8 +4278,14 @@ pub fn run_server(
                             let _ = resp.send(output);
                         }
                         CtrlReq::SetHook(hook, cmd) => {
-                            // Replace semantics: only one command per hook event
+                            // Replace (not append) to match tmux semantics -- prevents
+                            // duplicate hooks on config reload (issue #133).
                             app.hooks.insert(hook, vec![cmd]);
+                        }
+                        CtrlReq::AppendHook(hook, cmd) => {
+                            // -a/-ga: append to existing hook list so multiple
+                            // plugins can register separate handlers (tmux semantics).
+                            app.hooks.entry(hook).or_default().push(cmd);
                         }
                         CtrlReq::ShowHooks(resp) => {
                             let mut output = String::new();
@@ -4431,6 +4443,7 @@ pub fn run_server(
                                     height,
                                     close_on_exit,
                                     popup_pty: pty_result,
+                                    scroll_offset: 0,
                                 };
                                 state_dirty = true;
                             } else {
@@ -4442,6 +4455,7 @@ pub fn run_server(
                                     height,
                                     close_on_exit: true,
                                     popup_pty: None,
+                                    scroll_offset: 0,
                                 };
                                 state_dirty = true;
                             }
@@ -5148,6 +5162,22 @@ pub fn run_server(
                                 };
                                 let _ = resp.send(result);
                             });
+                        }
+                        CtrlReq::ShowTextPopup(title, content) => {
+                            let lines: Vec<&str> = content.lines().collect();
+                            let width = lines.iter().map(|l| l.len()).max().unwrap_or(40).max(20) as u16 + 4;
+                            let height = (lines.len() as u16 + 2).clamp(5, 40);
+                            app.mode = Mode::PopupMode {
+                                command: title,
+                                output: content,
+                                process: None,
+                                width: width.min(120),
+                                height,
+                                close_on_exit: false,
+                                popup_pty: None,
+                                scroll_offset: 0,
+                            };
+                            state_dirty = true;
                         }
                     }
                     // Log any active_idx change for debugging window-switch issues

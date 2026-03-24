@@ -195,11 +195,11 @@ pub fn create_window(
         crate::format::expand_format(&app.default_shell, app)
     };
     let mut shell_cmd = if command.is_some() {
-        build_command(command, app.env_shim)
+        build_command(command, app.env_shim, app.allow_predictions)
     } else if !expanded_shell.is_empty() {
-        build_default_shell(&expanded_shell, app.env_shim)
+        build_default_shell(&expanded_shell, app.env_shim, app.allow_predictions)
     } else {
-        build_command(None, app.env_shim)
+        build_command(None, app.env_shim, app.allow_predictions)
     };
     // Override CWD if -c start_dir was specified
     if let Some(dir) = start_dir {
@@ -349,6 +349,9 @@ pub fn spawn_warm_pane(
     pty_system: &dyn portable_pty::PtySystem,
     app: &mut AppState,
 ) -> io::Result<crate::types::WarmPane> {
+    if !app.warm_enabled {
+        return Err(io::Error::other("warm panes disabled"));
+    }
     let area = app.last_window_area;
     let rows = if area.height > 1 { area.height } else { 30 }.max(MIN_PANE_DIM);
     let cols = if area.width > 1 { area.width } else { 120 }.max(MIN_PANE_DIM);
@@ -364,9 +367,9 @@ pub fn spawn_warm_pane(
     // Expand format variables like #{pane_current_path} at spawn time (#111).
     let expanded_shell = crate::format::expand_format(&app.default_shell, app);
     let mut shell_cmd = if !expanded_shell.is_empty() {
-        build_default_shell(&expanded_shell, app.env_shim)
+        build_default_shell(&expanded_shell, app.env_shim, app.allow_predictions)
     } else {
-        build_command(None, app.env_shim)
+        build_command(None, app.env_shim, app.allow_predictions)
     };
     let pane_id = app.next_pane_id;
     app.next_pane_id += 1;
@@ -746,11 +749,11 @@ pub fn split_active_with_command(
         crate::format::expand_format(&app.default_shell, app)
     };
     let mut shell_cmd = if command.is_some() {
-        build_command(command, app.env_shim)
+        build_command(command, app.env_shim, app.allow_predictions)
     } else if !expanded_shell.is_empty() {
-        build_default_shell(&expanded_shell, app.env_shim)
+        build_default_shell(&expanded_shell, app.env_shim, app.allow_predictions)
     } else {
-        build_command(None, app.env_shim)
+        build_command(None, app.env_shim, app.allow_predictions)
     };
     // Override CWD if -c start_dir was specified
     if let Some(dir) = start_dir {
@@ -957,7 +960,7 @@ pub fn kill_pane_by_id(app: &mut AppState, pane_id: usize) -> io::Result<()> {
 }
 
 pub fn detect_shell() -> CommandBuilder {
-    build_command(None, false)
+    build_command(None, false, false)
 }
 
 /// Set TMUX, TMUX_PANE, and PSMUX_SESSION environment variables on a CommandBuilder.
@@ -1104,6 +1107,10 @@ const PSRL_FIX: &str = concat!(
     "try { Remove-PSReadLineKeyHandler -Chord 'F2' -ErrorAction Stop } catch {}",
 );
 
+/// Lightweight post-profile init: only sets ANSI output rendering without
+/// touching PSReadLine predictions.  Used when allow-predictions is on (#150).
+const PSRL_ANSI_ONLY: &str = "$PSStyle.OutputRendering = 'Ansi'";
+
 /// Source all four PowerShell profile scripts in the standard order.
 /// Used with -NoProfile to give us control over execution order — we disable
 /// PSReadLine predictions BEFORE the profile loads (preventing the
@@ -1161,13 +1168,15 @@ const CWD_SYNC: &str = concat!(
 /// Build the full interactive init string for PowerShell:
 /// 1. Disable PSReadLine predictions (before profile — prevents #109 crash)
 /// 2. Source the user's profile scripts
-/// 3. Re-disable predictions (in case the profile re-enabled them)
+/// 3. If allow_predictions is false, re-disable predictions after the profile;
+///    otherwise only re-apply ANSI output rendering (#150)
 /// 4. Install CWD sync hook (enables #{pane_current_path} — #111)
 /// 5. Optionally append the env shim
-fn build_psrl_init(env_shim: bool) -> String {
+fn build_psrl_init(env_shim: bool, allow_predictions: bool) -> String {
+    let post_profile = if allow_predictions { PSRL_ANSI_ONLY } else { PSRL_FIX };
     let mut s = format!(
         "{}; {}; {}; {}",
-        PSRL_FIX, PROFILE_SOURCE, PSRL_FIX, CWD_SYNC
+        PSRL_FIX, PROFILE_SOURCE, post_profile, CWD_SYNC
     );
     if env_shim {
         s.push_str("; ");
@@ -1176,7 +1185,7 @@ fn build_psrl_init(env_shim: bool) -> String {
     s
 }
 
-pub fn build_command(command: Option<&str>, env_shim: bool) -> CommandBuilder {
+pub fn build_command(command: Option<&str>, env_shim: bool, allow_predictions: bool) -> CommandBuilder {
     // Capture CWD early — portable_pty on Windows defaults to USERPROFILE
     // (home dir) when no cwd is set on CommandBuilder, so we must set it
     // explicitly to honour the caller's working directory.
@@ -1232,7 +1241,7 @@ pub fn build_command(command: Option<&str>, env_shim: bool) -> CommandBuilder {
         // predictions are enabled in the profile before PSReadLine is fully
         // initialized inside ConPTY.  We use -NoProfile and source profiles
         // ourselves, sandwiching them between prediction-disable commands.
-        let psrl_init = build_psrl_init(env_shim);
+        let psrl_init = build_psrl_init(env_shim, allow_predictions);
         match shell {
             Some(path) => {
                 let mut builder = CommandBuilder::new(&path);
@@ -1316,7 +1325,7 @@ fn resolve_shell_program(shell_path: &str) -> (String, Vec<String>) {
 /// Build a CommandBuilder that launches the given shell path interactively.
 /// Used when `default-shell` / `default-command` is configured.
 /// Supports pwsh, powershell, cmd, and any arbitrary executable.
-pub fn build_default_shell(shell_path: &str, env_shim: bool) -> CommandBuilder {
+pub fn build_default_shell(shell_path: &str, env_shim: bool, allow_predictions: bool) -> CommandBuilder {
     let (program, extra_args) = resolve_shell_program(shell_path);
 
     // Resolve bare names via cached `which` — avoids repeated PATH scans.
@@ -1358,7 +1367,7 @@ pub fn build_default_shell(shell_path: &str, env_shim: bool) -> CommandBuilder {
             }
             s
         } else {
-            build_psrl_init(env_shim)
+            build_psrl_init(env_shim, allow_predictions)
         };
         if !has_noprofile {
             builder.args(["-NoProfile"]);
@@ -1374,7 +1383,7 @@ pub fn build_default_shell(shell_path: &str, env_shim: bool) -> CommandBuilder {
 /// Used when -- separator is specified in new-session.
 pub fn build_raw_command(raw_args: &[String]) -> CommandBuilder {
     if raw_args.is_empty() {
-        return build_command(None, true);
+        return build_command(None, true, false);
     }
     let program = &raw_args[0];
     let mut builder = CommandBuilder::new(program);

@@ -4,7 +4,9 @@
       "Bash(psmux send-keys:*)",
       "Bash(psmux capture-pane:*)",
       "mcp__plugin_serena_serena__get_symbols_overview",
-      "mcp__plugin_serena_serena__list_dir"
+      "mcp__plugin_serena_serena__list_dir",
+      "Bash(find /d/home/psmux -name *.md -type f -exec grep -l \"upstream\\\\|master\\\\|dependency\\\\|sync\" {})",
+      "Bash(2)"
     ]
   }
 }

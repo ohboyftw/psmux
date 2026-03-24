@@ -254,6 +254,8 @@ const CLI_COMMANDS: &[(&str, &str, &str)] = &[
     ("next-window", "next", "Move to the next window"),
     ("previous-window", "prev", "Move to the previous window"),
     ("rename-window", "renamew", "Rename the current window"),
+    ("resize-window", "resizew", "Resize a window"),
+    ("respawn-window", "respawnw", "Restart the process in a window"),
     ("rotate-window", "rotatew", "Rotate pane positions"),
     ("select-window", "selectw", "Select a window by index"),
     ("swap-window", "swapw", "Swap two windows"),
@@ -303,6 +305,7 @@ const CLI_COMMANDS: &[(&str, &str, &str)] = &[
     ("set-option", "set", "Set a session/server option"),
     ("set-window-option", "setw", "Set a window option"),
     ("show-options", "show", "Show options"),
+    ("show-window-options", "showw", "Show window options"),
     ("source-file", "source", "Load config file"),
     // Display / Info
     ("clock-mode", "", "Show a large clock"),
@@ -416,6 +419,7 @@ const OPTIONS_REF: &[(&str, &str)] = &[
     ("cursor-style",               "\"\""),
     ("cursor-blink",               "off"),
     ("prediction-dimming",         "off"),
+    ("allow-predictions",          "off"),
     ("env-shim",                   "on"),
     ("claude-code-force-interactive", "on"),
 ];
