@@ -428,6 +428,46 @@ mod tests {
         let args = parse_command_line(&cmd);
         assert_eq!(args, vec!["claim-session", "sess", "D:\\Projects\\"]);
     }
+
+    #[test]
+    fn test_claim_session_roundtrip_path_with_spaces() {
+        let cwd = "C:\\Program Files\\My App\\Data";
+        let cmd = format!("claim-session s1 {}", quote_arg(cwd));
+        let args = parse_command_line(&cmd);
+        assert_eq!(args, vec!["claim-session", "s1", "C:\\Program Files\\My App\\Data"]);
+    }
+
+    #[test]
+    fn test_claim_session_roundtrip_deep_nested_path() {
+        let cwd = "C:\\Users\\test\\Documents\\workspace\\project\\src\\components";
+        let cmd = format!("claim-session s1 {}", quote_arg(cwd));
+        let args = parse_command_line(&cmd);
+        assert_eq!(args, vec!["claim-session", "s1", cwd]);
+    }
+
+    #[test]
+    fn test_claim_session_roundtrip_unc_path() {
+        let cwd = "\\\\server\\share\\folder";
+        let cmd = format!("claim-session s1 {}", quote_arg(cwd));
+        let args = parse_command_line(&cmd);
+        assert_eq!(args, vec!["claim-session", "s1", "\\\\server\\share\\folder"]);
+    }
+
+    #[test]
+    fn test_claim_session_roundtrip_path_with_parens() {
+        let cwd = "C:\\Program Files (x86)\\App";
+        let cmd = format!("claim-session s1 {}", quote_arg(cwd));
+        let args = parse_command_line(&cmd);
+        assert_eq!(args, vec!["claim-session", "s1", "C:\\Program Files (x86)\\App"]);
+    }
+
+    #[test]
+    fn test_claim_session_roundtrip_path_with_ampersand() {
+        let cwd = "C:\\R&D\\project";
+        let cmd = format!("claim-session s1 {}", quote_arg(cwd));
+        let args = parse_command_line(&cmd);
+        assert_eq!(args, vec!["claim-session", "s1", "C:\\R&D\\project"]);
+    }
 }
 
 pub fn color_to_name(c: vt100::Color) -> std::borrow::Cow<'static, str> {
