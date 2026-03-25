@@ -1,4 +1,5 @@
 use super::should_spawn_warm_server;
+use super::helpers::combined_data_version;
 use crate::types::AppState;
 
 // ── Hook set/replace/unset tests (issue #133) ───────────────────
@@ -116,6 +117,13 @@ fn warm_server_is_disabled_for_destroy_unattached_sessions() {
 #[test]
 fn warm_server_is_disabled_for_warm_session_itself() {
     let app = AppState::new("__warm__".to_string());
+    assert!(!should_spawn_warm_server(&app));
+}
+
+#[test]
+fn warm_server_is_disabled_when_warm_enabled_is_false() {
+    let mut app = AppState::new("demo".to_string());
+    app.warm_enabled = false;
     assert!(!should_spawn_warm_server(&app));
 }
 
@@ -275,4 +283,60 @@ fn normalize_only_strips_shift_from_char() {
 
     let shift_bs = normalize_key_for_binding((KeyCode::Backspace, KeyModifiers::SHIFT));
     assert_eq!(shift_bs, (KeyCode::Backspace, KeyModifiers::SHIFT));
+}
+
+// ── combined_data_version includes copy mode state (issue #152) ──
+
+#[test]
+fn combined_data_version_changes_on_copy_pos() {
+    let mut app = AppState::new("test".to_string());
+    let v1 = combined_data_version(&app);
+
+    app.copy_pos = Some((5, 10));
+    let v2 = combined_data_version(&app);
+    assert_ne!(v1, v2, "version must change when copy_pos is set");
+
+    app.copy_pos = Some((5, 11));
+    let v3 = combined_data_version(&app);
+    assert_ne!(v2, v3, "version must change when copy cursor column changes");
+
+    app.copy_pos = Some((6, 11));
+    let v4 = combined_data_version(&app);
+    assert_ne!(v3, v4, "version must change when copy cursor row changes");
+}
+
+#[test]
+fn combined_data_version_changes_on_scroll_offset() {
+    let mut app = AppState::new("test".to_string());
+    let v1 = combined_data_version(&app);
+
+    app.copy_scroll_offset = 5;
+    let v2 = combined_data_version(&app);
+    assert_ne!(v1, v2, "version must change when copy_scroll_offset changes");
+
+    app.copy_scroll_offset = 6;
+    let v3 = combined_data_version(&app);
+    assert_ne!(v2, v3, "version must change on each scroll offset increment");
+}
+
+#[test]
+fn combined_data_version_changes_on_copy_anchor() {
+    let mut app = AppState::new("test".to_string());
+    let v1 = combined_data_version(&app);
+
+    app.copy_anchor = Some((3, 7));
+    let v2 = combined_data_version(&app);
+    assert_ne!(v1, v2, "version must change when copy_anchor is set");
+}
+
+#[test]
+fn combined_data_version_stable_when_copy_state_unchanged() {
+    let mut app = AppState::new("test".to_string());
+    app.copy_pos = Some((2, 3));
+    app.copy_scroll_offset = 10;
+    app.copy_anchor = Some((1, 0));
+
+    let v1 = combined_data_version(&app);
+    let v2 = combined_data_version(&app);
+    assert_eq!(v1, v2, "version must be stable when nothing changes");
 }

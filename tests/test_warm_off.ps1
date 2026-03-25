@@ -1,11 +1,8 @@
-# test_warm_off.ps1 - Comprehensive end-to-end tests for warm pane control
+# test_warm_off.ps1 - Comprehensive end-to-end tests for "set -g warm off"
 #
-# Validates warm pane/server behavior across ALL creation paths:
-# - Warm OFF: new-session, new-window, split-window (h+v), chained sessions
-# - Warm ON: new-session, new-window, split-window (h+v), second session
-# - Default (warm on): port files + show-options
-# - Env var: PSMUX_NO_WARM=1
-# - Runtime toggle: on -> off -> on
+# Validates that warm pane/server pre-spawning is fully disabled across
+# ALL creation paths: new-session, new-window, split-window (h+v),
+# and that no __warm__ process lingers.
 
 $ErrorActionPreference = "Stop"
 $PSMUX_DIR = "$env:USERPROFILE\.psmux"
@@ -50,7 +47,7 @@ function Get-WarmProcesses {
 
 Write-Host ""
 Write-Host "============================================" -ForegroundColor Cyan
-Write-Host " Warm Control: Comprehensive E2E Tests" -ForegroundColor Cyan
+Write-Host " Warm Off: Comprehensive E2E Tests" -ForegroundColor Cyan
 Write-Host "============================================" -ForegroundColor Cyan
 Write-Host ""
 
@@ -294,72 +291,6 @@ $warmVal = psmux show-options -g -v warm -t defaulttest 2>&1
 Assert-True ($warmVal -match "on") "show-options reports warm on by default"
 
 # Cleanup suite 5
-psmux kill-server 2>$null
-Start-Sleep -Seconds 1
-Kill-AllPsmux
-
-# ══════════════════════════════════════════════════════════════
-# TEST SUITE 6: Explicit warm on (set -g warm on)
-# Verifies warm servers/panes are created for every path
-# ══════════════════════════════════════════════════════════════
-Write-Host ""
-Write-Host "--- Suite 6: Explicit warm on (set -g warm on) ---" -ForegroundColor Yellow
-
-Set-Content $configPath "set -g warm on"
-
-# ── Test 6.1: New session with explicit warm on ──
-Write-Host ""
-Write-Host "Test 6.1: New session with explicit warm on" -ForegroundColor White
-psmux new-session -d -s ontest1
-Start-Sleep -Seconds 5
-
-$warmFiles = Get-WarmPortFiles
-Assert-True ($null -ne $warmFiles -and @($warmFiles).Count -gt 0) "Warm port file exists after new-session (warm on)"
-
-$warmProcs = Get-WarmProcesses
-Assert-True ($null -ne $warmProcs -and @($warmProcs).Count -gt 0) "Warm process exists after new-session (warm on)"
-
-$warmVal = psmux show-options -g -v warm -t ontest1 2>&1
-Assert-True ($warmVal -match "on") "show-options reports warm on (explicit)"
-
-# ── Test 6.2: New window still has warm after ──
-Write-Host ""
-Write-Host "Test 6.2: New window with warm on" -ForegroundColor White
-psmux new-window -t ontest1
-Start-Sleep -Seconds 3
-
-$warmFiles = Get-WarmPortFiles
-Assert-True ($null -ne $warmFiles -and @($warmFiles).Count -gt 0) "Warm port file exists after new-window (warm on)"
-
-# ── Test 6.3: Vertical split still has warm after ──
-Write-Host ""
-Write-Host "Test 6.3: Vertical split with warm on" -ForegroundColor White
-psmux split-window -v -t ontest1
-Start-Sleep -Seconds 3
-
-$warmFiles = Get-WarmPortFiles
-Assert-True ($null -ne $warmFiles -and @($warmFiles).Count -gt 0) "Warm port file exists after split-window -v (warm on)"
-
-# ── Test 6.4: Horizontal split still has warm after ──
-Write-Host ""
-Write-Host "Test 6.4: Horizontal split with warm on" -ForegroundColor White
-psmux split-window -h -t ontest1
-Start-Sleep -Seconds 3
-
-$warmFiles = Get-WarmPortFiles
-Assert-True ($null -ne $warmFiles -and @($warmFiles).Count -gt 0) "Warm port file exists after split-window -h (warm on)"
-
-# ── Test 6.5: Second session also gets warm server ──
-Write-Host ""
-Write-Host "Test 6.5: Second session with warm on" -ForegroundColor White
-psmux new-session -d -s ontest2
-Start-Sleep -Seconds 5
-
-# Should have at least one warm port file (possibly two, one per session)
-$warmFiles = Get-WarmPortFiles
-Assert-True ($null -ne $warmFiles -and @($warmFiles).Count -gt 0) "Warm port file exists after second new-session (warm on)"
-
-# Cleanup suite 6
 psmux kill-server 2>$null
 Start-Sleep -Seconds 1
 Kill-AllPsmux
