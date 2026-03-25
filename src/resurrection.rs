@@ -232,13 +232,7 @@ pub fn apply_snapshot(
 
             if pi == 0 {
                 // First pane → new window
-                crate::pane::create_window(
-                    pty_system,
-                    app,
-                    cmd.as_deref(),
-                    Some(&pc.cwd),
-                    None,
-                )?;
+                crate::pane::create_window(pty_system, app, cmd.as_deref(), Some(&pc.cwd), None)?;
             } else {
                 // Additional panes → split
                 crate::pane::split_active_with_command(

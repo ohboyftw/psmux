@@ -429,12 +429,16 @@ fn run_main() -> io::Result<()> {
             return Ok(());
         }
         "resurrect" => {
-            let session_name = args.first().cloned().unwrap_or_else(|| "default".to_string());
+            let session_name = args
+                .first()
+                .cloned()
+                .unwrap_or_else(|| "default".to_string());
             let dir = crate::resurrection::resurrect_dir(None);
             match crate::resurrection::load_snapshot_from(&session_name, &dir) {
                 Ok(snap) => {
                     let win_count = snap.windows.len();
-                    let pane_count: usize = snap.windows.iter().map(|w| w.pane_commands.len()).sum();
+                    let pane_count: usize =
+                        snap.windows.iter().map(|w| w.pane_commands.len()).sum();
                     eprintln!(
                         "Resurrecting session '{}' ({} windows, {} panes)",
                         snap.session_name, win_count, pane_count
@@ -446,7 +450,8 @@ fn run_main() -> io::Result<()> {
                     // We serialize the snapshot path as an env var so the server
                     // can pick it up during init.  Simpler approach: write commands
                     // to a temp config file and source it.
-                    let tmp_config = std::env::temp_dir().join(format!("psmux-resurrect-{}.conf", session_name));
+                    let tmp_config =
+                        std::env::temp_dir().join(format!("psmux-resurrect-{}.conf", session_name));
                     let mut cmds = Vec::new();
                     for (wi, ws) in snap.windows.iter().enumerate() {
                         for (pi, pc) in ws.pane_commands.iter().enumerate() {
@@ -454,14 +459,22 @@ fn run_main() -> io::Result<()> {
                             if pi == 0 && wi > 0 {
                                 // New window for 2nd+ windows
                                 if let Some(ref cmd) = pc.command {
-                                    cmds.push(format!("new-window {} \"{}\"", cwd_flag, cmd.replace('"', "\\\"")));
+                                    cmds.push(format!(
+                                        "new-window {} \"{}\"",
+                                        cwd_flag,
+                                        cmd.replace('"', "\\\"")
+                                    ));
                                 } else {
                                     cmds.push(format!("new-window {}", cwd_flag));
                                 }
                             } else if pi > 0 {
                                 // Split for 2nd+ panes in a window
                                 if let Some(ref cmd) = pc.command {
-                                    cmds.push(format!("split-window {} \"{}\"", cwd_flag, cmd.replace('"', "\\\"")));
+                                    cmds.push(format!(
+                                        "split-window {} \"{}\"",
+                                        cwd_flag,
+                                        cmd.replace('"', "\\\"")
+                                    ));
                                 } else {
                                     cmds.push(format!("split-window {}", cwd_flag));
                                 }
@@ -474,7 +487,10 @@ fn run_main() -> io::Result<()> {
                         }
                         // Set window name
                         if !ws.name.is_empty() {
-                            cmds.push(format!("rename-window \"{}\"", ws.name.replace('"', "\\\"")));
+                            cmds.push(format!(
+                                "rename-window \"{}\"",
+                                ws.name.replace('"', "\\\"")
+                            ));
                         }
                     }
                     // Write temp config
@@ -483,15 +499,23 @@ fn run_main() -> io::Result<()> {
 
                     // Build new-session args: -s <name> + source the temp config
                     // The first pane's command and cwd come from the snapshot
-                    let first_cwd = snap.windows.first()
+                    let first_cwd = snap
+                        .windows
+                        .first()
                         .and_then(|w| w.pane_commands.first())
                         .map(|pc| pc.cwd.clone());
-                    let first_cmd = snap.windows.first()
+                    let first_cmd = snap
+                        .windows
+                        .first()
                         .and_then(|w| w.pane_commands.first())
                         .and_then(|pc| pc.command.clone());
 
                     // Reconstruct argv for new-session
-                    let mut new_args = vec!["new-session".to_string(), "-s".to_string(), session_name.clone()];
+                    let mut new_args = vec![
+                        "new-session".to_string(),
+                        "-s".to_string(),
+                        session_name.clone(),
+                    ];
                     if let Some(ref cwd) = first_cwd {
                         new_args.push("-c".to_string());
                         new_args.push(cwd.clone());
@@ -520,7 +544,10 @@ fn run_main() -> io::Result<()> {
                                     .status();
                                 if let Ok(ss) = source_status {
                                     if !ss.success() {
-                                        eprintln!("Warning: source-file returned {}", ss.code().unwrap_or(-1));
+                                        eprintln!(
+                                            "Warning: source-file returned {}",
+                                            ss.code().unwrap_or(-1)
+                                        );
                                     }
                                 }
                             }
@@ -846,88 +873,106 @@ fn run_main() -> io::Result<()> {
                 // Only eligible when no custom command/dir is requested.
                 // Searches the warm pool: tries `__warm__` first (pool size 1),
                 // then `__warm__0`, `__warm__1`, ... (pool size > 1).
-                // Skipped when PSMUX_NO_WARM=1 is set.
-                let warm_disabled = std::env::var("PSMUX_NO_WARM").map(|v| v == "1" || v == "true").unwrap_or(false);
-                let claimed_warm =
-                    if !warm_disabled && initial_cmd.is_none() && raw_cmd_args.is_none() && start_dir.is_none() {
-                        // Build list of candidate warm session names to try
-                        let mut candidates: Vec<String> = vec!["__warm__".to_string()];
-                        for i in 0..10usize {
-                            candidates.push(format!("__warm__{}", i));
+                // Skipped when PSMUX_NO_WARM=1 is set or config has 'set -g warm off'.
+                let warm_disabled = std::env::var("PSMUX_NO_WARM")
+                    .map(|v| v == "1" || v == "true")
+                    .unwrap_or(false)
+                    || crate::config::is_warm_disabled_by_config();
+                let claimed_warm = if !warm_disabled
+                    && initial_cmd.is_none()
+                    && raw_cmd_args.is_none()
+                    && start_dir.is_none()
+                {
+                    // Build list of candidate warm session names to try
+                    let mut candidates: Vec<String> = vec!["__warm__".to_string()];
+                    for i in 0..10usize {
+                        candidates.push(format!("__warm__{}", i));
+                    }
+                    let mut found = false;
+                    for warm_name in &candidates {
+                        let warm_base = if let Some(ref l) = l_socket_name {
+                            format!("{}__{}", l, warm_name)
+                        } else {
+                            warm_name.clone()
+                        };
+                        let warm_port_path = format!("{}\\.psmux\\{}.port", home, warm_base);
+                        if !std::path::Path::new(&warm_port_path).exists() {
+                            continue;
                         }
-                        let mut found = false;
-                        for warm_name in &candidates {
-                            let warm_base = if let Some(ref l) = l_socket_name {
-                                format!("{}__{}", l, warm_name)
-                            } else {
-                                warm_name.clone()
-                            };
-                            let warm_port_path = format!("{}\\.psmux\\{}.port", home, warm_base);
-                            if !std::path::Path::new(&warm_port_path).exists() {
-                                continue;
-                            }
-                            // Skip warm servers built from a different version/commit
-                            // to avoid stale-binary confusion (#110).
-                            let warm_ver_path = format!("{}\\.psmux\\{}.version", home, warm_base);
-                            if let Ok(ver) = std::fs::read_to_string(&warm_ver_path) {
-                                if ver.trim() != crate::types::build_version_stamp() {
-                                    // Stale warm server — kill it and clean up
-                                    let _ = std::fs::remove_file(&warm_port_path);
-                                    let _ = std::fs::remove_file(&warm_ver_path);
-                                    let wkey = format!("{}\\.psmux\\{}.key", home, warm_base);
-                                    let _ = std::fs::remove_file(&wkey);
-                                    continue;
-                                }
-                            }
-                            let warm_port_str = match std::fs::read_to_string(&warm_port_path) {
-                                Ok(s) => s,
-                                Err(_) => continue,
-                            };
-                            let warm_port = match warm_port_str.trim().parse::<u16>() {
-                                Ok(p) => p,
-                                Err(_) => continue,
-                            };
-                            let warm_addr = format!("127.0.0.1:{}", warm_port);
-                            if std::net::TcpStream::connect_timeout(
-                                &warm_addr.parse().unwrap(),
-                                Duration::from_millis(100),
-                            )
-                            .is_err()
-                            {
+                        // Skip warm servers built from a different version/commit
+                        // to avoid stale-binary confusion (#110).
+                        let warm_ver_path = format!("{}\\.psmux\\{}.version", home, warm_base);
+                        if let Ok(ver) = std::fs::read_to_string(&warm_ver_path) {
+                            if ver.trim() != crate::types::build_version_stamp() {
+                                // Stale warm server — kill it and clean up
                                 let _ = std::fs::remove_file(&warm_port_path);
+                                let _ = std::fs::remove_file(&warm_ver_path);
+                                let wkey = format!("{}\\.psmux\\{}.key", home, warm_base);
+                                let _ = std::fs::remove_file(&wkey);
                                 continue;
-                            }
-                            let warm_key =
-                                crate::session::read_session_key(&warm_base).unwrap_or_default();
-                            if warm_key.is_empty() {
-                                continue;
-                            }
-                            match crate::session::send_auth_cmd_response(
-                                &warm_addr,
-                                &warm_key,
-                                format!("claim-session {}\n", name).as_bytes(),
-                            ) {
-                                Ok(resp) if resp.contains("OK") => {
-                                    if let Some(ref wn) = window_name {
-                                        let new_key =
-                                            crate::session::read_session_key(&port_file_base)
-                                                .unwrap_or_default();
-                                        let _ = crate::session::send_auth_cmd(
-                                            &warm_addr,
-                                            &new_key,
-                                            format!("rename-window {}\n", wn).as_bytes(),
-                                        );
-                                    }
-                                    found = true;
-                                    break;
-                                }
-                                _ => continue,
                             }
                         }
-                        found
-                    } else {
-                        false
-                    };
+                        let warm_port_str = match std::fs::read_to_string(&warm_port_path) {
+                            Ok(s) => s,
+                            Err(_) => continue,
+                        };
+                        let warm_port = match warm_port_str.trim().parse::<u16>() {
+                            Ok(p) => p,
+                            Err(_) => continue,
+                        };
+                        let warm_addr = format!("127.0.0.1:{}", warm_port);
+                        if std::net::TcpStream::connect_timeout(
+                            &warm_addr.parse().unwrap(),
+                            Duration::from_millis(100),
+                        )
+                        .is_err()
+                        {
+                            let _ = std::fs::remove_file(&warm_port_path);
+                            continue;
+                        }
+                        let warm_key =
+                            crate::session::read_session_key(&warm_base).unwrap_or_default();
+                        if warm_key.is_empty() {
+                            continue;
+                        }
+                        let client_cwd = std::env::current_dir()
+                            .ok()
+                            .and_then(|p| p.to_str().map(|s| s.to_string()));
+                        let claim_cmd = if let Some(ref cwd) = client_cwd {
+                            format!(
+                                "claim-session {} {}\n",
+                                crate::util::quote_arg(&name),
+                                crate::util::quote_arg(cwd)
+                            )
+                        } else {
+                            format!("claim-session {}\n", crate::util::quote_arg(&name))
+                        };
+                        match crate::session::send_auth_cmd_response(
+                            &warm_addr,
+                            &warm_key,
+                            claim_cmd.as_bytes(),
+                        ) {
+                            Ok(resp) if resp.contains("OK") => {
+                                if let Some(ref wn) = window_name {
+                                    let new_key = crate::session::read_session_key(&port_file_base)
+                                        .unwrap_or_default();
+                                    let _ = crate::session::send_auth_cmd(
+                                        &warm_addr,
+                                        &new_key,
+                                        format!("rename-window {}\n", crate::util::quote_arg(wn))
+                                            .as_bytes(),
+                                    );
+                                }
+                                found = true;
+                                break;
+                            }
+                            _ => continue,
+                        }
+                    }
+                    found
+                } else {
+                    false
+                };
 
                 if !claimed_warm {
                     // Cold path: spawn a background server from scratch
@@ -3513,8 +3558,11 @@ fn run_main() -> io::Result<()> {
         let port_path = format!("{}\\.psmux\\{}.port", home, port_file_base);
 
         // Try warm server claim first (fast path)
-        // Skipped when PSMUX_NO_WARM=1 is set.
-        let warm_disabled = std::env::var("PSMUX_NO_WARM").map(|v| v == "1" || v == "true").unwrap_or(false);
+        // Skipped when PSMUX_NO_WARM=1 is set or config has 'set -g warm off'.
+        let warm_disabled = std::env::var("PSMUX_NO_WARM")
+            .map(|v| v == "1" || v == "true")
+            .unwrap_or(false)
+            || crate::config::is_warm_disabled_by_config();
         let warm_base = if let Some(ref l) = l_socket_name {
             format!("{}____warm__", l)
         } else {
@@ -3545,12 +3593,16 @@ fn run_main() -> io::Result<()> {
                         if let Some(ref cwd) = client_cwd {
                             let _ = writeln!(
                                 stream,
-                                "claim-session {} \"{}\"",
-                                session_name,
-                                cwd.replace('"', "\\\"")
+                                "claim-session {} {}",
+                                crate::util::quote_arg(&session_name),
+                                crate::util::quote_arg(cwd)
                             );
                         } else {
-                            let _ = writeln!(stream, "claim-session {}", session_name);
+                            let _ = writeln!(
+                                stream,
+                                "claim-session {}",
+                                crate::util::quote_arg(&session_name)
+                            );
                         }
                         let _ = stream.flush();
                         // Use send_auth_cmd_response pattern: read AUTH

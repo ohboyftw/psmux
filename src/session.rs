@@ -460,7 +460,9 @@ pub fn reap_children_placeholder() -> io::Result<bool> {
 
 /// Return the names of all live sessions by scanning .psmux/*.port files.
 pub fn list_session_names() -> Vec<String> {
-    let home = std::env::var("USERPROFILE").or_else(|_| std::env::var("HOME")).unwrap_or_default();
+    let home = std::env::var("USERPROFILE")
+        .or_else(|_| std::env::var("HOME"))
+        .unwrap_or_default();
     let dir = format!("{}\\.psmux", home);
     let mut names = Vec::new();
     if let Ok(entries) = std::fs::read_dir(&dir) {
@@ -468,7 +470,9 @@ pub fn list_session_names() -> Vec<String> {
             if let Some(fname) = e.file_name().to_str().map(|s| s.to_string()) {
                 if let Some((base, ext)) = fname.rsplit_once('.') {
                     if ext == "port" {
-                        if is_warm_session(base) { continue; }
+                        if is_warm_session(base) {
+                            continue;
+                        }
                         names.push(base.to_string());
                     }
                 }

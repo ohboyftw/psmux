@@ -9,6 +9,18 @@ psmux reads its config on startup from the **first file found** (in order):
 
 Config syntax is **tmux-compatible**. Most `.tmux.conf` lines work as-is.
 
+You can also specify a custom config file path with the `-f` flag:
+
+```powershell
+# Use a specific config file instead of default search
+psmux -f ~/.config/psmux/custom.conf
+
+# Use an empty config (no settings loaded)
+psmux -f NUL
+```
+
+This sets the `PSMUX_CONFIG_FILE` environment variable internally, which the server checks before searching the default locations.
+
 ## Basic Config Example
 
 Create `~/.psmux.conf`:
@@ -113,9 +125,16 @@ psmux split-window -- "C:/Program Files/Git/bin/bash.exe"
 | `default-shell` | Str | `pwsh` | Shell to launch |
 | `default-command` | Str | | Alias for default-shell |
 | `word-separators` | Str | `" -_@"` | Copy-mode word delimiters |
-| `bell-action` | Str | `any` | `any`, `none`, `current`, `other` |
+| `activity-action` | Str | `other` | Action on window activity: `any`, `none`, `current`, `other` |
+| `silence-action` | Str | `other` | Action on window silence: `any`, `none`, `current`, `other` |
+| `bell-action` | Str | `any` | Bell action: `any`, `none`, `current`, `other` |
 | `visual-bell` | Bool | `off` | Visual bell indicator |
 | `allow-passthrough` | Str | `off` | Allow terminal passthrough sequences (`on`/`off`/`all`) |
+| `allow-rename` | Bool | `on` | Allow programs to set window title via escape sequences |
+| `allow-predictions` | Bool | `off` | Preserve PSReadLine prediction settings (see below) |
+| `default-terminal` | Str | | Terminal type string (sets `TERM` env var in panes) |
+| `update-environment` | Str | *(tmux defaults)* | Space-separated list of env vars to refresh on client attach |
+| `warm` | Bool | `on` | Pre-spawn shells for instant window/pane creation (see [warm-sessions.md](warm-sessions.md)) |
 | `copy-command` | Str | | Shell command for clipboard pipe |
 | `set-clipboard` | Str | `on` | Clipboard interaction (`on`/`off`/`external`) |
 | `main-pane-width` | Int | `0` | Main pane width in main-vertical layout |
@@ -169,10 +188,52 @@ $env:PSMUX_DEFAULT_SESSION = "work"
 # Enable prediction dimming (off by default; dims predictive/speculative text)
 $env:PSMUX_DIM_PREDICTIONS = "1"
 
+# Disable warm pane pre-spawning (same as set -g warm off)
+$env:PSMUX_NO_WARM = "1"
+
+# Override the config file path (same effect as -f flag)
+$env:PSMUX_CONFIG_FILE = "C:\Users\me\.psmux-alt.conf"
+
 # These are set INSIDE psmux panes (tmux-compatible):
 # TMUX       - socket path and server info
 # TMUX_PANE  - current pane ID (%0, %1, etc.)
 ```
+
+## Managing Environment Variables
+
+Use `set-environment` to set env vars that are inherited by newly created panes:
+
+```powershell
+# Set a global env var (inherited by all new panes)
+psmux set-environment -g EDITOR vim
+
+# Set a session-scoped env var
+psmux set-environment MY_VAR value
+
+# Unset an env var
+psmux set-environment -gu MY_VAR
+
+# Show all environment variables
+psmux show-environment
+psmux show-environment -g
+```
+
+Environment variables set this way are injected at the process level when new panes spawn, so they are completely invisible (no commands echoed in the shell).
+
+## PSReadLine Predictions
+
+By default, psmux disables PSReadLine inline predictions (the grayed-out history suggestions) during ConPTY initialization to prevent a startup crash. This means `PredictionSource` defaults to `None` inside psmux, even if your profile sets it to `HistoryAndPlugin`.
+
+To preserve your prediction settings, enable `allow-predictions`:
+
+```tmux
+set -g allow-predictions on
+```
+
+With this enabled:
+- If your profile sets `PredictionSource`, psmux respects your choice
+- If your profile does not set it, psmux restores the system default (typically `HistoryAndPlugin`)
+- ConPTY startup crash prevention still works (predictions are temporarily disabled during initialization only)
 
 ## Prediction Dimming
 

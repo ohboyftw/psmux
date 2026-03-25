@@ -16,7 +16,7 @@
 //   name = "psmux_benchmarks"
 //   harness = false
 
-use criterion::{criterion_group, criterion_main, Criterion, BenchmarkId};
+use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion};
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
@@ -207,7 +207,12 @@ fn bench_command_dispatch(c: &mut Criterion) {
     psmux_cmd(&["new-session", "-d", "-s", "dispatch"]);
 
     // Measure overhead of various no-op / lightweight commands
-    for cmd in ["list-sessions", "list-windows", "list-panes", "display-message"] {
+    for cmd in [
+        "list-sessions",
+        "list-windows",
+        "list-panes",
+        "display-message",
+    ] {
         group.bench_function(cmd, |b| {
             b.iter(|| {
                 psmux_cmd(&[cmd, "-t", "dispatch"]);

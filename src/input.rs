@@ -1462,7 +1462,8 @@ pub fn handle_key(app: &mut AppState, key: KeyEvent) -> io::Result<bool> {
                         if app.set_clipboard != "off" {
                             app.clipboard_osc52 = Some(text.clone());
                         }
-                        app.status_message = Some((format!("Copied: {}", text), std::time::Instant::now()));
+                        app.status_message =
+                            Some((format!("Copied: {}", text), std::time::Instant::now()));
                         app.mode = Mode::Passthrough;
                     } else if !crate::hints::has_prefix(&state.matches, &state.input) {
                         state.input.clear();

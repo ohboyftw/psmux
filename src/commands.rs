@@ -1080,10 +1080,16 @@ pub fn execute_command_string(app: &mut AppState, cmd: &str) -> io::Result<()> {
         "list-buffers" | "lsb" => {
             let mut output = String::new();
             for (i, buf) in app.paste_buffers.iter().enumerate() {
-                output.push_str(&format!("buffer{}: {} bytes: \"{}\"\n", i,
-                    buf.len(), &buf.chars().take(50).collect::<String>()));
+                output.push_str(&format!(
+                    "buffer{}: {} bytes: \"{}\"\n",
+                    i,
+                    buf.len(),
+                    &buf.chars().take(50).collect::<String>()
+                ));
             }
-            if output.is_empty() { output.push_str("(no buffers)\n"); }
+            if output.is_empty() {
+                output.push_str("(no buffers)\n");
+            }
             show_output_popup(app, "list-buffers", output);
         }
         "show-buffer" | "showb" => {
@@ -1125,7 +1131,9 @@ pub fn execute_command_string(app: &mut AppState, cmd: &str) -> io::Result<()> {
             if let Some(path) = parts.get(1) {
                 if let Ok(data) = std::fs::read_to_string(path) {
                     app.paste_buffers.insert(0, data);
-                    if app.paste_buffers.len() > 10 { app.paste_buffers.pop(); }
+                    if app.paste_buffers.len() > 10 {
+                        app.paste_buffers.pop();
+                    }
                 }
             }
         }
@@ -1143,10 +1151,15 @@ pub fn execute_command_string(app: &mut AppState, cmd: &str) -> io::Result<()> {
                 for bind in binds {
                     let key_str = crate::config::format_key_binding(&bind.key);
                     let cmd_str = format_action(&bind.action);
-                    output.push_str(&format!("bind-key -T {} {} {}\n", table_name, key_str, cmd_str));
+                    output.push_str(&format!(
+                        "bind-key -T {} {} {}\n",
+                        table_name, key_str, cmd_str
+                    ));
                 }
             }
-            if output.is_empty() { output.push_str("(no bindings)\n"); }
+            if output.is_empty() {
+                output.push_str("(no bindings)\n");
+            }
             show_output_popup(app, "list-keys", output);
         }
         "show-options" | "show" | "show-window-options" | "showw" => {
@@ -1257,7 +1270,11 @@ pub fn execute_command_string(app: &mut AppState, cmd: &str) -> io::Result<()> {
         }
         "new-session" | "new" => {
             // Cannot create a session from inside a session; show feedback
-            show_output_popup(app, "new-session", "(cannot create a new session from inside a session)\n".to_string());
+            show_output_popup(
+                app,
+                "new-session",
+                "(cannot create a new session from inside a session)\n".to_string(),
+            );
         }
         "lock-client" | "lockc" | "lock-server" | "lock" | "lock-session" | "locks" => {
             if let Some(port) = app.control_port {
@@ -1347,7 +1364,6 @@ pub fn execute_command_string(app: &mut AppState, cmd: &str) -> io::Result<()> {
 #[cfg(test)]
 #[path = "../tests-rs/test_commands.rs"]
 mod tests;
-
 
 #[cfg(test)]
 #[path = "../tests-rs/test_commands_new.rs"]

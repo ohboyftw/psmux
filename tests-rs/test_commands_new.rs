@@ -14,7 +14,11 @@ fn mock_app() -> AppState {
 
 fn make_window(name: &str, id: usize) -> crate::types::Window {
     crate::types::Window {
-        root: Node::Split { kind: LayoutKind::Horizontal, sizes: vec![], children: vec![] },
+        root: Node::Split {
+            kind: LayoutKind::Horizontal,
+            sizes: vec![],
+            children: vec![],
+        },
         active_path: vec![],
         name: name.to_string(),
         id,
@@ -47,8 +51,13 @@ fn mock_app_with_windows(names: &[&str]) -> AppState {
 /// Extract popup output text from app mode, panicking with context if not PopupMode.
 fn extract_popup(app: &AppState) -> (&str, &str) {
     match &app.mode {
-        Mode::PopupMode { command, output, .. } => (command, output),
-        other => panic!("expected PopupMode, got {:?}", std::mem::discriminant(other)),
+        Mode::PopupMode {
+            command, output, ..
+        } => (command, output),
+        other => panic!(
+            "expected PopupMode, got {:?}",
+            std::mem::discriminant(other)
+        ),
     }
 }
 
@@ -70,22 +79,44 @@ fn list_buffers_shows_all_buffer_details() {
     let mut app = mock_app_with_window();
     app.paste_buffers.push("hello world".to_string());
     app.paste_buffers.push("short".to_string());
-    app.paste_buffers.push("a longer buffer with more text for preview".to_string());
+    app.paste_buffers
+        .push("a longer buffer with more text for preview".to_string());
     execute_command_string(&mut app, "list-buffers").unwrap();
     let (_, out) = extract_popup(&app);
     let lines: Vec<&str> = out.lines().collect();
     // Must have exactly 3 lines (one per buffer)
     assert_eq!(lines.len(), 3, "should list all 3 buffers, got:\n{}", out);
     // Buffer 0: verify index, byte count, content
-    assert!(lines[0].starts_with("buffer0:"), "first line should start with buffer0");
-    assert!(lines[0].contains("11 bytes"), "buffer0 should show 11 bytes for 'hello world'");
-    assert!(lines[0].contains("hello world"), "buffer0 should show content preview");
+    assert!(
+        lines[0].starts_with("buffer0:"),
+        "first line should start with buffer0"
+    );
+    assert!(
+        lines[0].contains("11 bytes"),
+        "buffer0 should show 11 bytes for 'hello world'"
+    );
+    assert!(
+        lines[0].contains("hello world"),
+        "buffer0 should show content preview"
+    );
     // Buffer 1
-    assert!(lines[1].starts_with("buffer1:"), "second line should start with buffer1");
-    assert!(lines[1].contains("5 bytes"), "buffer1 should show 5 bytes for 'short'");
+    assert!(
+        lines[1].starts_with("buffer1:"),
+        "second line should start with buffer1"
+    );
+    assert!(
+        lines[1].contains("5 bytes"),
+        "buffer1 should show 5 bytes for 'short'"
+    );
     // Buffer 2
-    assert!(lines[2].starts_with("buffer2:"), "third line should start with buffer2");
-    assert!(lines[2].contains("42 bytes"), "buffer2 should show 42 bytes");
+    assert!(
+        lines[2].starts_with("buffer2:"),
+        "third line should start with buffer2"
+    );
+    assert!(
+        lines[2].contains("42 bytes"),
+        "buffer2 should show 42 bytes"
+    );
 }
 
 #[test]
@@ -100,7 +131,10 @@ fn lsb_alias_produces_identical_output_to_list_buffers() {
     app2.paste_buffers.push("test data".to_string());
     execute_command_string(&mut app2, "lsb").unwrap();
     let (cmd2, out2) = extract_popup(&app2);
-    assert_eq!(cmd2, "list-buffers", "lsb should report command as list-buffers");
+    assert_eq!(
+        cmd2, "list-buffers",
+        "lsb should report command as list-buffers"
+    );
     assert_eq!(out1, out2, "lsb output must match list-buffers output");
 }
 
@@ -116,7 +150,10 @@ fn show_buffer_displays_first_buffer_content_verbatim() {
     execute_command_string(&mut app, "show-buffer").unwrap();
     let (cmd, out) = extract_popup(&app);
     assert_eq!(cmd, "show-buffer");
-    assert_eq!(out, "line1\nline2\nline3", "show-buffer must display buffer[0] verbatim");
+    assert_eq!(
+        out, "line1\nline2\nline3",
+        "show-buffer must display buffer[0] verbatim"
+    );
 }
 
 #[test]
@@ -124,7 +161,10 @@ fn show_buffer_empty_does_not_crash() {
     let mut app = mock_app_with_window();
     // No buffers: should stay in Passthrough (no popup because nothing to show)
     execute_command_string(&mut app, "show-buffer").unwrap();
-    assert!(matches!(app.mode, Mode::Passthrough), "show-buffer with no buffers should be no-op");
+    assert!(
+        matches!(app.mode, Mode::Passthrough),
+        "show-buffer with no buffers should be no-op"
+    );
 }
 
 #[test]
@@ -176,44 +216,85 @@ fn list_keys_shows_bound_keys_with_table_key_command() {
     let lines: Vec<&str> = out.lines().collect();
     assert_eq!(lines.len(), 3, "should list 3 bindings");
     // Verify table name, key format, and command string for each binding
-    assert!(lines.iter().any(|l| l.contains("prefix") && l.contains("c") && l.contains("new-window")),
-        "should contain 'prefix c new-window', got:\n{}", out);
-    assert!(lines.iter().any(|l| l.contains("prefix") && l.contains("C-x") && l.contains("kill-pane")),
-        "should contain 'prefix C-x kill-pane', got:\n{}", out);
-    assert!(lines.iter().any(|l| l.contains("prefix") && l.contains("Up") && l.contains("select-pane -U")),
-        "should contain 'prefix Up select-pane -U', got:\n{}", out);
+    assert!(
+        lines
+            .iter()
+            .any(|l| l.contains("prefix") && l.contains("c") && l.contains("new-window")),
+        "should contain 'prefix c new-window', got:\n{}",
+        out
+    );
+    assert!(
+        lines
+            .iter()
+            .any(|l| l.contains("prefix") && l.contains("C-x") && l.contains("kill-pane")),
+        "should contain 'prefix C-x kill-pane', got:\n{}",
+        out
+    );
+    assert!(
+        lines
+            .iter()
+            .any(|l| l.contains("prefix") && l.contains("Up") && l.contains("select-pane -U")),
+        "should contain 'prefix Up select-pane -U', got:\n{}",
+        out
+    );
 }
 
 #[test]
 fn list_keys_shows_multiple_tables() {
     let mut app = mock_app_with_window();
-    app.key_tables.insert("prefix".to_string(), vec![
-        crate::types::Bind { key: (KeyCode::Char('n'), KeyModifiers::NONE), action: Action::NextWindow, repeat: false },
-    ]);
-    app.key_tables.insert("copy-mode".to_string(), vec![
-        crate::types::Bind { key: (KeyCode::Char('q'), KeyModifiers::NONE), action: Action::Command("cancel".to_string()), repeat: false },
-    ]);
+    app.key_tables.insert(
+        "prefix".to_string(),
+        vec![crate::types::Bind {
+            key: (KeyCode::Char('n'), KeyModifiers::NONE),
+            action: Action::NextWindow,
+            repeat: false,
+        }],
+    );
+    app.key_tables.insert(
+        "copy-mode".to_string(),
+        vec![crate::types::Bind {
+            key: (KeyCode::Char('q'), KeyModifiers::NONE),
+            action: Action::Command("cancel".to_string()),
+            repeat: false,
+        }],
+    );
     execute_command_string(&mut app, "list-keys").unwrap();
     let (_, out) = extract_popup(&app);
     assert!(out.contains("prefix"), "output should contain prefix table");
-    assert!(out.contains("copy-mode"), "output should contain copy-mode table");
-    assert!(out.contains("next-window"), "should show next-window command");
+    assert!(
+        out.contains("copy-mode"),
+        "output should contain copy-mode table"
+    );
+    assert!(
+        out.contains("next-window"),
+        "should show next-window command"
+    );
     assert!(out.contains("cancel"), "should show cancel command");
 }
 
 #[test]
 fn lsk_alias_produces_same_output() {
     let mut app1 = mock_app_with_window();
-    app1.key_tables.insert("root".to_string(), vec![
-        crate::types::Bind { key: (KeyCode::F(1), KeyModifiers::NONE), action: Action::Command("help".to_string()), repeat: false },
-    ]);
+    app1.key_tables.insert(
+        "root".to_string(),
+        vec![crate::types::Bind {
+            key: (KeyCode::F(1), KeyModifiers::NONE),
+            action: Action::Command("help".to_string()),
+            repeat: false,
+        }],
+    );
     execute_command_string(&mut app1, "list-keys").unwrap();
     let out1 = extract_popup(&app1).1.to_string();
 
     let mut app2 = mock_app_with_window();
-    app2.key_tables.insert("root".to_string(), vec![
-        crate::types::Bind { key: (KeyCode::F(1), KeyModifiers::NONE), action: Action::Command("help".to_string()), repeat: false },
-    ]);
+    app2.key_tables.insert(
+        "root".to_string(),
+        vec![crate::types::Bind {
+            key: (KeyCode::F(1), KeyModifiers::NONE),
+            action: Action::Command("help".to_string()),
+            repeat: false,
+        }],
+    );
     execute_command_string(&mut app2, "lsk").unwrap();
     let out2 = extract_popup(&app2).1.to_string();
     assert_eq!(out1, out2, "lsk alias must produce identical output");
@@ -234,15 +315,30 @@ fn list_windows_output_has_window_names_and_active_flag() {
     assert_eq!(lines.len(), 3, "should list 3 windows");
     // Window 0: "editor" NOT active
     assert!(lines[0].starts_with("0:"), "first window index should be 0");
-    assert!(lines[0].contains("editor"), "first window name should be 'editor'");
-    assert!(!lines[0].contains("*"), "editor should NOT have active flag");
+    assert!(
+        lines[0].contains("editor"),
+        "first window name should be 'editor'"
+    );
+    assert!(
+        !lines[0].contains("*"),
+        "editor should NOT have active flag"
+    );
     // Window 1: "server" IS active
-    assert!(lines[1].starts_with("1:"), "second window index should be 1");
-    assert!(lines[1].contains("server"), "second window name should be 'server'");
+    assert!(
+        lines[1].starts_with("1:"),
+        "second window index should be 1"
+    );
+    assert!(
+        lines[1].contains("server"),
+        "second window name should be 'server'"
+    );
     assert!(lines[1].contains("*"), "server should have active flag *");
     // Window 2: "logs" NOT active
     assert!(lines[2].starts_with("2:"), "third window index should be 2");
-    assert!(lines[2].contains("logs"), "third window name should be 'logs'");
+    assert!(
+        lines[2].contains("logs"),
+        "third window name should be 'logs'"
+    );
 }
 
 #[test]
@@ -252,8 +348,15 @@ fn list_windows_respects_window_base_index() {
     execute_command_string(&mut app, "list-windows").unwrap();
     let (_, out) = extract_popup(&app);
     let lines: Vec<&str> = out.lines().collect();
-    assert!(lines[0].starts_with("1:"), "with base-index 1, first window should be index 1, got: {}", lines[0]);
-    assert!(lines[1].starts_with("2:"), "second window should be index 2");
+    assert!(
+        lines[0].starts_with("1:"),
+        "with base-index 1, first window should be index 1, got: {}",
+        lines[0]
+    );
+    assert!(
+        lines[1].starts_with("2:"),
+        "second window should be index 2"
+    );
 }
 
 #[test]
@@ -262,7 +365,10 @@ fn list_windows_shows_pane_count() {
     execute_command_string(&mut app, "list-windows").unwrap();
     let (_, out) = extract_popup(&app);
     // Even an empty Split counts as 0 panes, the list_windows_tmux function counts Leaf nodes
-    assert!(out.contains("panes)") || out.contains("pane)"), "should show pane count");
+    assert!(
+        out.contains("panes)") || out.contains("pane)"),
+        "should show pane count"
+    );
 }
 
 #[test]
@@ -274,7 +380,10 @@ fn list_windows_shows_activity_flag() {
     let (_, out) = extract_popup(&app);
     let lines: Vec<&str> = out.lines().collect();
     assert!(lines[0].contains("*"), "active window should have *");
-    assert!(lines[1].contains("#"), "window with activity_flag should have #");
+    assert!(
+        lines[1].contains("#"),
+        "window with activity_flag should have #"
+    );
 }
 
 #[test]
@@ -304,7 +413,10 @@ fn list_clients_output_has_session_and_window_info() {
     assert!(out.contains("my_project"), "must contain session name");
     assert!(out.contains("term"), "must contain active window name");
     assert!(out.contains("(utf8)"), "must contain encoding marker");
-    assert!(out.contains("/dev/pts/"), "must contain pseudo-terminal path");
+    assert!(
+        out.contains("/dev/pts/"),
+        "must contain pseudo-terminal path"
+    );
 }
 
 #[test]
@@ -326,16 +438,36 @@ fn list_commands_contains_all_major_commands() {
     execute_command_string(&mut app, "list-commands").unwrap();
     let (_, out) = extract_popup(&app);
     let required = [
-        "list-windows", "list-clients", "list-commands",
-        "list-keys", "list-sessions", "list-buffers",
-        "show-hooks", "show-buffer", "show-options",
-        "new-window", "split-window", "kill-pane", "kill-window",
-        "select-window", "select-pane", "rename-window",
-        "copy-mode", "paste-buffer", "choose-tree",
-        "display-panes", "clock-mode", "command-prompt",
+        "list-windows",
+        "list-clients",
+        "list-commands",
+        "list-keys",
+        "list-sessions",
+        "list-buffers",
+        "show-hooks",
+        "show-buffer",
+        "show-options",
+        "new-window",
+        "split-window",
+        "kill-pane",
+        "kill-window",
+        "select-window",
+        "select-pane",
+        "rename-window",
+        "copy-mode",
+        "paste-buffer",
+        "choose-tree",
+        "display-panes",
+        "clock-mode",
+        "command-prompt",
     ];
     for cmd_name in &required {
-        assert!(out.contains(cmd_name), "list-commands output missing '{}'. Full output:\n{}", cmd_name, out);
+        assert!(
+            out.contains(cmd_name),
+            "list-commands output missing '{}'. Full output:\n{}",
+            cmd_name,
+            out
+        );
     }
 }
 
@@ -363,20 +495,34 @@ fn show_hooks_empty_says_no_hooks() {
 #[test]
 fn show_hooks_lists_all_hooks_with_commands() {
     let mut app = mock_app_with_window();
-    app.hooks.insert("after-new-window".to_string(),
-        vec!["run-shell 'echo new'".to_string(), "display-message 'created'".to_string()]);
-    app.hooks.insert("pane-died".to_string(),
-        vec!["kill-pane".to_string()]);
+    app.hooks.insert(
+        "after-new-window".to_string(),
+        vec![
+            "run-shell 'echo new'".to_string(),
+            "display-message 'created'".to_string(),
+        ],
+    );
+    app.hooks
+        .insert("pane-died".to_string(), vec!["kill-pane".to_string()]);
     execute_command_string(&mut app, "show-hooks").unwrap();
     let (_, out) = extract_popup(&app);
     let lines: Vec<&str> = out.lines().collect();
     // 2 indexed commands for after-new-window + 1 for pane-died = 3 lines
     assert_eq!(lines.len(), 3, "should have 3 hook entries, got:\n{}", out);
     // Multi-command hooks use indexed format: name[0] -> cmd, name[1] -> cmd
-    assert!(out.contains("after-new-window[0] -> run-shell"), "should show indexed hook[0] -> command");
-    assert!(out.contains("after-new-window[1] -> display-message"), "should show indexed hook[1] -> command");
+    assert!(
+        out.contains("after-new-window[0] -> run-shell"),
+        "should show indexed hook[0] -> command"
+    );
+    assert!(
+        out.contains("after-new-window[1] -> display-message"),
+        "should show indexed hook[1] -> command"
+    );
     // Single-command hook uses plain format: name -> cmd
-    assert!(out.contains("pane-died -> kill-pane"), "should show pane-died hook");
+    assert!(
+        out.contains("pane-died -> kill-pane"),
+        "should show pane-died hook"
+    );
 }
 
 // ════════════════════════════════════════════════════════════════════════════
@@ -390,7 +536,10 @@ fn set_buffer_inserts_at_front_lifo() {
     execute_command_string(&mut app, "set-buffer second").unwrap();
     execute_command_string(&mut app, "set-buffer third").unwrap();
     assert_eq!(app.paste_buffers.len(), 3);
-    assert_eq!(app.paste_buffers[0], "third", "most recent should be at index 0");
+    assert_eq!(
+        app.paste_buffers[0], "third",
+        "most recent should be at index 0"
+    );
     assert_eq!(app.paste_buffers[1], "second");
     assert_eq!(app.paste_buffers[2], "first");
 }
@@ -403,10 +552,19 @@ fn set_buffer_caps_at_10_evicts_oldest() {
     }
     assert_eq!(app.paste_buffers.len(), 10, "buffer list must cap at 10");
     assert_eq!(app.paste_buffers[0], "item11", "latest should be first");
-    assert_eq!(app.paste_buffers[9], "item2", "oldest surviving should be item2");
+    assert_eq!(
+        app.paste_buffers[9], "item2",
+        "oldest surviving should be item2"
+    );
     // item0 and item1 should have been evicted
-    assert!(!app.paste_buffers.contains(&"item0".to_string()), "item0 should be evicted");
-    assert!(!app.paste_buffers.contains(&"item1".to_string()), "item1 should be evicted");
+    assert!(
+        !app.paste_buffers.contains(&"item0".to_string()),
+        "item0 should be evicted"
+    );
+    assert!(
+        !app.paste_buffers.contains(&"item1".to_string()),
+        "item1 should be evicted"
+    );
 }
 
 #[test]
@@ -421,7 +579,11 @@ fn delete_buffer_removes_first_buffer() {
     let mut app = mock_app_with_window();
     app.paste_buffers = vec!["a".into(), "b".into(), "c".into()];
     execute_command_string(&mut app, "delete-buffer").unwrap();
-    assert_eq!(app.paste_buffers, vec!["b", "c"], "delete-buffer should remove index 0");
+    assert_eq!(
+        app.paste_buffers,
+        vec!["b", "c"],
+        "delete-buffer should remove index 0"
+    );
 }
 
 #[test]
@@ -466,7 +628,10 @@ fn next_window_advances_and_tracks_last() {
     assert_eq!(app.active_idx, 0);
     execute_command_string(&mut app, "next-window").unwrap();
     assert_eq!(app.active_idx, 1);
-    assert_eq!(app.last_window_idx, 0, "last_window_idx should be previous window");
+    assert_eq!(
+        app.last_window_idx, 0,
+        "last_window_idx should be previous window"
+    );
     execute_command_string(&mut app, "next-window").unwrap();
     assert_eq!(app.active_idx, 2);
     assert_eq!(app.last_window_idx, 1);
@@ -510,14 +675,20 @@ fn select_window_plain_target() {
     let mut app = mock_app_with_windows(&["w0", "w1", "w2"]);
     execute_command_string(&mut app, "select-window -t 2").unwrap();
     assert_eq!(app.active_idx, 2);
-    assert_eq!(app.last_window_idx, 0, "previous active should be saved as last");
+    assert_eq!(
+        app.last_window_idx, 0,
+        "previous active should be saved as last"
+    );
 }
 
 #[test]
 fn select_window_colon_target() {
     let mut app = mock_app_with_windows(&["w0", "w1", "w2"]);
     execute_command_string(&mut app, "select-window -t :1").unwrap();
-    assert_eq!(app.active_idx, 1, "colon-prefixed target ':1' should select window 1");
+    assert_eq!(
+        app.active_idx, 1,
+        "colon-prefixed target ':1' should select window 1"
+    );
 }
 
 #[test]
@@ -538,7 +709,10 @@ fn selectw_alias_works() {
 fn select_window_out_of_range_is_ignored() {
     let mut app = mock_app_with_windows(&["only"]);
     execute_command_string(&mut app, "select-window -t 999").unwrap();
-    assert_eq!(app.active_idx, 0, "out-of-range target should not change window");
+    assert_eq!(
+        app.active_idx, 0,
+        "out-of-range target should not change window"
+    );
 }
 
 #[test]
@@ -547,7 +721,10 @@ fn select_window_with_base_index_offset() {
     app.window_base_index = 1;
     // With base_index=1, target "2" means internal index 1
     execute_command_string(&mut app, "select-window -t 2").unwrap();
-    assert_eq!(app.active_idx, 1, "target 2 with base_index 1 should select internal index 1");
+    assert_eq!(
+        app.active_idx, 1,
+        "target 2 with base_index 1 should select internal index 1"
+    );
 }
 
 // ════════════════════════════════════════════════════════════════════════════
@@ -570,14 +747,21 @@ fn kill_window_adjusts_active_idx_when_killing_last() {
     app.active_idx = 2; // kill last ("c")
     execute_command_string(&mut app, "kill-window").unwrap();
     assert_eq!(app.windows.len(), 2);
-    assert_eq!(app.active_idx, 1, "active_idx should be clamped to last valid index");
+    assert_eq!(
+        app.active_idx, 1,
+        "active_idx should be clamped to last valid index"
+    );
 }
 
 #[test]
 fn kill_window_refuses_last_window() {
     let mut app = mock_app_with_window();
     execute_command_string(&mut app, "kill-window").unwrap();
-    assert_eq!(app.windows.len(), 1, "must not kill the last remaining window");
+    assert_eq!(
+        app.windows.len(),
+        1,
+        "must not kill the last remaining window"
+    );
 }
 
 #[test]
@@ -597,7 +781,10 @@ fn rename_window_changes_active_window_name() {
     app.active_idx = 0;
     execute_command_string(&mut app, "rename-window new_name").unwrap();
     assert_eq!(app.windows[0].name, "new_name");
-    assert_eq!(app.windows[1].name, "other", "non-active window should be unchanged");
+    assert_eq!(
+        app.windows[1].name, "other",
+        "non-active window should be unchanged"
+    );
 }
 
 #[test]
@@ -615,7 +802,10 @@ fn rename_session_changes_session_name() {
     // Verify list-clients reflects the new name
     execute_command_string(&mut app, "list-clients").unwrap();
     let (_, out) = extract_popup(&app);
-    assert!(out.contains("production"), "list-clients should use new session name");
+    assert!(
+        out.contains("production"),
+        "list-clients should use new session name"
+    );
 }
 
 // ════════════════════════════════════════════════════════════════════════════
@@ -653,19 +843,33 @@ fn choose_tree_enters_window_chooser_mode() {
                 // If our session exists in the tree, verify window entries match
                 let current: Vec<_> = tree.iter().filter(|e| e.is_current_session).collect();
                 for entry in &current {
-                    assert_eq!(entry.session_name, "dev", "session name mismatch in tree entry");
+                    assert_eq!(
+                        entry.session_name, "dev",
+                        "session name mismatch in tree entry"
+                    );
                 }
-                let win_entries: Vec<_> = tree.iter()
+                let win_entries: Vec<_> = tree
+                    .iter()
                     .filter(|e| e.is_current_session && !e.is_session_header)
                     .collect();
                 if !win_entries.is_empty() {
-                    let win_names: Vec<&str> = win_entries.iter().map(|e| e.window_name.as_str()).collect();
-                    assert!(win_names.contains(&"editor"), "tree should contain 'editor' window");
-                    assert!(win_names.contains(&"server"), "tree should contain 'server' window");
+                    let win_names: Vec<&str> =
+                        win_entries.iter().map(|e| e.window_name.as_str()).collect();
+                    assert!(
+                        win_names.contains(&"editor"),
+                        "tree should contain 'editor' window"
+                    );
+                    assert!(
+                        win_names.contains(&"server"),
+                        "tree should contain 'server' window"
+                    );
                 }
             }
         }
-        other => panic!("expected WindowChooser, got {:?}", std::mem::discriminant(other)),
+        other => panic!(
+            "expected WindowChooser, got {:?}",
+            std::mem::discriminant(other)
+        ),
     }
 }
 
@@ -677,24 +881,35 @@ fn choose_tree_builds_correct_tree_from_list_all_sessions() {
         ("server".to_string(), 2, "120x30".to_string(), false),
     ];
     // Create a fake port file for our session so the tree builder can find it
-    let home = std::env::var("USERPROFILE").or_else(|_| std::env::var("HOME")).unwrap();
+    let home = std::env::var("USERPROFILE")
+        .or_else(|_| std::env::var("HOME"))
+        .unwrap();
     let psmux_dir = format!("{}/.psmux", home);
     let port_file = format!("{}/test_tree_session.port", psmux_dir);
     let _ = std::fs::create_dir_all(&psmux_dir);
     let _ = std::fs::write(&port_file, "0");
-    
+
     let tree = crate::session::list_all_sessions_tree("test_tree_session", &windows);
     let _ = std::fs::remove_file(&port_file); // cleanup
-    
+
     // Find our session entries
-    let our_entries: Vec<_> = tree.iter().filter(|e| e.session_name == "test_tree_session").collect();
+    let our_entries: Vec<_> = tree
+        .iter()
+        .filter(|e| e.session_name == "test_tree_session")
+        .collect();
     if !our_entries.is_empty() {
         // Should have 1 session header + 2 window entries
         let headers: Vec<_> = our_entries.iter().filter(|e| e.is_session_header).collect();
         assert_eq!(headers.len(), 1, "should have exactly 1 session header");
-        assert!(headers[0].is_current_session, "should be marked as current session");
-        
-        let wins: Vec<_> = our_entries.iter().filter(|e| !e.is_session_header).collect();
+        assert!(
+            headers[0].is_current_session,
+            "should be marked as current session"
+        );
+
+        let wins: Vec<_> = our_entries
+            .iter()
+            .filter(|e| !e.is_session_header)
+            .collect();
         assert_eq!(wins.len(), 2, "should have 2 window entries");
         assert_eq!(wins[0].window_name, "editor");
         assert_eq!(wins[1].window_name, "server");
@@ -711,7 +926,11 @@ fn choose_window_and_choose_session_all_enter_window_chooser() {
     for cmd in &["choose-tree", "choose-window", "choose-session"] {
         let mut app = mock_app_with_windows(&["a", "b"]);
         execute_command_string(&mut app, cmd).unwrap();
-        assert!(matches!(app.mode, Mode::WindowChooser { .. }), "{} should enter WindowChooser", cmd);
+        assert!(
+            matches!(app.mode, Mode::WindowChooser { .. }),
+            "{} should enter WindowChooser",
+            cmd
+        );
     }
 }
 
@@ -724,12 +943,22 @@ fn confirm_before_stores_command_and_prompt() {
     let mut app = mock_app_with_window();
     execute_command_string(&mut app, "confirm-before kill-server").unwrap();
     match &app.mode {
-        Mode::ConfirmMode { prompt, command, input } => {
-            assert!(prompt.contains("kill-server"), "prompt should mention the command");
+        Mode::ConfirmMode {
+            prompt,
+            command,
+            input,
+        } => {
+            assert!(
+                prompt.contains("kill-server"),
+                "prompt should mention the command"
+            );
             assert_eq!(command, "kill-server", "stored command must be exact");
             assert!(input.is_empty(), "input should start empty");
         }
-        other => panic!("expected ConfirmMode, got {:?}", std::mem::discriminant(other)),
+        other => panic!(
+            "expected ConfirmMode, got {:?}",
+            std::mem::discriminant(other)
+        ),
     }
 }
 
@@ -739,7 +968,10 @@ fn confirm_alias_works_same_as_confirm_before() {
     execute_command_string(&mut app, "confirm kill-pane").unwrap();
     match &app.mode {
         Mode::ConfirmMode { command, .. } => assert_eq!(command, "kill-pane"),
-        other => panic!("expected ConfirmMode, got {:?}", std::mem::discriminant(other)),
+        other => panic!(
+            "expected ConfirmMode, got {:?}",
+            std::mem::discriminant(other)
+        ),
     }
 }
 
@@ -750,10 +982,18 @@ fn confirm_alias_works_same_as_confirm_before() {
 #[test]
 fn display_menu_parses_items() {
     let mut app = mock_app_with_window();
-    execute_command_string(&mut app, r#"display-menu "New Window" n new-window "Kill Pane" k kill-pane"#).unwrap();
+    execute_command_string(
+        &mut app,
+        r#"display-menu "New Window" n new-window "Kill Pane" k kill-pane"#,
+    )
+    .unwrap();
     match &app.mode {
         Mode::MenuMode { menu } => {
-            assert!(menu.items.len() >= 2, "menu should have at least 2 items, got {}", menu.items.len());
+            assert!(
+                menu.items.len() >= 2,
+                "menu should have at least 2 items, got {}",
+                menu.items.len()
+            );
         }
         other => panic!("expected MenuMode, got {:?}", std::mem::discriminant(other)),
     }
@@ -768,12 +1008,20 @@ fn display_popup_default_dimensions() {
     let mut app = mock_app_with_window();
     execute_command_string(&mut app, "display-popup").unwrap();
     match &app.mode {
-        Mode::PopupMode { width, height, close_on_exit, .. } => {
+        Mode::PopupMode {
+            width,
+            height,
+            close_on_exit,
+            ..
+        } => {
             assert_eq!(*width, 80, "default width should be 80");
             assert_eq!(*height, 24, "default height should be 24");
             assert!(!close_on_exit, "close_on_exit should default to false");
         }
-        other => panic!("expected PopupMode, got {:?}", std::mem::discriminant(other)),
+        other => panic!(
+            "expected PopupMode, got {:?}",
+            std::mem::discriminant(other)
+        ),
     }
 }
 
@@ -786,7 +1034,10 @@ fn display_popup_custom_dimensions() {
             assert_eq!(*width, 40);
             assert_eq!(*height, 10);
         }
-        other => panic!("expected PopupMode, got {:?}", std::mem::discriminant(other)),
+        other => panic!(
+            "expected PopupMode, got {:?}",
+            std::mem::discriminant(other)
+        ),
     }
 }
 
@@ -798,7 +1049,10 @@ fn display_popup_close_on_exit_flag() {
         Mode::PopupMode { close_on_exit, .. } => {
             assert!(*close_on_exit, "-E flag should set close_on_exit=true");
         }
-        other => panic!("expected PopupMode, got {:?}", std::mem::discriminant(other)),
+        other => panic!(
+            "expected PopupMode, got {:?}",
+            std::mem::discriminant(other)
+        ),
     }
 }
 
@@ -811,7 +1065,10 @@ fn popup_alias_works_same() {
             assert_eq!(*width, 50);
             assert_eq!(*height, 20);
         }
-        other => panic!("expected PopupMode, got {:?}", std::mem::discriminant(other)),
+        other => panic!(
+            "expected PopupMode, got {:?}",
+            std::mem::discriminant(other)
+        ),
     }
 }
 
@@ -828,7 +1085,10 @@ fn command_prompt_default_empty() {
             assert!(input.is_empty());
             assert_eq!(*cursor, 0);
         }
-        other => panic!("expected CommandPrompt, got {:?}", std::mem::discriminant(other)),
+        other => panic!(
+            "expected CommandPrompt, got {:?}",
+            std::mem::discriminant(other)
+        ),
     }
 }
 
@@ -841,7 +1101,10 @@ fn command_prompt_initial_text_sets_cursor_at_end() {
             assert_eq!(input, "kill-pane");
             assert_eq!(*cursor, 9, "cursor should be at end of initial text");
         }
-        other => panic!("expected CommandPrompt, got {:?}", std::mem::discriminant(other)),
+        other => panic!(
+            "expected CommandPrompt, got {:?}",
+            std::mem::discriminant(other)
+        ),
     }
 }
 
@@ -869,7 +1132,10 @@ fn choose_buffer_enters_buffer_chooser_at_0() {
     execute_command_string(&mut app, "choose-buffer").unwrap();
     match &app.mode {
         Mode::BufferChooser { selected } => assert_eq!(*selected, 0),
-        other => panic!("expected BufferChooser, got {:?}", std::mem::discriminant(other)),
+        other => panic!(
+            "expected BufferChooser, got {:?}",
+            std::mem::discriminant(other)
+        ),
     }
 }
 
@@ -905,8 +1171,14 @@ fn new_session_blocked_with_feedback() {
     execute_command_string(&mut app, "new-session").unwrap();
     let (cmd, out) = extract_popup(&app);
     assert_eq!(cmd, "new-session");
-    assert!(out.contains("cannot create"), "must explain why new-session is blocked");
-    assert!(out.contains("inside a session"), "must mention being inside a session");
+    assert!(
+        out.contains("cannot create"),
+        "must explain why new-session is blocked"
+    );
+    assert!(
+        out.contains("inside a session"),
+        "must mention being inside a session"
+    );
 }
 
 #[test]
@@ -929,8 +1201,16 @@ fn attach_session_is_noop_preserves_state() {
     for cmd in &["attach-session", "attach", "a", "at"] {
         execute_command_string(&mut app, cmd).unwrap();
         assert_eq!(app.active_idx, 1, "{} should not change active_idx", cmd);
-        assert_eq!(app.session_name, original_name, "{} should not change session_name", cmd);
-        assert!(matches!(app.mode, Mode::Passthrough), "{} should stay Passthrough", cmd);
+        assert_eq!(
+            app.session_name, original_name,
+            "{} should not change session_name",
+            cmd
+        );
+        assert!(
+            matches!(app.mode, Mode::Passthrough),
+            "{} should stay Passthrough",
+            cmd
+        );
     }
 }
 
@@ -977,138 +1257,275 @@ fn assert_server_forward_noop(cmd: &str) {
     let original_name = app.session_name.clone();
     let original_sync = app.sync_input;
     execute_command_string(&mut app, cmd).unwrap();
-    assert_eq!(app.windows.len(), original_len, "'{}' must not add/remove windows", cmd);
-    assert_eq!(app.session_name, original_name, "'{}' must not change session name", cmd);
-    assert_eq!(app.sync_input, original_sync, "'{}' must not change sync state", cmd);
+    assert_eq!(
+        app.windows.len(),
+        original_len,
+        "'{}' must not add/remove windows",
+        cmd
+    );
+    assert_eq!(
+        app.session_name, original_name,
+        "'{}' must not change session name",
+        cmd
+    );
+    assert_eq!(
+        app.sync_input, original_sync,
+        "'{}' must not change sync state",
+        cmd
+    );
 }
 
 #[test]
-fn server_forwarded_show_options() { assert_server_forward_noop("show-options"); }
+fn server_forwarded_show_options() {
+    assert_server_forward_noop("show-options");
+}
 #[test]
-fn server_forwarded_show() { assert_server_forward_noop("show"); }
+fn server_forwarded_show() {
+    assert_server_forward_noop("show");
+}
 #[test]
-fn server_forwarded_showw() { assert_server_forward_noop("showw"); }
+fn server_forwarded_showw() {
+    assert_server_forward_noop("showw");
+}
 #[test]
-fn server_forwarded_display_message() { assert_server_forward_noop("display-message hello"); }
+fn server_forwarded_display_message() {
+    assert_server_forward_noop("display-message hello");
+}
 #[test]
-fn server_forwarded_display() { assert_server_forward_noop("display hello"); }
+fn server_forwarded_display() {
+    assert_server_forward_noop("display hello");
+}
 #[test]
-fn server_forwarded_show_messages() { assert_server_forward_noop("show-messages"); }
+fn server_forwarded_show_messages() {
+    assert_server_forward_noop("show-messages");
+}
 #[test]
-fn server_forwarded_showmsgs() { assert_server_forward_noop("showmsgs"); }
+fn server_forwarded_showmsgs() {
+    assert_server_forward_noop("showmsgs");
+}
 #[test]
-fn server_forwarded_set_environment() { assert_server_forward_noop("set-environment FOO bar"); }
+fn server_forwarded_set_environment() {
+    assert_server_forward_noop("set-environment FOO bar");
+}
 #[test]
-fn server_forwarded_setenv() { assert_server_forward_noop("setenv FOO bar"); }
+fn server_forwarded_setenv() {
+    assert_server_forward_noop("setenv FOO bar");
+}
 #[test]
-fn server_forwarded_show_environment() { assert_server_forward_noop("show-environment"); }
+fn server_forwarded_show_environment() {
+    assert_server_forward_noop("show-environment");
+}
 #[test]
-fn server_forwarded_showenv() { assert_server_forward_noop("showenv"); }
+fn server_forwarded_showenv() {
+    assert_server_forward_noop("showenv");
+}
 #[test]
-fn server_forwarded_set_hook() { assert_server_forward_noop("set-hook after-new-window 'echo'"); }
+fn server_forwarded_set_hook() {
+    assert_server_forward_noop("set-hook after-new-window 'echo'");
+}
 #[test]
-fn server_forwarded_send_prefix() { assert_server_forward_noop("send-prefix"); }
+fn server_forwarded_send_prefix() {
+    assert_server_forward_noop("send-prefix");
+}
 #[test]
-fn server_forwarded_if_shell() { assert_server_forward_noop("if-shell true new-window"); }
+fn server_forwarded_if_shell() {
+    assert_server_forward_noop("if-shell true new-window");
+}
 #[test]
-fn server_forwarded_if_alias() { assert_server_forward_noop("if true new-window"); }
+fn server_forwarded_if_alias() {
+    assert_server_forward_noop("if true new-window");
+}
 #[test]
-fn server_forwarded_wait_for() { assert_server_forward_noop("wait-for done"); }
+fn server_forwarded_wait_for() {
+    assert_server_forward_noop("wait-for done");
+}
 #[test]
-fn server_forwarded_wait() { assert_server_forward_noop("wait done"); }
+fn server_forwarded_wait() {
+    assert_server_forward_noop("wait done");
+}
 #[test]
-fn server_forwarded_find_window() { assert_server_forward_noop("find-window pattern"); }
+fn server_forwarded_find_window() {
+    assert_server_forward_noop("find-window pattern");
+}
 #[test]
-fn server_forwarded_findw() { assert_server_forward_noop("findw pattern"); }
+fn server_forwarded_findw() {
+    assert_server_forward_noop("findw pattern");
+}
 #[test]
-fn server_forwarded_move_window() { assert_server_forward_noop("move-window -t 1"); }
+fn server_forwarded_move_window() {
+    assert_server_forward_noop("move-window -t 1");
+}
 #[test]
-fn server_forwarded_movew() { assert_server_forward_noop("movew -t 1"); }
+fn server_forwarded_movew() {
+    assert_server_forward_noop("movew -t 1");
+}
 #[test]
-fn server_forwarded_swap_window() { assert_server_forward_noop("swap-window -t 1"); }
+fn server_forwarded_swap_window() {
+    assert_server_forward_noop("swap-window -t 1");
+}
 #[test]
-fn server_forwarded_swapw() { assert_server_forward_noop("swapw -t 1"); }
+fn server_forwarded_swapw() {
+    assert_server_forward_noop("swapw -t 1");
+}
 #[test]
-fn server_forwarded_link_window() { assert_server_forward_noop("link-window -s 0 -t 1"); }
+fn server_forwarded_link_window() {
+    assert_server_forward_noop("link-window -s 0 -t 1");
+}
 #[test]
-fn server_forwarded_linkw() { assert_server_forward_noop("linkw -s 0 -t 1"); }
+fn server_forwarded_linkw() {
+    assert_server_forward_noop("linkw -s 0 -t 1");
+}
 #[test]
-fn server_forwarded_unlink_window() { assert_server_forward_noop("unlink-window"); }
+fn server_forwarded_unlink_window() {
+    assert_server_forward_noop("unlink-window");
+}
 #[test]
-fn server_forwarded_unlinkw() { assert_server_forward_noop("unlinkw"); }
+fn server_forwarded_unlinkw() {
+    assert_server_forward_noop("unlinkw");
+}
 #[test]
-fn server_forwarded_move_pane() { assert_server_forward_noop("move-pane"); }
+fn server_forwarded_move_pane() {
+    assert_server_forward_noop("move-pane");
+}
 #[test]
-fn server_forwarded_movep() { assert_server_forward_noop("movep"); }
+fn server_forwarded_movep() {
+    assert_server_forward_noop("movep");
+}
 #[test]
-fn server_forwarded_join_pane() { assert_server_forward_noop("join-pane -t 1"); }
+fn server_forwarded_join_pane() {
+    assert_server_forward_noop("join-pane -t 1");
+}
 #[test]
-fn server_forwarded_joinp() { assert_server_forward_noop("joinp -t 1"); }
+fn server_forwarded_joinp() {
+    assert_server_forward_noop("joinp -t 1");
+}
 #[test]
-fn server_forwarded_resize_window() { assert_server_forward_noop("resize-window -x 80 -y 24"); }
+fn server_forwarded_resize_window() {
+    assert_server_forward_noop("resize-window -x 80 -y 24");
+}
 #[test]
-fn server_forwarded_resizew() { assert_server_forward_noop("resizew -x 80 -y 24"); }
+fn server_forwarded_resizew() {
+    assert_server_forward_noop("resizew -x 80 -y 24");
+}
 #[test]
-fn server_forwarded_server_info() { assert_server_forward_noop("server-info"); }
+fn server_forwarded_server_info() {
+    assert_server_forward_noop("server-info");
+}
 #[test]
-fn server_forwarded_info() { assert_server_forward_noop("info"); }
+fn server_forwarded_info() {
+    assert_server_forward_noop("info");
+}
 #[test]
 fn server_forwarded_lock_variants() {
-    for cmd in &["lock-client", "lockc", "lock-server", "lock", "lock-session", "locks"] {
+    for cmd in &[
+        "lock-client",
+        "lockc",
+        "lock-server",
+        "lock",
+        "lock-session",
+        "locks",
+    ] {
         assert_server_forward_noop(cmd);
     }
 }
 #[test]
-fn server_forwarded_refresh() { assert_server_forward_noop("refresh-client"); }
+fn server_forwarded_refresh() {
+    assert_server_forward_noop("refresh-client");
+}
 #[test]
-fn server_forwarded_refresh_alias() { assert_server_forward_noop("refresh"); }
+fn server_forwarded_refresh_alias() {
+    assert_server_forward_noop("refresh");
+}
 #[test]
-fn server_forwarded_suspend() { assert_server_forward_noop("suspend-client"); }
+fn server_forwarded_suspend() {
+    assert_server_forward_noop("suspend-client");
+}
 #[test]
-fn server_forwarded_suspendc() { assert_server_forward_noop("suspendc"); }
+fn server_forwarded_suspendc() {
+    assert_server_forward_noop("suspendc");
+}
 #[test]
-fn server_forwarded_send_keys() { assert_server_forward_noop("send-keys Enter"); }
+fn server_forwarded_send_keys() {
+    assert_server_forward_noop("send-keys Enter");
+}
 #[test]
-fn server_forwarded_send() { assert_server_forward_noop("send Enter"); }
+fn server_forwarded_send() {
+    assert_server_forward_noop("send Enter");
+}
 #[test]
-fn server_forwarded_pipe_pane() { assert_server_forward_noop("pipe-pane cat"); }
+fn server_forwarded_pipe_pane() {
+    assert_server_forward_noop("pipe-pane cat");
+}
 #[test]
-fn server_forwarded_pipep() { assert_server_forward_noop("pipep cat"); }
+fn server_forwarded_pipep() {
+    assert_server_forward_noop("pipep cat");
+}
 #[test]
-fn server_forwarded_kill_session() { assert_server_forward_noop("kill-session"); }
+fn server_forwarded_kill_session() {
+    assert_server_forward_noop("kill-session");
+}
 #[test]
-fn server_forwarded_kill_ses() { assert_server_forward_noop("kill-ses"); }
+fn server_forwarded_kill_ses() {
+    assert_server_forward_noop("kill-ses");
+}
 #[test]
-fn server_forwarded_kill_server() { assert_server_forward_noop("kill-server"); }
+fn server_forwarded_kill_server() {
+    assert_server_forward_noop("kill-server");
+}
 #[test]
-fn server_forwarded_clear_history() { assert_server_forward_noop("clear-history"); }
+fn server_forwarded_clear_history() {
+    assert_server_forward_noop("clear-history");
+}
 #[test]
-fn server_forwarded_clearhist() { assert_server_forward_noop("clearhist"); }
+fn server_forwarded_clearhist() {
+    assert_server_forward_noop("clearhist");
+}
 #[test]
-fn server_forwarded_respawn_window() { assert_server_forward_noop("respawn-window"); }
+fn server_forwarded_respawn_window() {
+    assert_server_forward_noop("respawn-window");
+}
 #[test]
-fn server_forwarded_respawnw() { assert_server_forward_noop("respawnw"); }
+fn server_forwarded_respawnw() {
+    assert_server_forward_noop("respawnw");
+}
 #[test]
-fn server_forwarded_previous_layout() { assert_server_forward_noop("previous-layout"); }
+fn server_forwarded_previous_layout() {
+    assert_server_forward_noop("previous-layout");
+}
 #[test]
-fn server_forwarded_prevl() { assert_server_forward_noop("prevl"); }
+fn server_forwarded_prevl() {
+    assert_server_forward_noop("prevl");
+}
 #[test]
-fn server_forwarded_next_layout() { assert_server_forward_noop("next-layout"); }
+fn server_forwarded_next_layout() {
+    assert_server_forward_noop("next-layout");
+}
 #[test]
-fn server_forwarded_select_layout() { assert_server_forward_noop("select-layout even-horizontal"); }
+fn server_forwarded_select_layout() {
+    assert_server_forward_noop("select-layout even-horizontal");
+}
 #[test]
-fn server_forwarded_selectl() { assert_server_forward_noop("selectl even-horizontal"); }
+fn server_forwarded_selectl() {
+    assert_server_forward_noop("selectl even-horizontal");
+}
 #[test]
-fn server_forwarded_set_option() { assert_server_forward_noop("set-option status on"); }
+fn server_forwarded_set_option() {
+    assert_server_forward_noop("set-option status on");
+}
 #[test]
-fn server_forwarded_setw() { assert_server_forward_noop("setw mode-keys vi"); }
+fn server_forwarded_setw() {
+    assert_server_forward_noop("setw mode-keys vi");
+}
 
 // ════════════════════════════════════════════════════════════════════════════
 //  22. Command prompt delegation: verify full pipeline works
 // ════════════════════════════════════════════════════════════════════════════
 
 fn run_via_prompt(app: &mut AppState, cmd: &str) {
-    app.mode = Mode::CommandPrompt { input: cmd.to_string(), cursor: cmd.len() };
+    app.mode = Mode::CommandPrompt {
+        input: cmd.to_string(),
+        cursor: cmd.len(),
+    };
     execute_command_prompt(app).unwrap();
 }
 
@@ -1141,7 +1558,10 @@ fn prompt_delegates_set_buffer_then_list_shows_it() {
     // Now list-buffers via prompt should show it
     run_via_prompt(&mut app, "list-buffers");
     let (_, out) = extract_popup(&app);
-    assert!(out.contains("via_prompt"), "list-buffers should show buffer set via prompt");
+    assert!(
+        out.contains("via_prompt"),
+        "list-buffers should show buffer set via prompt"
+    );
 }
 
 #[test]
@@ -1180,28 +1600,94 @@ fn prompt_unknown_command_falls_through() {
 
 #[test]
 fn parse_action_direct_commands() {
-    assert!(matches!(parse_command_to_action("display-panes"), Some(Action::DisplayPanes)));
-    assert!(matches!(parse_command_to_action("displayp"), Some(Action::DisplayPanes)));
-    assert!(matches!(parse_command_to_action("new-window"), Some(Action::NewWindow)));
-    assert!(matches!(parse_command_to_action("neww"), Some(Action::NewWindow)));
-    assert!(matches!(parse_command_to_action("kill-pane"), Some(Action::KillPane)));
-    assert!(matches!(parse_command_to_action("killp"), Some(Action::KillPane)));
-    assert!(matches!(parse_command_to_action("next-window"), Some(Action::NextWindow)));
-    assert!(matches!(parse_command_to_action("next"), Some(Action::NextWindow)));
-    assert!(matches!(parse_command_to_action("previous-window"), Some(Action::PrevWindow)));
-    assert!(matches!(parse_command_to_action("prev"), Some(Action::PrevWindow)));
-    assert!(matches!(parse_command_to_action("copy-mode"), Some(Action::CopyMode)));
-    assert!(matches!(parse_command_to_action("paste-buffer"), Some(Action::Paste)));
-    assert!(matches!(parse_command_to_action("pasteb"), Some(Action::Paste)));
-    assert!(matches!(parse_command_to_action("detach-client"), Some(Action::Detach)));
-    assert!(matches!(parse_command_to_action("detach"), Some(Action::Detach)));
-    assert!(matches!(parse_command_to_action("rename-window"), Some(Action::RenameWindow)));
-    assert!(matches!(parse_command_to_action("renamew"), Some(Action::RenameWindow)));
-    assert!(matches!(parse_command_to_action("choose-tree"), Some(Action::WindowChooser)));
-    assert!(matches!(parse_command_to_action("choose-window"), Some(Action::WindowChooser)));
-    assert!(matches!(parse_command_to_action("choose-session"), Some(Action::WindowChooser)));
-    assert!(matches!(parse_command_to_action("zoom-pane"), Some(Action::ZoomPane)));
-    assert!(matches!(parse_command_to_action("resize-pane -Z"), Some(Action::ZoomPane)));
+    assert!(matches!(
+        parse_command_to_action("display-panes"),
+        Some(Action::DisplayPanes)
+    ));
+    assert!(matches!(
+        parse_command_to_action("displayp"),
+        Some(Action::DisplayPanes)
+    ));
+    assert!(matches!(
+        parse_command_to_action("new-window"),
+        Some(Action::NewWindow)
+    ));
+    assert!(matches!(
+        parse_command_to_action("neww"),
+        Some(Action::NewWindow)
+    ));
+    assert!(matches!(
+        parse_command_to_action("kill-pane"),
+        Some(Action::KillPane)
+    ));
+    assert!(matches!(
+        parse_command_to_action("killp"),
+        Some(Action::KillPane)
+    ));
+    assert!(matches!(
+        parse_command_to_action("next-window"),
+        Some(Action::NextWindow)
+    ));
+    assert!(matches!(
+        parse_command_to_action("next"),
+        Some(Action::NextWindow)
+    ));
+    assert!(matches!(
+        parse_command_to_action("previous-window"),
+        Some(Action::PrevWindow)
+    ));
+    assert!(matches!(
+        parse_command_to_action("prev"),
+        Some(Action::PrevWindow)
+    ));
+    assert!(matches!(
+        parse_command_to_action("copy-mode"),
+        Some(Action::CopyMode)
+    ));
+    assert!(matches!(
+        parse_command_to_action("paste-buffer"),
+        Some(Action::Paste)
+    ));
+    assert!(matches!(
+        parse_command_to_action("pasteb"),
+        Some(Action::Paste)
+    ));
+    assert!(matches!(
+        parse_command_to_action("detach-client"),
+        Some(Action::Detach)
+    ));
+    assert!(matches!(
+        parse_command_to_action("detach"),
+        Some(Action::Detach)
+    ));
+    assert!(matches!(
+        parse_command_to_action("rename-window"),
+        Some(Action::RenameWindow)
+    ));
+    assert!(matches!(
+        parse_command_to_action("renamew"),
+        Some(Action::RenameWindow)
+    ));
+    assert!(matches!(
+        parse_command_to_action("choose-tree"),
+        Some(Action::WindowChooser)
+    ));
+    assert!(matches!(
+        parse_command_to_action("choose-window"),
+        Some(Action::WindowChooser)
+    ));
+    assert!(matches!(
+        parse_command_to_action("choose-session"),
+        Some(Action::WindowChooser)
+    ));
+    assert!(matches!(
+        parse_command_to_action("zoom-pane"),
+        Some(Action::ZoomPane)
+    ));
+    assert!(matches!(
+        parse_command_to_action("resize-pane -Z"),
+        Some(Action::ZoomPane)
+    ));
 }
 
 #[test]
@@ -1232,33 +1718,76 @@ fn parse_action_command_wrapping_aliases() {
     for (alias, expected_cmd) in &aliases {
         match parse_command_to_action(alias) {
             Some(Action::Command(ref c)) => {
-                assert_eq!(c, expected_cmd, "alias '{}' should produce Command('{}')", alias, expected_cmd);
+                assert_eq!(
+                    c, expected_cmd,
+                    "alias '{}' should produce Command('{}')",
+                    alias, expected_cmd
+                );
             }
-            _other => panic!("alias '{}' should produce Command, got different action", alias),
+            _other => panic!(
+                "alias '{}' should produce Command, got different action",
+                alias
+            ),
         }
     }
 }
 
 #[test]
 fn parse_action_split_window_variants() {
-    assert!(matches!(parse_command_to_action("split-window"), Some(Action::SplitVertical)));
-    assert!(matches!(parse_command_to_action("splitw"), Some(Action::SplitVertical)));
-    assert!(matches!(parse_command_to_action("split-window -h"), Some(Action::SplitHorizontal)));
-    assert!(matches!(parse_command_to_action("splitw -h"), Some(Action::SplitHorizontal)));
+    assert!(matches!(
+        parse_command_to_action("split-window"),
+        Some(Action::SplitVertical)
+    ));
+    assert!(matches!(
+        parse_command_to_action("splitw"),
+        Some(Action::SplitVertical)
+    ));
+    assert!(matches!(
+        parse_command_to_action("split-window -h"),
+        Some(Action::SplitHorizontal)
+    ));
+    assert!(matches!(
+        parse_command_to_action("splitw -h"),
+        Some(Action::SplitHorizontal)
+    ));
     // With extra flags it becomes Command to preserve the full args
-    assert!(matches!(parse_command_to_action("split-window -c /tmp"), Some(Action::Command(_))));
+    assert!(matches!(
+        parse_command_to_action("split-window -c /tmp"),
+        Some(Action::Command(_))
+    ));
 }
 
 #[test]
 fn parse_action_select_pane_directions() {
-    assert!(matches!(parse_command_to_action("select-pane -U"), Some(Action::MoveFocus(FocusDir::Up))));
-    assert!(matches!(parse_command_to_action("select-pane -D"), Some(Action::MoveFocus(FocusDir::Down))));
-    assert!(matches!(parse_command_to_action("select-pane -L"), Some(Action::MoveFocus(FocusDir::Left))));
-    assert!(matches!(parse_command_to_action("select-pane -R"), Some(Action::MoveFocus(FocusDir::Right))));
-    assert!(matches!(parse_command_to_action("selectp -U"), Some(Action::MoveFocus(FocusDir::Up))));
-    assert!(matches!(parse_command_to_action("selectp -D"), Some(Action::MoveFocus(FocusDir::Down))));
+    assert!(matches!(
+        parse_command_to_action("select-pane -U"),
+        Some(Action::MoveFocus(FocusDir::Up))
+    ));
+    assert!(matches!(
+        parse_command_to_action("select-pane -D"),
+        Some(Action::MoveFocus(FocusDir::Down))
+    ));
+    assert!(matches!(
+        parse_command_to_action("select-pane -L"),
+        Some(Action::MoveFocus(FocusDir::Left))
+    ));
+    assert!(matches!(
+        parse_command_to_action("select-pane -R"),
+        Some(Action::MoveFocus(FocusDir::Right))
+    ));
+    assert!(matches!(
+        parse_command_to_action("selectp -U"),
+        Some(Action::MoveFocus(FocusDir::Up))
+    ));
+    assert!(matches!(
+        parse_command_to_action("selectp -D"),
+        Some(Action::MoveFocus(FocusDir::Down))
+    ));
     // No direction flag becomes Command
-    assert!(matches!(parse_command_to_action("select-pane"), Some(Action::Command(_))));
+    assert!(matches!(
+        parse_command_to_action("select-pane"),
+        Some(Action::Command(_))
+    ));
 }
 
 #[test]
@@ -1272,7 +1801,10 @@ fn parse_action_switch_client_table() {
         _ => panic!("expected SwitchTable"),
     }
     // Without -T becomes Command
-    assert!(matches!(parse_command_to_action("switchc"), Some(Action::Command(_))));
+    assert!(matches!(
+        parse_command_to_action("switchc"),
+        Some(Action::Command(_))
+    ));
 }
 
 #[test]
@@ -1306,14 +1838,22 @@ fn format_action_roundtrips() {
         (Action::MoveFocus(FocusDir::Left), "select-pane -L"),
         (Action::MoveFocus(FocusDir::Right), "select-pane -R"),
         (Action::Command("list-keys".to_string()), "list-keys"),
-        (Action::SwitchTable("copy-mode".to_string()), "switch-client -T copy-mode"),
-        (Action::CommandChain(vec!["new-window".to_string(), "split-window".to_string()]),
-            "new-window \\; split-window"),
+        (
+            Action::SwitchTable("copy-mode".to_string()),
+            "switch-client -T copy-mode",
+        ),
+        (
+            Action::CommandChain(vec!["new-window".to_string(), "split-window".to_string()]),
+            "new-window \\; split-window",
+        ),
     ];
     for (action, expected) in &cases {
         let formatted = format_action(action);
-        assert_eq!(&formatted, expected, "format_action({:?}) should produce '{}'",
-            expected, expected);
+        assert_eq!(
+            &formatted, expected,
+            "format_action({:?}) should produce '{}'",
+            expected, expected
+        );
     }
 }
 
@@ -1332,7 +1872,10 @@ fn workflow_create_buffers_list_delete_roundtrip() {
     // list-buffers should show all 5 with correct order (LIFO)
     execute_command_string(&mut app, "list-buffers").unwrap();
     let (_, out) = extract_popup(&app);
-    assert!(out.contains("content_4"), "most recent buffer should appear");
+    assert!(
+        out.contains("content_4"),
+        "most recent buffer should appear"
+    );
     assert!(out.contains("buffer0:"), "first entry should be buffer0");
     assert!(out.contains("buffer4:"), "last entry should be buffer4");
     // show-buffer should show the most recent (content_4)
@@ -1370,7 +1913,10 @@ fn workflow_navigate_windows_verify_tracking() {
     execute_command_string(&mut app, "rename-window renamed_alpha").unwrap();
     execute_command_string(&mut app, "list-windows").unwrap();
     let (_, out) = extract_popup(&app);
-    assert!(out.contains("renamed_alpha"), "list-windows should show renamed window");
+    assert!(
+        out.contains("renamed_alpha"),
+        "list-windows should show renamed window"
+    );
     assert!(out.contains("*"), "active window should have flag");
 }
 
@@ -1393,7 +1939,10 @@ fn workflow_complex_command_sequence_via_prompt() {
     run_via_prompt(&mut app, "list-clients");
     let (_, out) = extract_popup(&app);
     assert!(out.contains("my_project"), "should show renamed session");
-    assert!(out.contains("renamed_aux"), "should show current (renamed) window");
+    assert!(
+        out.contains("renamed_aux"),
+        "should show current (renamed) window"
+    );
 }
 
 // ════════════════════════════════════════════════════════════════════════════
@@ -1410,7 +1959,11 @@ fn popup_width_scales_to_longest_line() {
     match &app.mode {
         Mode::PopupMode { width, .. } => {
             // Width should accommodate the longest line (100 chars + 4 padding)
-            assert!(*width >= 104, "width should be >= 104 for 100-char line, got {}", width);
+            assert!(
+                *width >= 104,
+                "width should be >= 104 for 100-char line, got {}",
+                width
+            );
         }
         _ => panic!("expected PopupMode"),
     }
@@ -1419,12 +1972,19 @@ fn popup_width_scales_to_longest_line() {
 #[test]
 fn popup_height_scales_to_line_count() {
     let mut app = mock_app_with_window();
-    let content = (0..20).map(|i| format!("line {}", i)).collect::<Vec<_>>().join("\n");
+    let content = (0..20)
+        .map(|i| format!("line {}", i))
+        .collect::<Vec<_>>()
+        .join("\n");
     show_output_popup(&mut app, "test", content);
     match &app.mode {
         Mode::PopupMode { height, .. } => {
             // Height = lines + 2, capped at 40
-            assert!(*height >= 22, "height should be >= 22 for 20 lines, got {}", height);
+            assert!(
+                *height >= 22,
+                "height should be >= 22 for 20 lines, got {}",
+                height
+            );
         }
         _ => panic!("expected PopupMode"),
     }
@@ -1433,12 +1993,19 @@ fn popup_height_scales_to_line_count() {
 #[test]
 fn popup_height_not_capped_allows_scroll() {
     let mut app = mock_app_with_window();
-    let content = (0..100).map(|i| format!("line {}", i)).collect::<Vec<_>>().join("\n");
+    let content = (0..100)
+        .map(|i| format!("line {}", i))
+        .collect::<Vec<_>>()
+        .join("\n");
     show_output_popup(&mut app, "test", content);
     match &app.mode {
         Mode::PopupMode { height, .. } => {
             // Height should accommodate all lines (100 + 2 for border)
-            assert_eq!(*height, 102, "height should equal line count + 2, got {}", height);
+            assert_eq!(
+                *height, 102,
+                "height should equal line count + 2, got {}",
+                height
+            );
         }
         _ => panic!("expected PopupMode"),
     }
@@ -1451,7 +2018,11 @@ fn popup_width_capped_at_120() {
     show_output_popup(&mut app, "test", content);
     match &app.mode {
         Mode::PopupMode { width, .. } => {
-            assert!(*width <= 120, "width should be capped at 120, got {}", width);
+            assert!(
+                *width <= 120,
+                "width should be capped at 120, got {}",
+                width
+            );
         }
         _ => panic!("expected PopupMode"),
     }

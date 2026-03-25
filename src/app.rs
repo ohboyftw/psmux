@@ -26,7 +26,9 @@ use crate::input::{
 use crate::layout::dump_layout_json;
 use crate::pane::{create_window, kill_active_pane, kill_pane_by_id, split_active_with_command};
 use crate::rendering::{centered_rect, parse_status, render_window};
-use crate::style::{parse_inline_styles, parse_tmux_style, spans_visual_width, truncate_spans_to_width};
+use crate::style::{
+    parse_inline_styles, parse_tmux_style, spans_visual_width, truncate_spans_to_width,
+};
 use crate::tree::{
     active_pane_mut, compute_rects, find_window_index_by_id, focus_pane_by_id, focus_pane_by_index,
     kill_all_children, reap_children, resize_all_panes,
@@ -665,11 +667,16 @@ pub fn run(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> io::Result<
                 parse_tmux_style(&app.status_right_style)
             };
             // Enforce status-right-length (tmux truncates right portion to this width)
-            let mut right_styled: Vec<Span<'static>> = right_spans.drain(..).map(|s| {
-                if s.style == Style::default() {
-                    Span::styled(s.content.into_owned(), right_style)
-                } else { s }
-            }).collect();
+            let mut right_styled: Vec<Span<'static>> = right_spans
+                .drain(..)
+                .map(|s| {
+                    if s.style == Style::default() {
+                        Span::styled(s.content.into_owned(), right_style)
+                    } else {
+                        s
+                    }
+                })
+                .collect();
             truncate_spans_to_width(&mut right_styled, app.status_right_length);
             combined.push(Span::styled(" ".to_string(), base_status_style));
             combined.extend(right_styled);
@@ -858,9 +865,10 @@ pub fn run(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> io::Result<
                     .map(|i| unicode_width::UnicodeWidthStr::width(i.name.as_str()))
                     .max()
                     .unwrap_or(10)
-                    .max(unicode_width::UnicodeWidthStr::width(menu.title.as_str())) as u16
+                    .max(unicode_width::UnicodeWidthStr::width(menu.title.as_str()))
+                    as u16
                     + 8)
-                    .min(area.width.saturating_sub(2));
+                .min(area.width.saturating_sub(2));
 
                 // Calculate position based on x/y or center
                 let menu_area = if let (Some(x), Some(y)) = (menu.x, menu.y) {

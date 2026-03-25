@@ -408,6 +408,26 @@ mod tests {
         let args = parse_command_line(&cmd);
         assert_eq!(args, vec!["rename-session", "simple"]);
     }
+
+    #[test]
+    fn test_claim_session_roundtrip_root_dir() {
+        // Root paths like C:\ end in a backslash which must survive
+        // the quote_arg -> parse_command_line roundtrip.
+        let name = "mysession";
+        let cwd = "C:\\";
+        let cmd = format!("claim-session {} {}", quote_arg(name), quote_arg(cwd));
+        let args = parse_command_line(&cmd);
+        assert_eq!(args, vec!["claim-session", "mysession", "C:\\"]);
+    }
+
+    #[test]
+    fn test_claim_session_roundtrip_trailing_backslash_dir() {
+        // Paths ending in backslash (e.g. D:\Projects\) must roundtrip.
+        let cwd = "D:\\Projects\\";
+        let cmd = format!("claim-session sess {}", quote_arg(cwd));
+        let args = parse_command_line(&cmd);
+        assert_eq!(args, vec!["claim-session", "sess", "D:\\Projects\\"]);
+    }
 }
 
 pub fn color_to_name(c: vt100::Color) -> std::borrow::Cow<'static, str> {

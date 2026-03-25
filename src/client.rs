@@ -1178,7 +1178,8 @@ pub fn run_remote(
                                         srv_popup_scroll = srv_popup_scroll.saturating_sub(10);
                                     }
                                     KeyCode::PageDown => {
-                                        srv_popup_scroll = (srv_popup_scroll + 10).min(total_lines.saturating_sub(1));
+                                        srv_popup_scroll = (srv_popup_scroll + 10)
+                                            .min(total_lines.saturating_sub(1));
                                     }
                                     KeyCode::Home | KeyCode::Char('g') => {
                                         srv_popup_scroll = 0;
@@ -2087,20 +2088,19 @@ pub fn run_remote(
                                 KeyCode::Up if command_input => {
                                     if command_history_idx > 0 {
                                         command_history_idx -= 1;
-                                        command_buf =
-                                            command_history[command_history_idx].clone();
+                                        command_buf = command_history[command_history_idx].clone();
                                         command_cursor = command_buf.len();
                                     }
                                 }
                                 KeyCode::Down if command_input => {
                                     if command_history_idx < command_history.len() {
                                         command_history_idx += 1;
-                                        command_buf =
-                                            if command_history_idx < command_history.len() {
-                                                command_history[command_history_idx].clone()
-                                            } else {
-                                                String::new()
-                                            };
+                                        command_buf = if command_history_idx < command_history.len()
+                                        {
+                                            command_history[command_history_idx].clone()
+                                        } else {
+                                            String::new()
+                                        };
                                         command_cursor = command_buf.len();
                                     }
                                 }

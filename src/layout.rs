@@ -154,6 +154,55 @@ pub fn dump_layout_json(app: &mut AppState) -> io::Result<String> {
                 const FLAG_BLINK: u8 = 32;
                 const FLAG_HIDDEN: u8 = 64;
 
+                // If the pane is squelched (hiding injected commands),
+                // return a blank leaf so the client never sees the flash.
+                // Squelch is lifted when the vt100 parser detects CSI 2J
+                // (screen clear from cls/clear), or when the safety
+                // timeout expires (fallback for unusual shells).
+                if p.squelch_until.is_some() {
+                    // Check if the sentinel has arrived in the parser.
+                    let sentinel_arrived = p
+                        .term
+                        .lock()
+                        .map(|mut parser| parser.screen_mut().take_squelch_cleared())
+                        .unwrap_or(false);
+                    if sentinel_arrived {
+                        // Sentinel received: cd+cls finished, show the pane.
+                        p.squelch_until = None;
+                    } else if p
+                        .squelch_until
+                        .is_some_and(|d| std::time::Instant::now() < d)
+                    {
+                        // Still waiting: return blank frame.
+                        return LayoutJson::Leaf {
+                            id: p.id,
+                            rows: p.last_rows,
+                            cols: p.last_cols,
+                            cursor_row: 0,
+                            cursor_col: 0,
+                            alternate_screen: false,
+                            hide_cursor: true,
+                            cursor_shape: 0,
+                            active: *cur_path == active_path,
+                            copy_mode: false,
+                            scroll_offset: 0,
+                            sel_start_row: None,
+                            sel_start_col: None,
+                            sel_end_row: None,
+                            sel_end_col: None,
+                            sel_mode: None,
+                            copy_cursor_row: None,
+                            copy_cursor_col: None,
+                            content: vec![],
+                            rows_v2: vec![],
+                            passthrough: vec![],
+                        };
+                    } else {
+                        // Safety timeout expired without sentinel; unsquelch anyway.
+                        p.squelch_until = None;
+                    }
+                }
+
                 let Ok(parser) = p.term.lock() else {
                     return LayoutJson::Leaf {
                         id: p.id,
@@ -653,6 +702,43 @@ pub fn dump_layout_json_fast(app: &mut AppState) -> io::Result<String> {
                 const FLAG_INVERSE: u8 = 16;
                 const FLAG_BLINK: u8 = 32;
                 const FLAG_HIDDEN: u8 = 64;
+
+                // If the pane is squelched, emit a blank leaf.
+                if p.squelch_until.is_some() {
+                    let sentinel_arrived = p
+                        .term
+                        .lock()
+                        .map(|mut parser| parser.screen_mut().take_squelch_cleared())
+                        .unwrap_or(false);
+                    if sentinel_arrived {
+                        p.squelch_until = None;
+                    } else if p
+                        .squelch_until
+                        .is_some_and(|d| std::time::Instant::now() < d)
+                    {
+                        let is_active = cur_path.as_slice() == active_path;
+                        let _ = std::fmt::Write::write_fmt(
+                            out,
+                            format_args!(
+                                concat!(
+                                    "{{\"type\":\"leaf\",\"id\":{},",
+                                    "\"rows\":{},\"cols\":{},",
+                                    "\"cursor_row\":0,\"cursor_col\":0,",
+                                    "\"alternate_screen\":false,",
+                                    "\"hide_cursor\":true,",
+                                    "\"cursor_shape\":0,",
+                                    "\"active\":{},\"copy_mode\":false,",
+                                    "\"scroll_offset\":0,",
+                                    "\"rows_v2\":[],\"content\":[]}}"
+                                ),
+                                p.id, p.last_rows, p.last_cols, is_active,
+                            ),
+                        );
+                        return;
+                    } else {
+                        p.squelch_until = None;
+                    }
+                }
 
                 let is_active = cur_path.as_slice() == active_path;
                 let need_content = in_copy && is_active;

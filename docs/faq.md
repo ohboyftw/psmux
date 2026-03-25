@@ -29,3 +29,15 @@ A: PowerShell 7 (default), PowerShell 5, cmd.exe, Git Bash, WSL, nushell, and an
 
 **Q: Is it stable for daily use?**
 A: Yes. psmux is stress-tested with 15+ rapid windows, 18+ concurrent panes, 5 concurrent sessions, kill+recreate cycles, and sustained load, all with zero hangs or resource leaks.
+
+**Q: PSReadLine predictions (inline history suggestions) are disabled inside psmux. How do I fix this?**
+A: Add `set -g allow-predictions on` to your `~/.psmux.conf`. This tells psmux to preserve your `PredictionSource` setting after initialization. See [configuration.md](configuration.md) for details.
+
+**Q: How do I use a custom config file?**
+A: Use the `-f` flag: `psmux -f /path/to/config.conf`. This loads the specified file instead of the default search order.
+
+**Q: How do I disable warm (pre-spawned) sessions?**
+A: Add `set -g warm off` to your config, or set `$env:PSMUX_NO_WARM = "1"`. See [warm-sessions.md](warm-sessions.md) for details.
+
+**Q: Can I set environment variables for panes?**
+A: Yes. Use `psmux set-environment -g VARNAME value` to set env vars inherited by all new panes. Use `-gu` to unset. See [configuration.md](configuration.md) for details.

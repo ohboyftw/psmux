@@ -20,6 +20,58 @@ fn set_current_config_file(path: &str) {
     CURRENT_CONFIG_FILE.with(|f| *f.borrow_mut() = path.to_string());
 }
 
+/// Quick scan of the config file to check if `set -g warm off` is present.
+/// Used by the client side before attempting warm server claim.
+pub fn is_warm_disabled_by_config() -> bool {
+    let content = if let Ok(config_file) = env::var("PSMUX_CONFIG_FILE") {
+        let expanded = if config_file.starts_with('~') {
+            let home = env::var("USERPROFILE")
+                .or_else(|_| env::var("HOME"))
+                .unwrap_or_default();
+            config_file.replacen('~', &home, 1)
+        } else {
+            config_file
+        };
+        std::fs::read_to_string(expanded).ok()
+    } else {
+        let home = env::var("USERPROFILE")
+            .or_else(|_| env::var("HOME"))
+            .unwrap_or_default();
+        let paths = [
+            format!("{}/.psmux.conf", home),
+            format!("{}/.psmuxrc", home),
+            format!("{}/.tmux.conf", home),
+            format!("{}/.config/psmux/psmux.conf", home),
+        ];
+        paths.iter().find_map(|p| std::fs::read_to_string(p).ok())
+    };
+    if let Some(content) = content {
+        for line in content.lines() {
+            let trimmed = line.trim();
+            if trimmed.starts_with('#') {
+                continue;
+            }
+            // Match: set -g warm off, set warm off, set-option -g warm off, etc.
+            let parts: Vec<&str> = trimmed.split_whitespace().collect();
+            if parts.len() >= 3 {
+                let cmd = parts[0];
+                if cmd == "set" || cmd == "set-option" {
+                    // Find the option name and value, skipping flags like -g, -s, -q
+                    let mut i = 1;
+                    while i < parts.len() && parts[i].starts_with('-') {
+                        i += 1;
+                    }
+                    if i + 1 < parts.len() && parts[i] == "warm" {
+                        let val = parts[i + 1].trim_matches('"').trim_matches('\'');
+                        return val == "off" || val == "false" || val == "0";
+                    }
+                }
+            }
+        }
+    }
+    false
+}
+
 pub fn load_config(app: &mut AppState) {
     // If -f flag was used, load that specific config file instead of default search
     if let Ok(config_file) = env::var("PSMUX_CONFIG_FILE") {
@@ -757,6 +809,14 @@ pub fn parse_option_value(app: &mut AppState, rest: &str, _is_global: bool) {
         }
         "resurrect-dir" => {
             app.resurrect_dir = Some(value.to_string());
+        }
+        "warm" => {
+            app.warm_enabled = matches!(value, "on" | "true" | "1");
+            if !app.warm_enabled {
+                if let Some(mut wp) = app.warm_pane.take() {
+                    wp.child.kill().ok();
+                }
+            }
         }
         "command-alias" => {
             if let Some(pos) = value.find('=') {

@@ -114,6 +114,23 @@ psmux rename-session newname
 psmux respawn-pane
 ```
 
+## Environment Variables
+
+```powershell
+# Set a global env var (inherited by all new panes)
+psmux set-environment -g EDITOR vim
+
+# Set a session-scoped env var
+psmux set-environment MY_VAR value
+
+# Unset a global env var
+psmux set-environment -gu MY_VAR
+
+# Show all environment variables
+psmux show-environment
+psmux show-environment -g
+```
+
 ## Format Variables
 
 The `display-message` command supports these variables:

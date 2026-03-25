@@ -61,12 +61,16 @@ impl std::io::Write for AsyncPaneWriter {
                 // Channel full — drop the data rather than blocking the UI
                 Err(mpsc::TrySendError::Full(_)) => Ok(buf.len()),
                 // Writer thread exited — pane is dead
-                Err(mpsc::TrySendError::Disconnected(_)) => {
-                    Err(std::io::Error::new(std::io::ErrorKind::BrokenPipe, "pane writer exited"))
-                }
+                Err(mpsc::TrySendError::Disconnected(_)) => Err(std::io::Error::new(
+                    std::io::ErrorKind::BrokenPipe,
+                    "pane writer exited",
+                )),
             }
         } else {
-            Err(std::io::Error::new(std::io::ErrorKind::BrokenPipe, "writer closed"))
+            Err(std::io::Error::new(
+                std::io::ErrorKind::BrokenPipe,
+                "writer closed",
+            ))
         }
     }
 
@@ -212,6 +216,10 @@ pub struct Pane {
     /// Custom environment variables passed via -e at spawn time.
     /// Stored for session resurrection.
     pub spawn_env: Vec<(String, String)>,
+    /// When set, the layout serialiser renders this pane as blank until
+    /// the deadline passes.  Used to hide injected cd+cls commands during
+    /// warm session claiming so the user never sees a flash.
+    pub squelch_until: Option<Instant>,
 }
 
 /// Pre-spawned shell ready to be transplanted into a new window instantly.

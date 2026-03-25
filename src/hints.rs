@@ -239,11 +239,7 @@ mod tests {
         let count_before = labels.len();
         labels.sort();
         labels.dedup();
-        assert_eq!(
-            labels.len(),
-            count_before,
-            "all labels must be unique"
-        );
+        assert_eq!(labels.len(), count_before, "all labels must be unique");
     }
 
     #[test]

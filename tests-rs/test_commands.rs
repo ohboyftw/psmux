@@ -13,7 +13,11 @@ fn mock_app() -> AppState {
 fn test_generate_list_clients() {
     let mut app = mock_app();
     let win = crate::types::Window {
-        root: Node::Split { kind: LayoutKind::Horizontal, sizes: vec![], children: vec![] },
+        root: Node::Split {
+            kind: LayoutKind::Horizontal,
+            sizes: vec![],
+            children: vec![],
+        },
         active_path: vec![],
         name: "shell".to_string(),
         id: 0,
@@ -29,7 +33,10 @@ fn test_generate_list_clients() {
     };
     app.windows.push(win);
     let output = generate_list_clients(&app);
-    assert!(output.contains("test_session"), "should contain session name");
+    assert!(
+        output.contains("test_session"),
+        "should contain session name"
+    );
     assert!(output.contains("(utf8)"), "should contain encoding");
     assert!(output.contains("shell"), "should contain window name");
 }
@@ -44,19 +51,37 @@ fn test_generate_show_hooks_empty() {
 #[test]
 fn test_generate_show_hooks_with_hooks() {
     let mut app = mock_app();
-    app.hooks.insert("after-new-window".to_string(), vec!["run-shell 'echo hello'".to_string()]);
+    app.hooks.insert(
+        "after-new-window".to_string(),
+        vec!["run-shell 'echo hello'".to_string()],
+    );
     let output = generate_show_hooks(&app);
-    assert!(output.contains("after-new-window"), "should contain hook name");
+    assert!(
+        output.contains("after-new-window"),
+        "should contain hook name"
+    );
     assert!(output.contains("run-shell"), "should contain hook command");
 }
 
 #[test]
 fn test_generate_list_commands() {
     let output = generate_list_commands();
-    assert!(output.contains("list-windows"), "should list list-windows command");
-    assert!(output.contains("show-hooks"), "should list show-hooks command");
-    assert!(output.contains("list-commands"), "should list list-commands command");
-    assert!(output.contains("list-clients"), "should list list-clients command");
+    assert!(
+        output.contains("list-windows"),
+        "should list list-windows command"
+    );
+    assert!(
+        output.contains("show-hooks"),
+        "should list show-hooks command"
+    );
+    assert!(
+        output.contains("list-commands"),
+        "should list list-commands command"
+    );
+    assert!(
+        output.contains("list-clients"),
+        "should list list-clients command"
+    );
 }
 
 #[test]
@@ -64,7 +89,9 @@ fn test_show_output_popup_sets_mode() {
     let mut app = mock_app();
     show_output_popup(&mut app, "test-cmd", "line1\nline2\nline3".to_string());
     match &app.mode {
-        Mode::PopupMode { command, output, .. } => {
+        Mode::PopupMode {
+            command, output, ..
+        } => {
             assert_eq!(command, "test-cmd");
             assert!(output.contains("line1"));
             assert!(output.contains("line3"));
@@ -76,7 +103,11 @@ fn test_show_output_popup_sets_mode() {
 fn mock_app_with_window() -> AppState {
     let mut app = mock_app();
     let win = crate::types::Window {
-        root: Node::Split { kind: LayoutKind::Horizontal, sizes: vec![], children: vec![] },
+        root: Node::Split {
+            kind: LayoutKind::Horizontal,
+            sizes: vec![],
+            children: vec![],
+        },
         active_path: vec![],
         name: "shell".to_string(),
         id: 0,
@@ -99,95 +130,154 @@ fn mock_app_with_window() -> AppState {
 #[test]
 fn test_list_windows_command_prompt_sets_popup() {
     let mut app = mock_app_with_window();
-    app.mode = Mode::CommandPrompt { input: "list-windows".to_string(), cursor: 12 };
+    app.mode = Mode::CommandPrompt {
+        input: "list-windows".to_string(),
+        cursor: 12,
+    };
     execute_command_prompt(&mut app).unwrap();
     match &app.mode {
-        Mode::PopupMode { command, output, .. } => {
+        Mode::PopupMode {
+            command, output, ..
+        } => {
             assert_eq!(command, "list-windows");
             assert!(!output.is_empty(), "list-windows output must not be empty");
         }
-        other => panic!("expected PopupMode, got {:?}", std::mem::discriminant(other)),
+        other => panic!(
+            "expected PopupMode, got {:?}",
+            std::mem::discriminant(other)
+        ),
     }
 }
 
 #[test]
 fn test_list_panes_command_prompt_sets_popup() {
     let mut app = mock_app_with_window();
-    app.mode = Mode::CommandPrompt { input: "list-panes".to_string(), cursor: 10 };
+    app.mode = Mode::CommandPrompt {
+        input: "list-panes".to_string(),
+        cursor: 10,
+    };
     execute_command_prompt(&mut app).unwrap();
     match &app.mode {
         Mode::PopupMode { command, .. } => {
             assert_eq!(command, "list-panes");
         }
-        other => panic!("expected PopupMode, got {:?}", std::mem::discriminant(other)),
+        other => panic!(
+            "expected PopupMode, got {:?}",
+            std::mem::discriminant(other)
+        ),
     }
 }
 
 #[test]
 fn test_list_clients_command_prompt_sets_popup() {
     let mut app = mock_app_with_window();
-    app.mode = Mode::CommandPrompt { input: "list-clients".to_string(), cursor: 12 };
+    app.mode = Mode::CommandPrompt {
+        input: "list-clients".to_string(),
+        cursor: 12,
+    };
     execute_command_prompt(&mut app).unwrap();
     match &app.mode {
-        Mode::PopupMode { command, output, .. } => {
+        Mode::PopupMode {
+            command, output, ..
+        } => {
             assert_eq!(command, "list-clients");
-            assert!(output.contains("test_session"), "should contain session name");
+            assert!(
+                output.contains("test_session"),
+                "should contain session name"
+            );
         }
-        other => panic!("expected PopupMode, got {:?}", std::mem::discriminant(other)),
+        other => panic!(
+            "expected PopupMode, got {:?}",
+            std::mem::discriminant(other)
+        ),
     }
 }
 
 #[test]
 fn test_list_commands_command_prompt_sets_popup() {
     let mut app = mock_app_with_window();
-    app.mode = Mode::CommandPrompt { input: "list-commands".to_string(), cursor: 13 };
+    app.mode = Mode::CommandPrompt {
+        input: "list-commands".to_string(),
+        cursor: 13,
+    };
     execute_command_prompt(&mut app).unwrap();
     match &app.mode {
-        Mode::PopupMode { command, output, .. } => {
+        Mode::PopupMode {
+            command, output, ..
+        } => {
             assert_eq!(command, "list-commands");
-            assert!(output.contains("list-windows"), "should list known commands");
+            assert!(
+                output.contains("list-windows"),
+                "should list known commands"
+            );
         }
-        other => panic!("expected PopupMode, got {:?}", std::mem::discriminant(other)),
+        other => panic!(
+            "expected PopupMode, got {:?}",
+            std::mem::discriminant(other)
+        ),
     }
 }
 
 #[test]
 fn test_show_hooks_command_prompt_sets_popup() {
     let mut app = mock_app_with_window();
-    app.mode = Mode::CommandPrompt { input: "show-hooks".to_string(), cursor: 10 };
+    app.mode = Mode::CommandPrompt {
+        input: "show-hooks".to_string(),
+        cursor: 10,
+    };
     execute_command_prompt(&mut app).unwrap();
     match &app.mode {
-        Mode::PopupMode { command, output, .. } => {
+        Mode::PopupMode {
+            command, output, ..
+        } => {
             assert_eq!(command, "show-hooks");
-            assert!(output.contains("no hooks"), "empty hooks should show (no hooks)");
+            assert!(
+                output.contains("no hooks"),
+                "empty hooks should show (no hooks)"
+            );
         }
-        other => panic!("expected PopupMode, got {:?}", std::mem::discriminant(other)),
+        other => panic!(
+            "expected PopupMode, got {:?}",
+            std::mem::discriminant(other)
+        ),
     }
 }
 
 #[test]
 fn test_list_panes_alias_lsp_command_prompt() {
     let mut app = mock_app_with_window();
-    app.mode = Mode::CommandPrompt { input: "lsp".to_string(), cursor: 3 };
+    app.mode = Mode::CommandPrompt {
+        input: "lsp".to_string(),
+        cursor: 3,
+    };
     execute_command_prompt(&mut app).unwrap();
     match &app.mode {
         Mode::PopupMode { command, .. } => {
             assert_eq!(command, "list-panes");
         }
-        other => panic!("expected PopupMode for lsp alias, got {:?}", std::mem::discriminant(other)),
+        other => panic!(
+            "expected PopupMode for lsp alias, got {:?}",
+            std::mem::discriminant(other)
+        ),
     }
 }
 
 #[test]
 fn test_list_windows_alias_lsw_command_prompt() {
     let mut app = mock_app_with_window();
-    app.mode = Mode::CommandPrompt { input: "lsw".to_string(), cursor: 3 };
+    app.mode = Mode::CommandPrompt {
+        input: "lsw".to_string(),
+        cursor: 3,
+    };
     execute_command_prompt(&mut app).unwrap();
     match &app.mode {
         Mode::PopupMode { command, .. } => {
             assert_eq!(command, "list-windows");
         }
-        other => panic!("expected PopupMode for lsw alias, got {:?}", std::mem::discriminant(other)),
+        other => panic!(
+            "expected PopupMode for lsw alias, got {:?}",
+            std::mem::discriminant(other)
+        ),
     }
 }
 
@@ -209,7 +299,13 @@ fn test_popup_dimensions_reasonable() {
 #[test]
 fn test_command_prompt_unknown_cmd_stays_passthrough() {
     let mut app = mock_app_with_window();
-    app.mode = Mode::CommandPrompt { input: "some-unknown-cmd".to_string(), cursor: 16 };
+    app.mode = Mode::CommandPrompt {
+        input: "some-unknown-cmd".to_string(),
+        cursor: 16,
+    };
     execute_command_prompt(&mut app).unwrap();
-    assert!(matches!(app.mode, Mode::Passthrough), "unknown command should leave mode as Passthrough");
+    assert!(
+        matches!(app.mode, Mode::Passthrough),
+        "unknown command should leave mode as Passthrough"
+    );
 }

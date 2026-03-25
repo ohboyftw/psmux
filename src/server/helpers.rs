@@ -142,6 +142,17 @@ pub(crate) fn combined_data_version(app: &AppState) -> u64 {
     if app.client_prefix_active {
         v = v.wrapping_add(0x4000_0000_0000);
     }
+    // Include copy mode cursor position and scroll offset so cursor
+    // movement and scrolling in copy mode always invalidate the cached
+    // frame.  Without this, keyboard navigation in copy mode produces
+    // no visible change because the server returns NC (no change).
+    if let Some((r, c)) = app.copy_pos {
+        v = v.wrapping_add((r as u64).wrapping_mul(0x10001).wrapping_add(c as u64));
+    }
+    v = v.wrapping_add((app.copy_scroll_offset as u64).wrapping_mul(0x20003));
+    if let Some((ar, ac)) = app.copy_anchor {
+        v = v.wrapping_add((ar as u64).wrapping_mul(0x30007).wrapping_add(ac as u64));
+    }
     v
 }
 

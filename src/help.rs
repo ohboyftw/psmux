@@ -255,7 +255,11 @@ const CLI_COMMANDS: &[(&str, &str, &str)] = &[
     ("previous-window", "prev", "Move to the previous window"),
     ("rename-window", "renamew", "Rename the current window"),
     ("resize-window", "resizew", "Resize a window"),
-    ("respawn-window", "respawnw", "Restart the process in a window"),
+    (
+        "respawn-window",
+        "respawnw",
+        "Restart the process in a window",
+    ),
     ("rotate-window", "rotatew", "Rotate pane positions"),
     ("select-window", "selectw", "Select a window by index"),
     ("swap-window", "swapw", "Swap two windows"),

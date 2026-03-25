@@ -139,7 +139,11 @@ fn serialize_overlay_json(app: &AppState) -> String {
                 }
             }
             out.push(']');
-            out.push_str(if popup_pty.is_some() { ",\"popup_has_pty\":true" } else { ",\"popup_has_pty\":false" });
+            out.push_str(if popup_pty.is_some() {
+                ",\"popup_has_pty\":true"
+            } else {
+                ",\"popup_has_pty\":false"
+            });
         }
         Mode::ConfirmMode { prompt, .. } => {
             out.push_str(",\"confirm_active\":true,\"confirm_prompt\":\"");
@@ -676,7 +680,8 @@ pub fn run_server(
         if !layout_path.is_empty() {
             match crate::layout::load_layout_file(&layout_path) {
                 Ok(layout) => {
-                    if let Err(e) = crate::layout::apply_layout_file(&mut app, &*pty_system, layout) {
+                    if let Err(e) = crate::layout::apply_layout_file(&mut app, &*pty_system, layout)
+                    {
                         eprintln!("Layout file error: {}", e);
                     }
                     resize_all_panes(&mut app);
@@ -1742,9 +1747,15 @@ pub fn run_server(
                                 .get(app.active_idx)
                                 .and_then(|w| crate::tree::active_pane(&w.root, &w.active_path))
                                 .is_some_and(|p| p.title.starts_with("pane %"));
+                            let has_squelch = app
+                                .windows
+                                .get(app.active_idx)
+                                .and_then(|w| crate::tree::active_pane(&w.root, &w.active_path))
+                                .is_some_and(|p| p.squelch_until.is_some());
                             if allow_nc
                                 && !state_dirty
                                 && !has_placeholder_title
+                                && !has_squelch
                                 && !cached_dump_state.is_empty()
                                 && cached_data_version == combined_data_version(&app)
                             {
@@ -3275,7 +3286,7 @@ pub fn run_server(
                             crate::util::set_env("PSMUX_TARGET_SESSION", app.port_file_base());
                             hook_event = Some("after-rename-session");
                         }
-                        CtrlReq::ClaimSession(name, _client_cwd, resp) => {
+                        CtrlReq::ClaimSession(name, client_cwd, resp) => {
                             // Same as RenameSession but with a synchronous response
                             // so the CLI knows the rename completed before attaching.
                             let home = env::var("USERPROFILE")
@@ -3321,6 +3332,44 @@ pub fn run_server(
                             // Update shared aliases after config reload
                             if let Ok(mut w) = shared_aliases_main.write() {
                                 *w = app.command_aliases.clone();
+                            }
+                            // Honour the client's working directory: the warm server
+                            // was spawned from a previous session whose CWD may differ
+                            // from where the user ran `psmux` now.  Inject `cd` into
+                            // the active pane with squelch to hide the command flash.
+                            if let Some(ref cwd) = client_cwd {
+                                let cwd_path = std::path::Path::new(cwd);
+                                if cwd_path.is_dir() {
+                                    let server_cwd_differs = env::current_dir()
+                                        .map(|cur| cur != cwd_path)
+                                        .unwrap_or(true);
+                                    if server_cwd_differs {
+                                        env::set_current_dir(cwd_path).ok();
+                                        if let Some(win) = app.windows.last_mut() {
+                                            if let Some(p) =
+                                                active_pane_mut(&mut win.root, &win.active_path)
+                                            {
+                                                use std::io::Write as _;
+                                                let escaped = cwd.replace('\'', "''");
+                                                let clear =
+                                                    if cfg!(windows) { "cls" } else { "clear" };
+                                                let cd_cmd =
+                                                    format!(" cd '{}'; {}\r", escaped, clear);
+                                                // Tell the vt100 parser to watch for the
+                                                // next screen-clear event (CSI 2J).
+                                                if let Ok(mut parser) = p.term.lock() {
+                                                    parser
+                                                        .screen_mut()
+                                                        .set_squelch_clear_pending(true);
+                                                }
+                                                p.squelch_until =
+                                                    Some(Instant::now() + Duration::from_secs(5));
+                                                let _ = p.writer.write_all(cd_cmd.as_bytes());
+                                                let _ = p.writer.flush();
+                                            }
+                                        }
+                                    }
+                                }
                             }
                             meta_dirty = true;
                             state_dirty = true;
@@ -3987,17 +4036,33 @@ pub fn run_server(
                                 // JSON layout file — parse and apply
                                 match crate::layout::load_layout_file(&path) {
                                     Ok(layout) => {
-                                        if let Err(e) = crate::layout::apply_layout_file(&mut app, &*pty_system, layout) {
-                                            crate::debug_log::server_log("source-file", &format!("Layout apply error: {}", e));
+                                        if let Err(e) = crate::layout::apply_layout_file(
+                                            &mut app,
+                                            &*pty_system,
+                                            layout,
+                                        ) {
+                                            crate::debug_log::server_log(
+                                                "source-file",
+                                                &format!("Layout apply error: {}", e),
+                                            );
                                         } else {
-                                            crate::debug_log::server_log("source-file", &format!("Applied layout file: {}", path));
+                                            crate::debug_log::server_log(
+                                                "source-file",
+                                                &format!("Applied layout file: {}", path),
+                                            );
                                             resize_all_panes(&mut app);
                                             meta_dirty = true;
                                             crate::resurrection::save_snapshot(&app);
                                         }
                                     }
                                     Err(e) => {
-                                        crate::debug_log::server_log("source-file", &format!("Failed to load layout file '{}': {}", path, e));
+                                        crate::debug_log::server_log(
+                                            "source-file",
+                                            &format!(
+                                                "Failed to load layout file '{}': {}",
+                                                path, e
+                                            ),
+                                        );
                                     }
                                 }
                             } else {
@@ -4246,8 +4311,12 @@ pub fn run_server(
                                     old_wp.child.kill().ok();
                                 }
                                 match spawn_warm_pane(&*pty_system, &mut app) {
-                                    Ok(new_wp) => { app.warm_pane = Some(new_wp); }
-                                    Err(e) => { eprintln!("psmux: warm pane respawn (SetEnv) failed: {e}"); }
+                                    Ok(new_wp) => {
+                                        app.warm_pane = Some(new_wp);
+                                    }
+                                    Err(e) => {
+                                        eprintln!("psmux: warm pane respawn (SetEnv) failed: {e}");
+                                    }
                                 }
                             }
                         }
@@ -4261,8 +4330,14 @@ pub fn run_server(
                                     old_wp.child.kill().ok();
                                 }
                                 match spawn_warm_pane(&*pty_system, &mut app) {
-                                    Ok(new_wp) => { app.warm_pane = Some(new_wp); }
-                                    Err(e) => { eprintln!("psmux: warm pane respawn (UnsetEnv) failed: {e}"); }
+                                    Ok(new_wp) => {
+                                        app.warm_pane = Some(new_wp);
+                                    }
+                                    Err(e) => {
+                                        eprintln!(
+                                            "psmux: warm pane respawn (UnsetEnv) failed: {e}"
+                                        );
+                                    }
                                 }
                             }
                         }
@@ -4434,7 +4509,9 @@ pub fn run_server(
                                         );
                                         Some(PopupPty {
                                             master: pair.master,
-                                            writer: Box::new(crate::types::AsyncPaneWriter::new(pty_writer)),
+                                            writer: Box::new(crate::types::AsyncPaneWriter::new(
+                                                pty_writer,
+                                            )),
                                             child,
                                             term,
                                         })
@@ -4720,13 +4797,18 @@ pub fn run_server(
                         CtrlReq::HintsInput(ch) => {
                             if let Mode::HintsMode(ref mut state) = app.mode {
                                 state.input.push(ch);
-                                if let Some(m) = crate::hints::find_match(&state.matches, &state.input) {
+                                if let Some(m) =
+                                    crate::hints::find_match(&state.matches, &state.input)
+                                {
                                     let text = m.text.clone();
                                     crate::copy_mode::copy_to_system_clipboard(&text);
                                     if app.set_clipboard != "off" {
                                         app.clipboard_osc52 = Some(text.clone());
                                     }
-                                    app.status_message = Some((format!("Copied: {}", text), std::time::Instant::now()));
+                                    app.status_message = Some((
+                                        format!("Copied: {}", text),
+                                        std::time::Instant::now(),
+                                    ));
                                     app.mode = Mode::Passthrough;
                                 } else if !crate::hints::has_prefix(&state.matches, &state.input) {
                                     state.input.clear();
@@ -5170,7 +5252,9 @@ pub fn run_server(
                         }
                         CtrlReq::ShowTextPopup(title, content) => {
                             let lines: Vec<&str> = content.lines().collect();
-                            let width = lines.iter().map(|l| l.len()).max().unwrap_or(40).max(20) as u16 + 4;
+                            let width = lines.iter().map(|l| l.len()).max().unwrap_or(40).max(20)
+                                as u16
+                                + 4;
                             let height = (lines.len() as u16 + 2).clamp(5, 40);
                             app.mode = Mode::PopupMode {
                                 command: title,
