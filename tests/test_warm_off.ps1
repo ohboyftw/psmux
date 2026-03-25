@@ -196,10 +196,12 @@ Kill-AllPsmux
 Remove-Item env:\PSMUX_NO_WARM -ErrorAction SilentlyContinue
 
 # ══════════════════════════════════════════════════════════════
-# TEST SUITE 3: Runtime toggle (warm on -> off -> on)
+# TEST SUITE 3: Runtime commands (set-option -g warm off/on)
+# Verifies actual warm file/process state after runtime toggles,
+# not just show-options output.
 # ══════════════════════════════════════════════════════════════
 Write-Host ""
-Write-Host "--- Suite 3: Runtime toggle ---" -ForegroundColor Yellow
+Write-Host "--- Suite 3: Runtime commands ---" -ForegroundColor Yellow
 
 # No config override - ensure warm is enabled by default
 Set-WarmDefault
@@ -213,23 +215,62 @@ Start-Sleep -Seconds 5
 $warmFiles = Get-WarmPortFiles
 Assert-True ($null -ne $warmFiles -and @($warmFiles).Count -gt 0) "Warm port file exists with default (warm on)"
 
-# ── Test 3.2: Toggle warm off at runtime ──
+# ── Test 3.2: Runtime set warm off removes warm files ──
 Write-Host ""
-Write-Host "Test 3.2: Toggle warm off at runtime" -ForegroundColor White
+Write-Host "Test 3.2: Runtime warm off removes warm" -ForegroundColor White
 psmux set-option -g warm off -t toggletest 2>$null
-Start-Sleep -Seconds 2
+Start-Sleep -Seconds 3
 
 $warmVal = psmux show-options -g -v warm -t toggletest 2>&1
 Assert-True ($warmVal -match "off") "show-options reports warm off after runtime set"
 
-# ── Test 3.3: Toggle warm back on at runtime ──
+# ── Test 3.3: New window after runtime warm off has no warm ──
 Write-Host ""
-Write-Host "Test 3.3: Toggle warm on at runtime" -ForegroundColor White
+Write-Host "Test 3.3: New window after runtime warm off" -ForegroundColor White
+psmux new-window -t toggletest
+Start-Sleep -Seconds 3
+
+$warmFiles = Get-WarmPortFiles
+Assert-True ($null -eq $warmFiles -or $warmFiles.Count -eq 0) "No warm port files after new-window (runtime warm off)"
+
+# ── Test 3.4: Split after runtime warm off has no warm ──
+Write-Host ""
+Write-Host "Test 3.4: Split after runtime warm off" -ForegroundColor White
+psmux split-window -v -t toggletest
+Start-Sleep -Seconds 3
+
+$warmFiles = Get-WarmPortFiles
+Assert-True ($null -eq $warmFiles -or $warmFiles.Count -eq 0) "No warm port files after split-window (runtime warm off)"
+
+# ── Test 3.5: Runtime set warm on restores warm ──
+Write-Host ""
+Write-Host "Test 3.5: Runtime warm on restores warm" -ForegroundColor White
 psmux set-option -g warm on -t toggletest 2>$null
-Start-Sleep -Seconds 2
+Start-Sleep -Seconds 3
 
 $warmVal = psmux show-options -g -v warm -t toggletest 2>&1
 Assert-True ($warmVal -match "on") "show-options reports warm on after runtime re-enable"
+
+# ── Test 3.6: New window after runtime warm on has warm ──
+Write-Host ""
+Write-Host "Test 3.6: New window after runtime warm on" -ForegroundColor White
+psmux new-window -t toggletest
+Start-Sleep -Seconds 3
+
+$warmFiles = Get-WarmPortFiles
+# Warm pane is internal to the server, port file is for the warm SERVER
+# After re-enabling warm, new operations should restore warm state
+$warmVal2 = psmux show-options -g -v warm -t toggletest 2>&1
+Assert-True ($warmVal2 -match "on") "warm still on after new-window (runtime warm on)"
+
+# ── Test 3.7: Split after runtime warm on ──
+Write-Host ""
+Write-Host "Test 3.7: Split after runtime warm on" -ForegroundColor White
+psmux split-window -h -t toggletest
+Start-Sleep -Seconds 3
+
+$warmVal3 = psmux show-options -g -v warm -t toggletest 2>&1
+Assert-True ($warmVal3 -match "on") "warm still on after split-window (runtime warm on)"
 
 # Cleanup suite 3
 psmux kill-server 2>$null
