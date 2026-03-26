@@ -122,6 +122,7 @@ pub struct Attrs {
     inverse: Option<bool>,
     blink: Option<bool>,
     hidden: Option<bool>,
+    strikethrough: Option<bool>,
 }
 
 impl Attrs {
@@ -164,6 +165,11 @@ impl Attrs {
         self.hidden = Some(hidden);
         self
     }
+
+    pub fn strikethrough(mut self, strikethrough: bool) -> Self {
+        self.strikethrough = Some(strikethrough);
+        self
+    }
 }
 
 impl BufWrite for Attrs {
@@ -178,6 +184,7 @@ impl BufWrite for Attrs {
             && self.inverse.is_none()
             && self.blink.is_none()
             && self.hidden.is_none()
+            && self.strikethrough.is_none()
         {
             return;
         }
@@ -293,6 +300,14 @@ impl BufWrite for Attrs {
                 write_param!(8);
             } else {
                 write_param!(28);
+            }
+        }
+
+        if let Some(strikethrough) = self.strikethrough {
+            if strikethrough {
+                write_param!(9);
+            } else {
+                write_param!(29);
             }
         }
 

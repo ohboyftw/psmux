@@ -210,6 +210,43 @@ impl<CB: crate::callbacks::Callbacks> vte::Perform for WrappedScreen<CB> {
             [b"9999", ..] => {
                 self.screen.squelch_cleared = true;
             }
+            // OSC 99 — iTerm2 desktop notification.
+            // Format: \e]99;body\a  or  \e]99;i=<id>:d=0;body\a
+            [b"99", body_or_opts, ..] => {
+                let raw = String::from_utf8_lossy(body_or_opts);
+                // If the body starts with key=value pairs separated by `:`,
+                // the actual message follows the last `;` in the original params.
+                // For simplicity, take everything after the first `;` in params
+                // or the whole thing if no options.
+                let body = if raw.contains('=') {
+                    // Options present — body is in the next param(s)
+                    if params.len() > 2 {
+                        String::from_utf8_lossy(params[2]).into_owned()
+                    } else {
+                        raw.into_owned()
+                    }
+                } else {
+                    raw.into_owned()
+                };
+                if !body.is_empty() {
+                    self.screen.push_notification("psmux".into(), body);
+                }
+            }
+            // OSC 777 — rxvt-unicode notification.
+            // Format: \e]777;notify;title;body\a
+            [b"777", b"notify", title, body] => {
+                let t = String::from_utf8_lossy(title).into_owned();
+                let b = String::from_utf8_lossy(body).into_owned();
+                if !b.is_empty() {
+                    self.screen.push_notification(t, b);
+                }
+            }
+            [b"777", b"notify", body] => {
+                let b = String::from_utf8_lossy(body).into_owned();
+                if !b.is_empty() {
+                    self.screen.push_notification("psmux".into(), b);
+                }
+            }
             [b"52", ty, data] => match (ty.iter().all(|c| CLIPBOARD_SELECTOR.contains(c)), *data) {
                 (true, b"?") => {
                     self.callbacks.paste_from_clipboard(&mut self.screen, ty);

@@ -167,6 +167,10 @@ pub struct Pane {
     pub last_infer_title: Instant,
     /// True when the child process has exited but remain-on-exit keeps the pane visible.
     pub dead: bool,
+    /// True when the pane was explicitly killed via kill-pane (not natural exit).
+    /// Used to bypass the async try_wait check on Windows where process
+    /// termination may not be reflected immediately after kill_process_tree.
+    pub killed: bool,
     /// Exit code of the child process, set when the process exits.
     pub exit_code: Option<i32>,
     /// Cached VT bridge detection result (for mouse injection).

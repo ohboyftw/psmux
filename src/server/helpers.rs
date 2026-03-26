@@ -1,8 +1,77 @@
 use std::io;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use crate::format::expand_format_for_window;
 use crate::types::{AppState, Node, Window};
 use crate::util::WinInfo;
+
+/// Global flag to avoid spamming toast notifications when PowerShell
+/// is still running the previous one.
+static TOAST_IN_FLIGHT: AtomicBool = AtomicBool::new(false);
+
+/// Drain OSC 99/777 desktop notifications from all panes and fire
+/// Windows toast notifications for each.
+pub(crate) fn drain_notifications(app: &mut AppState) {
+    let mut notifs: Vec<(String, String)> = Vec::new();
+    for win in &mut app.windows {
+        collect_notifications(&mut win.root, &mut notifs);
+    }
+    for (title, body) in notifs {
+        fire_toast_notification(&title, &body);
+    }
+}
+
+fn collect_notifications(node: &mut Node, out: &mut Vec<(String, String)>) {
+    match node {
+        Node::Leaf(p) => {
+            if let Ok(mut term) = p.term.lock() {
+                let n = term.screen_mut().drain_notifications();
+                if !n.is_empty() {
+                    out.extend(n);
+                }
+            }
+        }
+        Node::Split { children, .. } => {
+            for c in children {
+                collect_notifications(c, out);
+            }
+        }
+    }
+}
+
+/// Fire a Windows toast notification via PowerShell.
+/// Spawns a detached process so it doesn't block the server loop.
+fn fire_toast_notification(title: &str, body: &str) {
+    // Skip if a previous notification is still in flight
+    if TOAST_IN_FLIGHT.swap(true, Ordering::AcqRel) {
+        return;
+    }
+    // Escape single quotes for PowerShell strings
+    let title_esc = title.replace('\'', "''");
+    let body_esc = body.replace('\'', "''");
+    let script = format!(
+        concat!(
+            "[Windows.UI.Notifications.ToastNotificationManager, Windows.UI.Notifications, ContentType = WindowsRuntime] > $null; ",
+            "$t = [Windows.UI.Notifications.ToastNotificationManager]::GetTemplateContent(",
+            "[Windows.UI.Notifications.ToastTemplateType]::ToastText02); ",
+            "$n = $t.GetElementsByTagName('text'); ",
+            "$n.Item(0).AppendChild($t.CreateTextNode('{}')) > $null; ",
+            "$n.Item(1).AppendChild($t.CreateTextNode('{}')) > $null; ",
+            "$toast = [Windows.UI.Notifications.ToastNotification]::new($t); ",
+            "[Windows.UI.Notifications.ToastNotificationManager]::CreateToastNotifier('psmux').Show($toast)",
+        ),
+        title_esc, body_esc,
+    );
+    std::thread::spawn(move || {
+        let _ = std::process::Command::new("powershell")
+            .args(["-NoProfile", "-NonInteractive", "-Command", &script])
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status();
+        TOAST_IN_FLIGHT.store(false, Ordering::Release);
+    });
+}
 
 /// Collect all leaf pane paths in tree order (for next/prev pane cycling).
 pub(crate) fn collect_pane_paths_server(

@@ -1385,6 +1385,7 @@ pub fn capture_active_pane_styled(
     let mut prev_blink = false;
     let mut prev_inverse = false;
     let mut prev_hidden = false;
+    let mut prev_strikethrough = false;
 
     for r in start_row..=end_row {
         // Build the row content, then trim trailing whitespace
@@ -1402,6 +1403,7 @@ pub fn capture_active_pane_styled(
                 let blink = cell.blink();
                 let inverse = cell.inverse();
                 let hidden = cell.hidden();
+                let strikethrough = cell.strikethrough();
 
                 // Emit SGR if attributes changed
                 let style_changed = Some(fg) != prev_fg
@@ -1412,7 +1414,8 @@ pub fn capture_active_pane_styled(
                     || underline != prev_underline
                     || blink != prev_blink
                     || inverse != prev_inverse
-                    || hidden != prev_hidden;
+                    || hidden != prev_hidden
+                    || strikethrough != prev_strikethrough;
 
                 let sgr = if style_changed {
                     let mut params = Vec::new();
@@ -1437,6 +1440,9 @@ pub fn capture_active_pane_styled(
                     }
                     if hidden {
                         params.push("8".to_string());
+                    }
+                    if strikethrough {
+                        params.push("9".to_string());
                     }
                     // Foreground
                     match fg {
@@ -1479,6 +1485,7 @@ pub fn capture_active_pane_styled(
                     prev_blink = blink;
                     prev_inverse = inverse;
                     prev_hidden = hidden;
+                    prev_strikethrough = strikethrough;
                     any_style_active = true;
                     Some(format!("\x1b[{}m", params.join(";")))
                 } else {

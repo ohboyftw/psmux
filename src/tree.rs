@@ -562,6 +562,19 @@ fn prune_exited_inner(
             if p.dead {
                 return Some(Node::Leaf(p));
             }
+            // Explicitly killed panes (via kill-pane) should be pruned
+            // even if try_wait hasn't caught the exit yet (#25).
+            if p.killed {
+                let exit_code = p.child.try_wait().ok().flatten().map(|s| s.exit_code() as i32);
+                p.exit_code = exit_code;
+                exited.push((p.id, exit_code));
+                return if remain_on_exit {
+                    p.dead = true;
+                    Some(Node::Leaf(p))
+                } else {
+                    None
+                };
+            }
             match p.child.try_wait() {
                 Ok(Some(status)) => {
                     let exit_code = Some(status.exit_code() as i32);

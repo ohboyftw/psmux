@@ -183,6 +183,11 @@ impl Attrs {
         } else {
             attrs.hidden(self.hidden())
         };
+        let attrs = if self.strikethrough() == other.strikethrough() {
+            attrs
+        } else {
+            attrs.strikethrough(self.strikethrough())
+        };
 
         attrs.write_buf(contents);
     }

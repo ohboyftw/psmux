@@ -64,9 +64,11 @@ impl Row {
     pub fn truncate(&mut self, len: u16) {
         self.cells.truncate(usize::from(len));
         self.wrapped = false;
-        let last_cell = &mut self.cells[usize::from(len) - 1];
-        if last_cell.is_wide() {
-            last_cell.clear(*last_cell.attrs());
+        if len > 0 {
+            let last_cell = &mut self.cells[usize::from(len) - 1];
+            if last_cell.is_wide() {
+                last_cell.clear(*last_cell.attrs());
+            }
         }
     }
 

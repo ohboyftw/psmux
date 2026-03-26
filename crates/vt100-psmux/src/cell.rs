@@ -190,4 +190,11 @@ impl Cell {
     pub fn hidden(&self) -> bool {
         self.attrs.hidden()
     }
+
+    /// Returns whether the cell should be rendered with the strikethrough
+    /// text attribute.
+    #[must_use]
+    pub fn strikethrough(&self) -> bool {
+        self.attrs.strikethrough()
+    }
 }

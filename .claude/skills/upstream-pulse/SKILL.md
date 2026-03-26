@@ -162,3 +162,162 @@ On partial success, only update baselines for sources that succeeded.
 Saved to `.claude/upstream-pulse/reports/sync-<date>-<codename>.md`
 
 Keep last 20 reports. Delete older ones automatically.
+
+## Auto-Merge Safe Mode
+
+When the user runs `/upstream-pulse --auto-merge-safe`, perform the normal analysis first, then automatically cherry-pick zero-conflict commits.
+
+### Identifying Safe Commits
+
+For each new commit from `upstream/master`, check if it ONLY adds new files:
+
+```bash
+# List files that are Added only (safe)
+git diff-tree --no-commit-id --diff-filter=A -r <sha>
+
+# List files that are Modified, Deleted, Renamed, Copied, or Type-changed (unsafe)
+git diff-tree --no-commit-id --diff-filter=MDRCT -r <sha>
+```
+
+A commit is **safe to auto-merge** when:
+- It has zero MDRCT entries (only adds new files)
+- OR it modifies only files that have NOT diverged between `upstream/master` and `HEAD`
+
+### Cherry-Pick Procedure
+
+For each safe commit, in chronological order:
+
+1. `git cherry-pick <sha> --no-edit`
+2. If conflict: `git cherry-pick --abort`, mark as skipped
+3. Run `cargo check` — if it fails: `git revert HEAD --no-edit`, mark as failed
+4. If success: mark as auto-merged
+
+### Report Annotations
+
+Add an `AUTO-MERGE RESULTS` box after the tier report:
+
+```
+┌─ AUTO-MERGE RESULTS ───────────────────────────
+│ ✓ Merged:  403a936 test: StrictMode compat tests
+│ ✓ Merged:  17d4422 squelch visibility tests
+│ ✗ Skipped: 43dd68f popup-as-pane (modifies existing files)
+│ ✗ Failed:  e000662 window index prompt (cargo check failed)
+│
+│ Auto-merged: 2/4 eligible, 2 skipped
+└─────────────────────────────────────────────────
+```
+
+Annotate tier items with `[auto-merged]` or `[needs manual merge]`.
+
+## Auto Task Creation
+
+After generating the tiered report, automatically create tasks using the `TaskCreate` tool.
+
+### Task Mapping
+
+| Tier | Strategy | Subject format |
+|------|----------|----------------|
+| 1 | One task per item | `MERGE: <summary>` |
+| 2 | One task per item | `CONFIG: <summary>` |
+| 3 | One task per item | `<summary>` |
+| 4 | One combined task | `Merge Tier 4 fixes from upstream (<N> items)` |
+| 5 | One combined task | `Port Tier 5 features from upstream (<N> items)` |
+
+### Task Dependencies
+
+- Tier 1 tasks block all Tier 2-3 tasks (use `addBlockedBy`)
+- All Tier 1-3 merge tasks block Tier 4-5 combined tasks
+- Within the same tier, tasks are independent (no ordering)
+
+### Auto-Merged Items
+
+If `--auto-merge-safe` was used:
+- Items that were auto-merged: create the task AND immediately mark it as `completed`
+- Items that failed auto-merge: create as `pending` with failure reason in description
+
+### Task Description Format
+
+Each task description includes:
+- Upstream commit SHA(s)
+- Files changed
+- Risk level (from tier analysis)
+- Specific action to take (merge, cherry-pick, port, verify)
+- For combined Tier 4-5 tasks: bullet list of all items
+
+## Desktop Notifications
+
+When Tier 1 or Tier 2 items are found, emit OSC 99 escape sequences to trigger Windows toast notifications via psmux's built-in notification handler.
+
+### Notification Rules
+
+| Condition | Notification |
+|-----------|-------------|
+| Tier 1 items found | Always notify |
+| Tier 2 items found | Notify |
+| Tier 3-5 only | No notification (silent) |
+
+### Escape Sequence
+
+Emit **after** the full report is printed, using `printf` (not `echo`):
+
+```bash
+# Tier 1 notification
+printf '\033]99;psmux upstream: %d Tier 1 merge(s) needed — %s\007' "$count" "$first_item_summary"
+
+# Tier 2 notification
+printf '\033]99;psmux upstream: %d quick config item(s) — %s\007' "$count" "$first_item_summary"
+```
+
+When running in Claude Code (not a raw terminal), use the Bash tool to emit:
+
+```bash
+printf '\033]99;psmux upstream: 1 Tier 1 merge needed — popup-as-pane refactor\007'
+```
+
+The psmux server's VT100 parser will catch the OSC 99 sequence and fire a Windows toast notification via PowerShell.
+
+## Scheduled Runs
+
+Use Claude Code's `/schedule` command to run upstream-pulse automatically.
+
+### Setup
+
+```
+/schedule create --name upstream-pulse-daily --cron "0 9 * * *" --prompt "/upstream-pulse --auto-merge-safe"
+```
+
+This runs every day at 9 AM and:
+1. Fetches all three upstream sources
+2. Categorizes changes into tiers
+3. Auto-merges zero-conflict commits (new test files, docs)
+4. Creates tasks for remaining items
+5. Fires desktop notifications for Tier 1-2 items
+6. Saves report and tags the checkpoint
+
+### Management
+
+```bash
+# List scheduled runs
+/schedule list
+
+# Pause the schedule
+/schedule update --name upstream-pulse-daily --enabled false
+
+# Resume the schedule
+/schedule update --name upstream-pulse-daily --enabled true
+
+# Change schedule (e.g. twice daily)
+/schedule update --name upstream-pulse-daily --cron "0 9,17 * * *"
+
+# Delete the schedule
+/schedule delete --name upstream-pulse-daily
+```
+
+### What Each Scheduled Run Produces
+
+- **Report file**: `.claude/upstream-pulse/reports/sync-<date>-<codename>.md`
+- **Git tag**: `sync-<date>-<codename>` with tier summary in message
+- **Cherry-picks**: Zero-conflict commits merged automatically
+- **Tasks**: Created/updated for remaining manual work
+- **Toast notification**: If Tier 1-2 items detected
+- **Updated state**: `state.json` baselines advanced

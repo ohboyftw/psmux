@@ -117,6 +117,11 @@ pub struct Screen {
     /// Set by the server before injecting `cd; cls`.  When true,
     /// the next CSI 2J (erase display mode 2) sets `squelch_cleared`.
     pub(crate) squelch_clear_pending: bool,
+
+    /// Queue of desktop notifications received via OSC 99 (iTerm2) or
+    /// OSC 777 (rxvt-unicode).  Each entry is (title, body).
+    /// Drained by the server loop to fire Windows toast notifications.
+    pub(crate) notifications: Vec<(String, String)>,
 }
 
 impl Screen {
@@ -137,6 +142,7 @@ impl Screen {
             osc7_path: None,
             squelch_cleared: false,
             squelch_clear_pending: false,
+            notifications: Vec::new(),
         }
     }
 
@@ -638,10 +644,32 @@ impl Screen {
         v
     }
 
-    /// Arm the squelch detector: the next CSI 2J (erase display) will
+    /// Arm the squelch detector: the next CSI 2J or CSI 3J will
     /// set `squelch_cleared` to `true`.
     pub fn set_squelch_clear_pending(&mut self, v: bool) {
         self.squelch_clear_pending = v;
+    }
+
+    /// Internal: fire the squelch signal if armed.
+    fn check_squelch_signal(&mut self) {
+        if self.squelch_clear_pending {
+            self.squelch_cleared = true;
+            self.squelch_clear_pending = false;
+        }
+    }
+
+    /// Drain all pending desktop notifications (OSC 99/777).
+    /// Returns (title, body) pairs.
+    pub fn drain_notifications(&mut self) -> Vec<(String, String)> {
+        std::mem::take(&mut self.notifications)
+    }
+
+    /// Push a desktop notification (called from osc_dispatch).
+    pub(crate) fn push_notification(&mut self, title: String, body: String) {
+        // Cap to 16 queued notifications to prevent memory growth
+        if self.notifications.len() < 16 {
+            self.notifications.push((title, body));
+        }
     }
 
     /// Returns the currently active foreground color.
@@ -1056,12 +1084,12 @@ impl Screen {
             1 => self.grid_mut().erase_all_backward(attrs),
             2 => {
                 self.grid_mut().erase_all(attrs);
-                if self.squelch_clear_pending {
-                    self.squelch_cleared = true;
-                    self.squelch_clear_pending = false;
-                }
+                self.check_squelch_signal();
             }
-            3 => self.grid_mut().clear_scrollback(),
+            3 => {
+                self.grid_mut().clear_scrollback();
+                self.check_squelch_signal();
+            }
             _ => unhandled(self),
         }
     }

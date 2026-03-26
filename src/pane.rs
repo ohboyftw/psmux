@@ -134,6 +134,7 @@ pub fn create_window(
             last_title_check: epoch,
             last_infer_title: epoch,
             dead: false,
+            killed: false,
             exit_code: None,
             vt_bridge_cache: None,
             vti_mode_cache: None,
@@ -293,6 +294,7 @@ pub fn create_window(
         last_title_check: epoch,
         last_infer_title: epoch,
         dead: false,
+        killed: false,
         exit_code: None,
         vt_bridge_cache: None,
         vti_mode_cache: None,
@@ -525,6 +527,7 @@ pub fn create_window_raw(
         last_title_check: epoch,
         last_infer_title: epoch,
         dead: false,
+        killed: false,
         exit_code: None,
         vt_bridge_cache: None,
         vti_mode_cache: None,
@@ -713,6 +716,7 @@ pub fn split_active_with_command(
             last_title_check: epoch,
             last_infer_title: epoch,
             dead: false,
+            killed: false,
             exit_code: None,
             vt_bridge_cache: None,
             vti_mode_cache: None,
@@ -850,6 +854,7 @@ pub fn split_active_with_command(
         last_title_check: epoch,
         last_infer_title: epoch,
         dead: false,
+        killed: false,
         exit_code: None,
         vt_bridge_cache: None,
         vti_mode_cache: None,
@@ -894,6 +899,11 @@ fn kill_pane_at_path(win: &mut Window, path: &[usize]) {
     // so we must do it here to ensure no orphaned processes.
     if let Some(p) = active_pane_mut(&mut win.root, path) {
         crate::platform::process_kill::kill_process_tree(&mut p.child);
+        // Mark the pane as explicitly killed so the server's window-removal
+        // check succeeds without waiting for try_wait() (which is async on
+        // Windows and may not reflect the kill yet).  This prevents the
+        // "respawn" artifact where the dead pane lingers visibly (#25).
+        p.killed = true;
     }
     kill_leaf(&mut win.root, path);
     // Remove killed pane from MRU
@@ -1167,7 +1177,7 @@ const PROFILE_SOURCE: &str = concat!(
 ///      vt100 parser captures it (reliable Layer 2 fallback if the PEB
 ///      walk fails, e.g. due to access restrictions or remote sessions).
 const CWD_SYNC: &str = concat!(
-    "if (-not $Global:__psmux_cwd_hook) { ",
+    "if (-not (Test-Path variable:Global:__psmux_cwd_hook)) { ",
     "$Global:__psmux_cwd_hook = $true; ",
     "function Global:__psmux_sync_cwd { ",
     "try { [System.IO.Directory]::SetCurrentDirectory($PWD.ProviderPath) } catch {}; ",

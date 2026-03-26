@@ -288,6 +288,9 @@ pub fn render_node(
                         if cell.hidden() {
                             style = style.add_modifier(Modifier::HIDDEN);
                         }
+                        if cell.strikethrough() {
+                            style = style.add_modifier(Modifier::CROSSED_OUT);
+                        }
                         let text = cell.contents().to_string();
                         let w = UnicodeWidthStr::width(text.as_str()) as u16;
                         if w == 0 {

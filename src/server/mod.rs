@@ -1400,7 +1400,7 @@ pub fn run_server(
                                 && crate::tree::count_panes(&app.windows[target_win_idx].root) <= 1
                             {
                                 if let Node::Leaf(ref mut p) = app.windows[target_win_idx].root {
-                                    if (p.child.try_wait().ok().flatten().is_some() || p.dead)
+                                    if (p.child.try_wait().ok().flatten().is_some() || p.dead || p.killed)
                                         && app.windows.len() > 1
                                     {
                                         app.windows.remove(target_win_idx);
@@ -1429,7 +1429,7 @@ pub fn run_server(
                                     && crate::tree::count_panes(&app.windows[wi].root) <= 1
                                 {
                                     if let Node::Leaf(ref mut p) = app.windows[wi].root {
-                                        if (p.child.try_wait().ok().flatten().is_some() || p.dead)
+                                        if (p.child.try_wait().ok().flatten().is_some() || p.dead || p.killed)
                                             && app.windows.len() > 1
                                         {
                                             app.windows.remove(wi);
@@ -3356,14 +3356,14 @@ pub fn run_server(
                                                 let cd_cmd =
                                                     format!(" cd '{}'; {}\r", escaped, clear);
                                                 // Tell the vt100 parser to watch for the
-                                                // next screen-clear event (CSI 2J).
+                                                // next screen-clear event (CSI 2J/3J).
                                                 if let Ok(mut parser) = p.term.lock() {
                                                     parser
                                                         .screen_mut()
                                                         .set_squelch_clear_pending(true);
                                                 }
                                                 p.squelch_until =
-                                                    Some(Instant::now() + Duration::from_secs(5));
+                                                    Some(Instant::now() + Duration::from_millis(500));
                                                 let _ = p.writer.write_all(cd_cmd.as_bytes());
                                                 let _ = p.writer.flush();
                                             }
@@ -5487,6 +5487,8 @@ pub fn run_server(
         // Check if all windows/panes have exited (throttled to every 250ms)
         if last_reap.elapsed() >= Duration::from_millis(100) {
             last_reap = Instant::now();
+            // Drain OSC 99/777 desktop notifications from panes
+            helpers::drain_notifications(&mut app);
             // Check wait-pane waiters before reaping (so we can capture exit codes)
             if !app.wait_pane_queue.is_empty() {
                 drain_wait_pane_queue(&mut app);
