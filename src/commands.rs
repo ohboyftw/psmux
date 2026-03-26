@@ -1310,17 +1310,8 @@ pub fn execute_command_string(app: &mut AppState, cmd: &str) -> io::Result<()> {
             }
             let shell_cmd = cmd_parts.join(" ");
             if !shell_cmd.is_empty() {
-                // Expand ~ to home directory
-                let shell_cmd = if shell_cmd.contains('~') {
-                    let home = std::env::var("USERPROFILE")
-                        .or_else(|_| std::env::var("HOME"))
-                        .unwrap_or_default();
-                    shell_cmd
-                        .replace("~/", &format!("{}/", home))
-                        .replace("~\\", &format!("{}\\", home))
-                } else {
-                    shell_cmd
-                };
+                // Expand ~ to home directory + XDG fallback for plugin paths
+                let shell_cmd = crate::util::expand_run_shell_path(&shell_cmd);
                 // Set PSMUX_TARGET_SESSION so child scripts connect to the correct server
                 let target_session = app.port_file_base();
                 #[cfg(windows)]

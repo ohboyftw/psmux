@@ -2252,7 +2252,7 @@ fn run_main() -> io::Result<()> {
                 }
                 i += 1;
             }
-            let shell_cmd = cmd_to_run.join(" ");
+            let shell_cmd = crate::util::expand_run_shell_path(&cmd_to_run.join(" "));
             // Run the command using the system shell
             if background {
                 #[cfg(windows)]

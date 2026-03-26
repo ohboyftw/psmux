@@ -1479,48 +1479,8 @@ fn parse_run_shell(app: &mut AppState, line: &str) {
         return;
     }
 
-    // Expand ~ to home directory in the command
-    let shell_cmd = if shell_cmd.contains('~') {
-        let home = std::env::var("USERPROFILE")
-            .or_else(|_| std::env::var("HOME"))
-            .unwrap_or_default();
-        shell_cmd
-            .replace("~/", &format!("{}/", home))
-            .replace("~\\", &format!("{}\\", home))
-    } else {
-        shell_cmd
-    };
-
-    // Fallback: if the command references ~/.psmux/plugins/ but that directory
-    // doesn't exist and ~/.config/psmux/plugins/ does, rewrite the path.
-    // Plugin repos may hardcode ~/.psmux/plugins/ but the TUI installs to
-    // the XDG location (issue #135).
-    let shell_cmd = {
-        let home = std::env::var("USERPROFILE")
-            .or_else(|_| std::env::var("HOME"))
-            .unwrap_or_default();
-        let classic_fwd = format!("{}/.psmux/plugins/", home);
-        let classic_win = format!("{}\\.psmux\\plugins\\", home);
-        if shell_cmd.contains(&classic_fwd) || shell_cmd.contains(&classic_win) {
-            let classic_dir = std::path::Path::new(&home).join(".psmux").join("plugins");
-            let xdg_base =
-                std::env::var("XDG_CONFIG_HOME").unwrap_or_else(|_| format!("{}\\.config", home));
-            let xdg_dir = std::path::Path::new(&xdg_base)
-                .join("psmux")
-                .join("plugins");
-            if !classic_dir.is_dir() && xdg_dir.is_dir() {
-                let xdg_fwd = format!("{}/psmux/plugins/", xdg_base.replace('\\', "/"));
-                let xdg_win = format!("{}\\psmux\\plugins\\", xdg_base);
-                shell_cmd
-                    .replace(&classic_fwd, &xdg_fwd)
-                    .replace(&classic_win, &xdg_win)
-            } else {
-                shell_cmd
-            }
-        } else {
-            shell_cmd
-        }
-    };
+    // Expand ~ to home directory + XDG fallback for plugin paths
+    let shell_cmd = crate::util::expand_run_shell_path(&shell_cmd);
 
     // ── Handle .tmux files natively ──────────────────────────────────
     // .tmux files are bash scripts used by tmux plugins. On Windows they

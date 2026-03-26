@@ -4,6 +4,47 @@ use serde::{Deserialize, Serialize};
 
 use crate::types::{AppState, Node};
 
+/// Expand `~` to the user's home directory in a shell command string,
+/// then rewrite `~/.psmux/plugins/` to `~/.config/psmux/plugins/` when
+/// the classic path does not exist but the XDG path does (issue psmux-plugins#2).
+pub fn expand_run_shell_path(cmd: &str) -> String {
+    // Step 1: expand ~ to home directory
+    let cmd = if cmd.contains('~') {
+        let home = std::env::var("USERPROFILE")
+            .or_else(|_| std::env::var("HOME"))
+            .unwrap_or_default();
+        cmd.replace("~/", &format!("{}/", home))
+            .replace("~\\", &format!("{}\\", home))
+    } else {
+        cmd.to_string()
+    };
+
+    // Step 2: XDG fallback for plugin paths
+    let home = std::env::var("USERPROFILE")
+        .or_else(|_| std::env::var("HOME"))
+        .unwrap_or_default();
+    let classic_fwd = format!("{}/.psmux/plugins/", home);
+    let classic_win = format!("{}\\.psmux\\plugins\\", home);
+    if cmd.contains(&classic_fwd) || cmd.contains(&classic_win) {
+        let classic_dir = std::path::Path::new(&home).join(".psmux").join("plugins");
+        let xdg_base = std::env::var("XDG_CONFIG_HOME")
+            .unwrap_or_else(|_| format!("{}\\.config", home));
+        let xdg_dir = std::path::Path::new(&xdg_base)
+            .join("psmux")
+            .join("plugins");
+        if !classic_dir.is_dir() && xdg_dir.is_dir() {
+            let xdg_fwd = format!("{}/psmux/plugins/", xdg_base.replace('\\', "/"));
+            let xdg_win = format!("{}\\psmux\\plugins\\", xdg_base);
+            cmd.replace(&classic_fwd, &xdg_fwd)
+                .replace(&classic_win, &xdg_win)
+        } else {
+            cmd
+        }
+    } else {
+        cmd
+    }
+}
+
 /// Safe wrapper around `std::env::set_var` which became `unsafe` in Rust 1.83.
 ///
 /// # Safety rationale
