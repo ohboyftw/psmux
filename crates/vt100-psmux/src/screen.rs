@@ -664,7 +664,7 @@ impl Screen {
         std::mem::take(&mut self.notifications)
     }
 
-    /// Push a desktop notification (called from osc_dispatch).
+    /// Push a desktop notification (called from `osc_dispatch`).
     pub(crate) fn push_notification(&mut self, title: String, body: String) {
         // Cap to 16 queued notifications to prevent memory growth
         if self.notifications.len() < 16 {

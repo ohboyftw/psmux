@@ -379,7 +379,7 @@ pub fn render_popup_overlay(
                             if ch.is_empty() {
                                 current_text.push(' ');
                             } else {
-                                current_text.push_str(&ch);
+                                current_text.push_str(ch);
                             }
                         } else {
                             current_text.push(' ');

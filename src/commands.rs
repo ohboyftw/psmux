@@ -876,7 +876,7 @@ pub fn execute_command_string(app: &mut AppState, cmd: &str) -> io::Result<()> {
             let mut width_spec = "80".to_string();
             let mut height_spec = "24".to_string();
             let mut start_dir: Option<String> = None;
-            let close_on_exit = parts.iter().any(|p| *p == "-E");
+            let close_on_exit = parts.contains(&"-E");
             let mut skip_indices = std::collections::HashSet::new();
             skip_indices.insert(0); // skip the command name itself
             let mut i = 1;
@@ -921,7 +921,7 @@ pub fn execute_command_string(app: &mut AppState, cmd: &str) -> io::Result<()> {
                 width,
                 height,
                 close_on_exit,
-                popup_pane: pane_result,
+                popup_pane: pane_result.map(Box::new),
                 scroll_offset: 0,
             };
         }

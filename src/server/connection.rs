@@ -1873,7 +1873,7 @@ pub(crate) fn handle_connection(
             }
             "display-popup" | "popup" => {
                 // Default close-on-exit = true (tmux parity: popup closes when command finishes)
-                let close_on_exit = !args.iter().any(|a| *a == "-K");
+                let close_on_exit = !args.contains(&"-K");
                 let mut width_spec = "80".to_string();
                 let mut height_spec = "24".to_string();
                 let mut start_dir: Option<String> = None;

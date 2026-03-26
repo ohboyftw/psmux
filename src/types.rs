@@ -372,8 +372,9 @@ pub enum Mode {
         width: u16,
         height: u16,
         close_on_exit: bool,
-        /// Optional: full Pane powering the popup (for interactive programs)
-        popup_pane: Option<Pane>,
+        /// Optional: full Pane powering the popup (for interactive programs).
+        /// Boxed to avoid large enum variant (Pane is ~700 bytes).
+        popup_pane: Option<Box<Pane>>,
         /// Scroll offset for static text popups (lines from top)
         scroll_offset: u16,
     },
