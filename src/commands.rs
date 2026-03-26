@@ -7,8 +7,22 @@ use crate::copy_mode::{
 use crate::pane::{create_window, kill_active_pane, split_active};
 use crate::session::{list_all_sessions_tree, send_control_to_port};
 use crate::tree::{compute_rects, get_active_pane_id, kill_all_children};
-use crate::types::{Action, AppState, FocusDir, LayoutKind, Menu, MenuItem, Mode, Node, PopupPty};
+use crate::types::{Action, AppState, FocusDir, LayoutKind, Menu, MenuItem, Mode, Node};
 use crate::window_ops::toggle_zoom;
+
+/// Parse a popup dimension spec: "80" (absolute) or "95%" (percentage of term_dim).
+pub(crate) fn parse_popup_dim_local(spec: &str, term_dim: u16, default: u16) -> u16 {
+    if let Some(pct_str) = spec.strip_suffix('%') {
+        if let Ok(pct) = pct_str.parse::<u16>() {
+            let pct = pct.min(100);
+            (term_dim as u32 * pct as u32 / 100) as u16
+        } else {
+            default
+        }
+    } else {
+        spec.parse().unwrap_or(default)
+    }
+}
 
 /// Show text output in a popup overlay (used by list-* commands inside a session).
 fn show_output_popup(app: &mut AppState, title: &str, output: String) {
@@ -22,7 +36,7 @@ fn show_output_popup(app: &mut AppState, title: &str, output: String) {
         width: width.min(120),
         height,
         close_on_exit: false,
-        popup_pty: None,
+        popup_pane: None,
         scroll_offset: 0,
     };
 }
@@ -858,88 +872,47 @@ pub fn execute_command_string(app: &mut AppState, cmd: &str) -> io::Result<()> {
             }
         }
         "display-popup" | "popup" => {
-            // Parse -w width, -h height, -E close-on-exit flags
-            let mut width: u16 = 80;
-            let mut height: u16 = 24;
-            let close_on_exit = parts.contains(&"-E");
-            if let Some(pos) = parts.iter().position(|p| *p == "-w") {
-                if let Some(v) = parts.get(pos + 1) {
-                    width = v.parse().unwrap_or(80);
+            // Parse -w width, -h height, -E close-on-exit, -d start-dir flags
+            let mut width_spec = "80".to_string();
+            let mut height_spec = "24".to_string();
+            let mut start_dir: Option<String> = None;
+            let close_on_exit = parts.iter().any(|p| *p == "-E");
+            let mut skip_indices = std::collections::HashSet::new();
+            skip_indices.insert(0); // skip the command name itself
+            let mut i = 1;
+            while i < parts.len() {
+                match parts[i] {
+                    "-w" => { if let Some(v) = parts.get(i + 1) { width_spec = v.to_string(); skip_indices.insert(i); skip_indices.insert(i + 1); i += 1; } }
+                    "-h" => { if let Some(v) = parts.get(i + 1) { height_spec = v.to_string(); skip_indices.insert(i); skip_indices.insert(i + 1); i += 1; } }
+                    "-d" | "-c" => { if let Some(v) = parts.get(i + 1) { start_dir = Some(v.to_string()); skip_indices.insert(i); skip_indices.insert(i + 1); i += 1; } }
+                    "-E" | "-K" => { skip_indices.insert(i); }
+                    _ => {}
                 }
+                i += 1;
             }
-            if let Some(pos) = parts.iter().position(|p| *p == "-h") {
-                if let Some(v) = parts.get(pos + 1) {
-                    height = v.parse().unwrap_or(24);
-                }
-            }
-            // Collect command (non-flag args)
-            let cmd_parts: Vec<&str> = parts[1..]
-                .iter()
-                .filter(|a| !a.starts_with('-'))
-                .copied()
-                .collect();
-            // Skip width/height values
-            let rest = cmd_parts.join(" ");
+            // Resolve percentage dimensions against terminal size (#154)
+            let (term_w, term_h) = crossterm::terminal::size().unwrap_or((120, 40));
+            let width = parse_popup_dim_local(&width_spec, term_w, 80);
+            let height = parse_popup_dim_local(&height_spec, term_h, 24);
+            // Collect remaining args as the command
+            let rest: String = parts.iter().enumerate()
+                .filter(|(idx, _)| !skip_indices.contains(idx))
+                .map(|(_, a)| *a)
+                .collect::<Vec<&str>>()
+                .join(" ");
 
-            // Try PTY-based popup for interactive commands
-            let pty_result = if !rest.is_empty() {
-                Some(portable_pty::native_pty_system()).and_then(|pty_sys| {
-                    let pty_size = portable_pty::PtySize {
-                        rows: height.saturating_sub(2),
-                        cols: width.saturating_sub(2),
-                        pixel_width: 0,
-                        pixel_height: 0,
-                    };
-                    let pair = pty_sys.openpty(pty_size).ok()?;
-                    let mut cmd_builder = portable_pty::CommandBuilder::new(if cfg!(windows) {
-                        "pwsh"
-                    } else {
-                        "sh"
-                    });
-                    if let Ok(dir) = std::env::current_dir() {
-                        cmd_builder.cwd(dir);
-                    }
-                    if cfg!(windows) {
-                        cmd_builder.args(["-NoProfile", "-Command", &rest]);
-                    } else {
-                        cmd_builder.args(["-c", &rest]);
-                    }
-                    let child = pair.slave.spawn_command(cmd_builder).ok()?;
-                    // Close the slave handle immediately – required for ConPTY.
-                    drop(pair.slave);
-                    let term = std::sync::Arc::new(std::sync::Mutex::new(vt100::Parser::new(
-                        pty_size.rows,
-                        pty_size.cols,
-                        0,
-                    )));
-                    let term_reader = term.clone();
-                    if let Ok(mut reader) = pair.master.try_clone_reader() {
-                        std::thread::spawn(move || {
-                            let mut buf = [0u8; 8192];
-                            loop {
-                                match std::io::Read::read(&mut reader, &mut buf) {
-                                    Ok(n) if n > 0 => {
-                                        if let Ok(mut p) = term_reader.lock() {
-                                            p.process(&buf[..n]);
-                                        }
-                                    }
-                                    _ => break,
-                                }
-                            }
-                        });
-                    }
-                    let mut pty_writer = pair.master.take_writer().ok()?;
-                    crate::pane::conpty_preemptive_dsr_response(&mut *pty_writer);
-                    Some(PopupPty {
-                        master: pair.master,
-                        writer: Box::new(crate::types::AsyncPaneWriter::new(pty_writer)),
-                        child,
-                        term,
-                    })
-                })
-            } else {
-                None
-            };
+            // Spawn popup as a real Pane via the popup module
+            let pane_result = if !rest.is_empty() {
+                crate::popup::create_popup_pane(
+                    &rest,
+                    start_dir.as_deref(),
+                    height.saturating_sub(2),
+                    width.saturating_sub(2),
+                    app.next_pane_id,
+                    "1", // session name not available in local mode
+                    &app.environment,
+                )
+            } else { None };
 
             app.mode = Mode::PopupMode {
                 command: rest,
@@ -948,7 +921,7 @@ pub fn execute_command_string(app: &mut AppState, cmd: &str) -> io::Result<()> {
                 width,
                 height,
                 close_on_exit,
-                popup_pty: pty_result,
+                popup_pane: pane_result,
                 scroll_offset: 0,
             };
         }

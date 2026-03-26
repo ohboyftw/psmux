@@ -457,6 +457,8 @@ pub fn run_remote(
     #[allow(unused_assignments)]
     let mut srv_popup_lines: Vec<String> = Vec::new();
     #[allow(unused_assignments)]
+    let mut srv_popup_rows: Vec<crate::layout::RowRunsJson> = Vec::new();
+    #[allow(unused_assignments)]
     let mut srv_popup_has_pty = false;
     let mut srv_popup_scroll: u16 = 0;
     #[allow(unused_assignments)]
@@ -633,6 +635,8 @@ pub fn run_remote(
         popup_height: Option<u16>,
         #[serde(default)]
         popup_lines: Vec<String>,
+        #[serde(default)]
+        popup_rows: Vec<crate::layout::RowRunsJson>,
         #[serde(default)]
         popup_has_pty: bool,
         /// Confirm overlay active
@@ -2789,6 +2793,8 @@ pub fn run_remote(
         srv_popup_width = state.popup_width.unwrap_or(80);
         srv_popup_height = state.popup_height.unwrap_or(24);
         srv_popup_lines = state.popup_lines;
+        let srv_popup_rows_new = state.popup_rows;
+        srv_popup_rows = srv_popup_rows_new;
         let new_popup_has_pty = state.popup_has_pty;
         if !srv_popup_active || new_popup_has_pty != srv_popup_has_pty {
             srv_popup_scroll = 0;
@@ -3810,9 +3816,46 @@ pub fn run_remote(
                     .borders(Borders::ALL)
                     .border_style(Style::default().fg(Color::Yellow))
                     .title(title);
+                let inner_w = w.saturating_sub(2);
                 let mut lines: Vec<Line<'static>> = Vec::new();
-                for line_str in &srv_popup_lines {
-                    lines.push(Line::from(line_str.clone()));
+                if !srv_popup_rows.is_empty() {
+                    // Render with full color/style data from popup_rows (#154)
+                    for row_data in &srv_popup_rows {
+                        let mut spans: Vec<Span<'static>> = Vec::new();
+                        let mut col: u16 = 0;
+                        for run in &row_data.runs {
+                            if col >= inner_w { break; }
+                            let fg = crate::style::map_color(&run.fg);
+                            let bg = crate::style::map_color(&run.bg);
+                            let mut style = Style::default().fg(fg).bg(bg);
+                            if run.flags & 1  != 0 { style = style.add_modifier(Modifier::DIM); }
+                            if run.flags & 2  != 0 { style = style.add_modifier(Modifier::BOLD); }
+                            if run.flags & 4  != 0 { style = style.add_modifier(Modifier::ITALIC); }
+                            if run.flags & 8  != 0 { style = style.add_modifier(Modifier::UNDERLINED); }
+                            if run.flags & 16 != 0 { style = style.add_modifier(Modifier::REVERSED); }
+                            if run.flags & 32 != 0 { style = style.add_modifier(Modifier::SLOW_BLINK); }
+                            if run.flags & 64 != 0 { style = style.add_modifier(Modifier::HIDDEN); }
+                            let text: &str = if run.text.is_empty() { " " } else { &run.text };
+                            let run_w = run.width.max(1);
+                            if col + run_w > inner_w {
+                                let avail = (inner_w - col) as usize;
+                                let truncated: String = text.chars().take(avail).collect();
+                                if !truncated.is_empty() {
+                                    spans.push(Span::styled(truncated, style));
+                                }
+                                col = inner_w;
+                            } else {
+                                spans.push(Span::styled(text.to_string(), style));
+                                col += run_w;
+                            }
+                        }
+                        lines.push(Line::from(spans));
+                    }
+                } else {
+                    // Fallback: plain text lines for non-PTY popups
+                    for line_str in &srv_popup_lines {
+                        lines.push(Line::from(line_str.clone()));
+                    }
                 }
                 let para = Paragraph::new(Text::from(lines)).block(block).scroll((srv_popup_scroll, 0));
                 f.render_widget(Clear, popup_area);

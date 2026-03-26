@@ -16,6 +16,7 @@ mod input;
 mod layout;
 mod pane;
 mod platform;
+mod popup;
 mod rendering;
 mod resurrection;
 mod server;

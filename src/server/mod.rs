@@ -1,5 +1,5 @@
 mod connection;
-mod helpers;
+pub(crate) mod helpers;
 mod options;
 
 use std::env;
@@ -23,7 +23,7 @@ use crate::tree::{
     resize_all_panes,
 };
 use crate::types::{
-    Action, AppState, Bind, CtrlReq, FocusDir, LayoutKind, Mode, Node, PipePaneState, PopupPty,
+    Action, AppState, Bind, CtrlReq, FocusDir, LayoutKind, Mode, Node, PipePaneState,
     WaitChannel, WaitForOp, VERSION,
 };
 
@@ -76,7 +76,7 @@ fn serialize_overlay_json(app: &AppState) -> String {
             output,
             width,
             height,
-            popup_pty,
+            popup_pane,
             ..
         } => {
             out.push_str(",\"popup_active\":true");
@@ -87,49 +87,46 @@ fn serialize_overlay_json(app: &AppState) -> String {
                 &mut out,
                 format_args!(",\"popup_width\":{},\"popup_height\":{}", width, height),
             );
-            // Serialize popup screen content
-            out.push_str(",\"popup_lines\":[");
             let inner_h = height.saturating_sub(2);
             let inner_w = width.saturating_sub(2);
-            if let Some(pty) = popup_pty {
-                if let Ok(parser) = pty.term.lock() {
+
+            if let Some(pane) = popup_pane {
+                // PTY popup: serialize using the shared pane screen serializer
+                out.push_str(",\"popup_rows\":[");
+                if let Ok(parser) = pane.term.lock() {
                     let screen = parser.screen();
-                    for row in 0..inner_h {
-                        if row > 0 {
+                    let rows_data = crate::layout::serialize_screen_rows(screen, inner_h, inner_w);
+                    for (i, row) in rows_data.iter().enumerate() {
+                        if i > 0 {
                             out.push(',');
                         }
-                        out.push('"');
-                        for col in 0..inner_w {
-                            if let Some(cell) = screen.cell(row, col) {
-                                let ch = cell.contents();
-                                if ch.is_empty() {
-                                    out.push(' ');
-                                } else {
-                                    // JSON-escape the cell content
-                                    for c in ch.chars() {
-                                        match c {
-                                            '"' => out.push_str("\\\""),
-                                            '\\' => out.push_str("\\\\"),
-                                            c if (c as u32) < 0x20 => {
-                                                let _ = std::fmt::Write::write_fmt(
-                                                    &mut out,
-                                                    format_args!("\\u{:04x}", c as u32),
-                                                );
-                                            }
-                                            c => out.push(c),
-                                        }
-                                    }
-                                }
-                            } else {
-                                out.push(' ');
+                        out.push_str("{\"runs\":[");
+                        for (j, run) in row.runs.iter().enumerate() {
+                            if j > 0 {
+                                out.push(',');
                             }
+                            out.push_str("{\"text\":\"");
+                            crate::popup::json_esc_inline(&run.text, &mut out);
+                            out.push_str("\",\"fg\":\"");
+                            out.push_str(&run.fg);
+                            out.push_str("\",\"bg\":\"");
+                            out.push_str(&run.bg);
+                            let _ = std::fmt::Write::write_fmt(
+                                &mut out,
+                                format_args!("\",\"flags\":{},\"width\":{}}}", run.flags, run.width),
+                            );
                         }
-                        out.push('"');
+                        out.push_str("]}");
                     }
                 }
-            } else if !output.is_empty() {
-                // Non-PTY popup: serialize the output text as lines
-                for (i, line) in output.lines().take(inner_h as usize).enumerate() {
+                out.push(']');
+                out.push_str(",\"popup_lines\":[]");
+                out.push_str(",\"popup_has_pty\":true");
+            } else {
+                // Static (non-PTY) popup: plain text lines
+                out.push_str(",\"popup_rows\":[]");
+                out.push_str(",\"popup_lines\":[");
+                for (i, line) in output.lines().enumerate() {
                     if i > 0 {
                         out.push(',');
                     }
@@ -137,13 +134,9 @@ fn serialize_overlay_json(app: &AppState) -> String {
                     out.push_str(&json_escape_string(line));
                     out.push('"');
                 }
+                out.push(']');
+                out.push_str(",\"popup_has_pty\":false");
             }
-            out.push(']');
-            out.push_str(if popup_pty.is_some() {
-                ",\"popup_has_pty\":true"
-            } else {
-                ",\"popup_has_pty\":false"
-            });
         }
         Mode::ConfirmMode { prompt, .. } => {
             out.push_str(",\"confirm_active\":true,\"confirm_prompt\":\"");
@@ -386,6 +379,20 @@ fn get_pane_process_id(app: &AppState, pane_id: usize) -> Option<u32> {
         }
     }
     None
+}
+
+/// Parse a popup dimension spec: "80" (absolute) or "95%" (percentage of term_dim).
+fn parse_popup_dim(spec: &str, term_dim: u16, default: u16) -> u16 {
+    if let Some(pct_str) = spec.strip_suffix('%') {
+        if let Ok(pct) = pct_str.parse::<u16>() {
+            let pct = pct.min(100);
+            (term_dim as u32 * pct as u32 / 100) as u16
+        } else {
+            default
+        }
+    } else {
+        spec.parse().unwrap_or(default)
+    }
 }
 
 /// Compute the effective display size from all connected clients' terminal sizes.
@@ -4455,67 +4462,30 @@ pub fn run_server(
                                 state_dirty = true;
                             }
                         }
-                        CtrlReq::DisplayPopup(command, width, height, close_on_exit) => {
+                        CtrlReq::DisplayPopup(command, width_spec, height_spec, close_on_exit, start_dir) => {
+                            // Resolve percentage dimensions against terminal area (#154)
+                            let term_w = app.last_window_area.width;
+                            let term_h = app.last_window_area.height;
+                            let width = parse_popup_dim(&width_spec, term_w, 80);
+                            let height = parse_popup_dim(&height_spec, term_h, 24);
+                            // Expand format variables in start_dir (e.g. #{pane_current_path})
+                            let start_dir = start_dir.map(|d| expand_format(&d, &app)).filter(|d| !d.is_empty());
+                            let saved_dir = if start_dir.is_some() { env::current_dir().ok() } else { None };
+                            if let Some(dir) = &start_dir { let _ = env::set_current_dir(dir); }
                             if !command.is_empty() {
-                                // Try to spawn with PTY for interactive programs (fzf, etc.)
-                                let pty_result =
-                                    Some(portable_pty::native_pty_system()).and_then(|pty_sys| {
-                                        let pty_size = portable_pty::PtySize {
-                                            rows: height.saturating_sub(2),
-                                            cols: width.saturating_sub(2),
-                                            pixel_width: 0,
-                                            pixel_height: 0,
-                                        };
-                                        let pair = pty_sys.openpty(pty_size).ok()?;
-                                        let mut cmd_builder =
-                                            portable_pty::CommandBuilder::new(if cfg!(windows) {
-                                                "pwsh"
-                                            } else {
-                                                "sh"
-                                            });
-                                        if let Ok(dir) = std::env::current_dir() {
-                                            cmd_builder.cwd(dir);
-                                        }
-                                        if cfg!(windows) {
-                                            cmd_builder.args(["-NoProfile", "-Command", &command]);
-                                        } else {
-                                            cmd_builder.args(["-c", &command]);
-                                        }
-                                        let child = pair.slave.spawn_command(cmd_builder).ok()?;
-                                        // Close the slave handle immediately – required for ConPTY.
-                                        drop(pair.slave);
-                                        let term = std::sync::Arc::new(std::sync::Mutex::new(
-                                            vt100::Parser::new(pty_size.rows, pty_size.cols, 0),
-                                        ));
-                                        let term_reader = term.clone();
-                                        if let Ok(mut reader) = pair.master.try_clone_reader() {
-                                            std::thread::spawn(move || {
-                                                let mut buf = [0u8; 8192];
-                                                loop {
-                                                    match reader.read(&mut buf) {
-                                                        Ok(n) if n > 0 => {
-                                                            if let Ok(mut p) = term_reader.lock() {
-                                                                p.process(&buf[..n]);
-                                                            }
-                                                        }
-                                                        _ => break,
-                                                    }
-                                                }
-                                            });
-                                        }
-                                        let mut pty_writer = pair.master.take_writer().ok()?;
-                                        crate::pane::conpty_preemptive_dsr_response(
-                                            &mut *pty_writer,
-                                        );
-                                        Some(PopupPty {
-                                            master: pair.master,
-                                            writer: Box::new(crate::types::AsyncPaneWriter::new(
-                                                pty_writer,
-                                            )),
-                                            child,
-                                            term,
-                                        })
-                                    });
+                                // Spawn popup as a real Pane via the popup module
+                                let inner_h = height.saturating_sub(2);
+                                let inner_w = width.saturating_sub(2);
+                                let pane_result = crate::popup::create_popup_pane(
+                                    &command,
+                                    start_dir.as_deref(),
+                                    inner_h,
+                                    inner_w,
+                                    app.next_pane_id,
+                                    &app.session_name,
+                                    &app.environment,
+                                );
+                                if let Some(prev) = saved_dir { let _ = env::set_current_dir(prev); }
 
                                 app.mode = Mode::PopupMode {
                                     command: command.clone(),
@@ -4524,11 +4494,12 @@ pub fn run_server(
                                     width,
                                     height,
                                     close_on_exit,
-                                    popup_pty: pty_result,
+                                    popup_pane: pane_result,
                                     scroll_offset: 0,
                                 };
                                 state_dirty = true;
                             } else {
+                                if let Some(prev) = saved_dir { let _ = env::set_current_dir(prev); }
                                 app.mode = Mode::PopupMode {
                                     command: String::new(),
                                     output: "Press 'q' or Escape to close\n".to_string(),
@@ -4536,7 +4507,7 @@ pub fn run_server(
                                     width,
                                     height,
                                     close_on_exit: true,
-                                    popup_pty: None,
+                                    popup_pane: None,
                                     scroll_offset: 0,
                                 };
                                 state_dirty = true;
@@ -4703,10 +4674,10 @@ pub fn run_server(
                         }
                         CtrlReq::PopupInput(data) => {
                             if let Mode::PopupMode {
-                                ref mut popup_pty, ..
+                                ref mut popup_pane, ..
                             } = app.mode
                             {
-                                if let Some(ref mut pty) = popup_pty {
+                                if let Some(ref mut pty) = popup_pane {
                                     // If child has exited, 'q' closes the popup
                                     let child_exited = matches!(pty.child.try_wait(), Ok(Some(_)));
                                     if child_exited && data == b"q" {
@@ -5263,7 +5234,7 @@ pub fn run_server(
                                 width: width.min(120),
                                 height,
                                 close_on_exit: false,
-                                popup_pty: None,
+                                popup_pane: None,
                                 scroll_offset: 0,
                             };
                             state_dirty = true;
@@ -5458,12 +5429,12 @@ pub fn run_server(
         // ── Popup child exit detection ──
         // Check if popup PTY's child process has exited; if so, auto-close.
         if let Mode::PopupMode {
-            ref mut popup_pty,
+            ref mut popup_pane,
             close_on_exit,
             ..
         } = app.mode
         {
-            let should_close = if let Some(ref mut pty) = popup_pty {
+            let should_close = if let Some(ref mut pty) = popup_pane {
                 matches!(pty.child.try_wait(), Ok(Some(_)))
             } else {
                 false
