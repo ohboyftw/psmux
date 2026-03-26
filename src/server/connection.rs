@@ -1873,44 +1873,24 @@ pub(crate) fn handle_connection(
             }
             "display-popup" | "popup" => {
                 // Default close-on-exit = true (tmux parity: popup closes when command finishes)
-                let close_on_exit = !args.contains(&"-K");
-                let mut width: u16 = 80;
-                let mut height: u16 = 24;
+                let close_on_exit = !args.iter().any(|a| *a == "-K");
+                let mut width_spec = "80".to_string();
+                let mut height_spec = "24".to_string();
+                let mut start_dir: Option<String> = None;
                 let mut skip_indices = std::collections::HashSet::new();
                 let mut i = 0;
                 while i < args.len() {
                     match args[i] {
-                        "-w" => {
-                            if let Some(v) = args.get(i + 1) {
-                                width = v.trim_end_matches('%').parse().unwrap_or(80);
-                                skip_indices.insert(i);
-                                skip_indices.insert(i + 1);
-                                i += 1;
-                            }
-                        }
-                        "-h" => {
-                            if let Some(v) = args.get(i + 1) {
-                                height = v.trim_end_matches('%').parse().unwrap_or(24);
-                                skip_indices.insert(i);
-                                skip_indices.insert(i + 1);
-                                i += 1;
-                            }
-                        }
-                        "-E" | "-K" => {
-                            skip_indices.insert(i);
-                        }
+                        "-w" => { if let Some(v) = args.get(i+1) { width_spec = v.to_string(); skip_indices.insert(i); skip_indices.insert(i+1); i += 1; } }
+                        "-h" => { if let Some(v) = args.get(i+1) { height_spec = v.to_string(); skip_indices.insert(i); skip_indices.insert(i+1); i += 1; } }
+                        "-d" | "-c" => { if let Some(v) = args.get(i+1) { start_dir = Some(v.to_string()); skip_indices.insert(i); skip_indices.insert(i+1); i += 1; } }
+                        "-E" | "-K" => { skip_indices.insert(i); }
                         _ => {}
                     }
                     i += 1;
                 }
-                let content = args
-                    .iter()
-                    .enumerate()
-                    .filter(|(idx, _)| !skip_indices.contains(idx))
-                    .map(|(_, a)| *a)
-                    .collect::<Vec<&str>>()
-                    .join(" ");
-                let _ = tx.send(CtrlReq::DisplayPopup(content, width, height, close_on_exit));
+                let content = args.iter().enumerate().filter(|(idx, _)| !skip_indices.contains(idx)).map(|(_, a)| *a).collect::<Vec<&str>>().join(" ");
+                let _ = tx.send(CtrlReq::DisplayPopup(content, width_spec, height_spec, close_on_exit, start_dir));
             }
             "confirm-before" | "confirm" => {
                 let mut prompt: Option<String> = None;
