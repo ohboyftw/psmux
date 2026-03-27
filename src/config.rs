@@ -1333,42 +1333,11 @@ pub fn parse_key_string(key: &str) -> Option<(KeyCode, KeyModifiers)> {
     }
 
     let keycode = match key_part.to_lowercase().as_str() {
-        "a" => KeyCode::Char('a'),
-        "b" => KeyCode::Char('b'),
-        "c" => KeyCode::Char('c'),
-        "d" => KeyCode::Char('d'),
-        "e" => KeyCode::Char('e'),
-        "f" => KeyCode::Char('f'),
-        "g" => KeyCode::Char('g'),
-        "h" => KeyCode::Char('h'),
-        "i" => KeyCode::Char('i'),
-        "j" => KeyCode::Char('j'),
-        "k" => KeyCode::Char('k'),
-        "l" => KeyCode::Char('l'),
-        "m" => KeyCode::Char('m'),
-        "n" => KeyCode::Char('n'),
-        "o" => KeyCode::Char('o'),
-        "p" => KeyCode::Char('p'),
-        "q" => KeyCode::Char('q'),
-        "r" => KeyCode::Char('r'),
-        "s" => KeyCode::Char('s'),
-        "t" => KeyCode::Char('t'),
-        "u" => KeyCode::Char('u'),
-        "v" => KeyCode::Char('v'),
-        "w" => KeyCode::Char('w'),
-        "x" => KeyCode::Char('x'),
-        "y" => KeyCode::Char('y'),
-        "z" => KeyCode::Char('z'),
-        "0" => KeyCode::Char('0'),
-        "1" => KeyCode::Char('1'),
-        "2" => KeyCode::Char('2'),
-        "3" => KeyCode::Char('3'),
-        "4" => KeyCode::Char('4'),
-        "5" => KeyCode::Char('5'),
-        "6" => KeyCode::Char('6'),
-        "7" => KeyCode::Char('7'),
-        "8" => KeyCode::Char('8'),
-        "9" => KeyCode::Char('9'),
+        // Single character keys: preserve the ORIGINAL case from key_part, not the lowercased version.
+        // This is critical for case-sensitive bind-key (issue #157): bind-key T != bind-key t.
+        _ if key_part.len() == 1 => {
+            KeyCode::Char(key_part.chars().next().unwrap())
+        }
         "space" => KeyCode::Char(' '),
         "enter" | "return" => KeyCode::Enter,
         "tab" => KeyCode::Tab,
@@ -1408,11 +1377,7 @@ pub fn parse_key_string(key: &str) -> Option<(KeyCode, KeyModifiers)> {
         "{" => KeyCode::Char('{'),
         "}" => KeyCode::Char('}'),
         _ => {
-            if key_part.len() == 1 {
-                KeyCode::Char(key_part.chars().next().unwrap())
-            } else {
-                return None;
-            }
+            return None;
         }
     };
 
@@ -1921,3 +1886,7 @@ mod tests_plugin_paths;
 #[cfg(test)]
 #[path = "../tests-rs/test_issue137_env_leak.rs"]
 mod tests_issue137_env_leak;
+
+#[cfg(test)]
+#[path = "../tests-rs/test_issue157_bind_key_case.rs"]
+mod tests_issue157_bind_key_case;
