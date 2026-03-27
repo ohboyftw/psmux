@@ -26,12 +26,17 @@ if ($LocalBuild) {
 } else {
     Write-Host "Downloading latest release..." -ForegroundColor Yellow
     
-    # Detect architecture
-    $arch = [System.Runtime.InteropServices.RuntimeInformation]::OSArchitecture
+    # Detect architecture using PROCESSOR_ARCHITECTURE env var
+    # (RuntimeInformation::OSArchitecture returns $null in PS 5.1 when piped via iex)
+    $arch = $env:PROCESSOR_ARCHITECTURE
+    # WoW64 correction: 32-bit process on 64-bit OS reports x86; use the real OS arch
+    if ($arch -eq "x86" -and $env:PROCESSOR_ARCHITEW6432) {
+        $arch = $env:PROCESSOR_ARCHITEW6432
+    }
     switch ($arch) {
-        "X64"  { $archLabel = "x64";   $assetPattern = "windows-x64" }
-        "X86"  { $archLabel = "x86";   $assetPattern = "windows-x86" }
-        "Arm64"{ $archLabel = "arm64"; $assetPattern = "windows-arm64" }
+        "AMD64" { $archLabel = "x64";   $assetPattern = "windows-x64" }
+        "x86"   { $archLabel = "x86";   $assetPattern = "windows-x86" }
+        "ARM64" { $archLabel = "arm64"; $assetPattern = "windows-arm64" }
         default {
             Write-Host "Unsupported architecture: $arch" -ForegroundColor Red
             exit 1
