@@ -24,6 +24,27 @@ pub use crate::style::{map_color, parse_inline_styles, parse_tmux_style};
 pub fn vt_to_color(c: vt100::Color) -> Color {
     match c {
         vt100::Color::Default => Color::Reset,
+        // Map the 16 standard colors to ratatui named variants so that
+        // dim_color() can distinguish individual hues when dimming
+        // prediction text.  Note: crossterm 0.29 serialises ALL named
+        // colors as 38;5;N (256-color indexed), so the outer terminal
+        // sees the same bytes as Color::Indexed(n).
+        vt100::Color::Idx(0) => Color::Black,
+        vt100::Color::Idx(1) => Color::Red,
+        vt100::Color::Idx(2) => Color::Green,
+        vt100::Color::Idx(3) => Color::Yellow,
+        vt100::Color::Idx(4) => Color::Blue,
+        vt100::Color::Idx(5) => Color::Magenta,
+        vt100::Color::Idx(6) => Color::Cyan,
+        vt100::Color::Idx(7) => Color::Gray,       // index 7 = light gray (SGR 37)
+        vt100::Color::Idx(8) => Color::DarkGray,
+        vt100::Color::Idx(9) => Color::LightRed,
+        vt100::Color::Idx(10) => Color::LightGreen,
+        vt100::Color::Idx(11) => Color::LightYellow,
+        vt100::Color::Idx(12) => Color::LightBlue,
+        vt100::Color::Idx(13) => Color::LightMagenta,
+        vt100::Color::Idx(14) => Color::LightCyan,
+        vt100::Color::Idx(15) => Color::White,     // index 15 = bright white (SGR 97)
         vt100::Color::Idx(i) => Color::Indexed(i),
         vt100::Color::Rgb(r, g, b) => Color::Rgb(r, g, b),
     }
@@ -290,13 +311,18 @@ pub fn render_node(
                         if cell.blink() {
                             style = style.add_modifier(Modifier::SLOW_BLINK);
                         }
-                        if cell.hidden() {
-                            style = style.add_modifier(Modifier::HIDDEN);
-                        }
                         if cell.strikethrough() {
                             style = style.add_modifier(Modifier::CROSSED_OUT);
                         }
-                        let text = cell.contents().to_string();
+                        // ratatui-crossterm 0.1.0 omits SGR 8 from
+                        // ModifierDiff, so Modifier::HIDDEN never
+                        // reaches the terminal.  Render hidden cells
+                        // as spaces instead.
+                        let text = if cell.hidden() {
+                            " ".to_string()
+                        } else {
+                            cell.contents().to_string()
+                        };
                         let w = UnicodeWidthStr::width(text.as_str()) as u16;
                         if w == 0 {
                             spans.push(Span::styled(" ", style));

@@ -362,10 +362,17 @@ pub fn render_popup_overlay(f: &mut ratatui::Frame, area: ratatui::prelude::Rect
                             if cell.blink() {
                                 style = style.add_modifier(Modifier::SLOW_BLINK);
                             }
-                            if cell.hidden() {
-                                style = style.add_modifier(Modifier::HIDDEN);
+                            if cell.strikethrough() {
+                                style = style.add_modifier(Modifier::CROSSED_OUT);
                             }
-                            let ch = cell.contents();
+                            // ratatui-crossterm 0.1.0 omits SGR 8, so
+                            // Modifier::HIDDEN won't reach the terminal.
+                            // Render hidden cells as spaces instead.
+                            let ch = if cell.hidden() {
+                                " ".to_string()
+                            } else {
+                                cell.contents().to_string()
+                            };
                             if style != current_style {
                                 if !current_text.is_empty() {
                                     spans.push(Span::styled(
@@ -378,7 +385,7 @@ pub fn render_popup_overlay(f: &mut ratatui::Frame, area: ratatui::prelude::Rect
                             if ch.is_empty() {
                                 current_text.push(' ');
                             } else {
-                                current_text.push_str(ch);
+                                current_text.push_str(&ch);
                             }
                         } else {
                             current_text.push(' ');
