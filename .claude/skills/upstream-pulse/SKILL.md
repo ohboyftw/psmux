@@ -72,14 +72,34 @@ For each item provide:
 Read `prompt-template.md` in this skill directory for the full LLM analysis prompt.
 Feed it the raw fetched data (commits, changelogs, diffs) along with the tier definitions.
 
+## Upstream Merge Strategy
+
+Categorize each upstream change into one of three actions:
+
+| Category | Action | When |
+|----------|--------|------|
+| **Fixes** | Cherry-pick directly | Bug fixes, rendering corrections, config parsing |
+| **Non-overlapping features** | Merge/cherry-pick | New files only, additive modules, docs, tests |
+| **Overlapping features** | Decompose into backlog | Touches diverged files, needs conflict resolution |
+
+For overlapping features:
+1. Decompose the feature into independent sub-tasks
+2. Add each sub-task to `docs/ohboy-builds-backlog.md` with dependencies, risk level, and files
+3. Order sub-tasks from low-risk additive pieces to high-risk conflict-prone pieces
+4. Mark items `WONT DO` if ohboy-builds already has a better approach
+
+The backlog at `docs/ohboy-builds-backlog.md` is the persistent project backlog. Update it after every upstream-pulse run.
+
 ## Workflow
 
 1. **Read state** — Load `.claude/upstream-pulse/state.json` for baselines (or initialize if first run)
 2. **Fetch sources** — All three sources are independent; fetch them in parallel when possible
 3. **Analyze** — Use the prompt template to categorize each change into tiers
-4. **Output report** — Print the tiered report to terminal (see format below)
-5. **Save report** — Write to `.claude/upstream-pulse/reports/sync-<date>-<codename>.md`
-6. **Tag** — Create an annotated git tag `sync-<date>-<codename>`
+4. **Categorize** — Apply the merge strategy: cherry-pick fixes, merge non-overlapping, decompose overlapping into backlog
+5. **Output report** — Print the tiered report to terminal (see format below)
+6. **Update backlog** — Add new items to `docs/ohboy-builds-backlog.md`, update completed items
+7. **Save report** — Write to `.claude/upstream-pulse/reports/sync-<date>-<codename>.md`
+8. **Tag** — Create an annotated git tag `sync-<date>-<codename>`
 7. **Update state** — Write new baselines to `state.json`
 
 ### First Run (no state.json)
