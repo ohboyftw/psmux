@@ -321,3 +321,53 @@ This runs every day at 9 AM and:
 - **Tasks**: Created/updated for remaining manual work
 - **Toast notification**: If Tier 1-2 items detected
 - **Updated state**: `state.json` baselines advanced
+
+## Feature Regression Check
+
+After any cherry-pick or merge, cross-reference upstream changes against the ohboy-builds feature registry at `docs/ohboy-builds-features.md`.
+
+### Workflow
+
+1. **Load the registry**: Read `docs/ohboy-builds-features.md`
+2. **Match risk files**: For each merged/cherry-picked commit, check which files changed. Compare against the "Risk from upstream" column in the registry.
+3. **Flag at-risk features**: If a commit touches risk files for a feature, add a `REGRESSION RISK` annotation to the report and the corresponding task.
+4. **Run automated checks**: After all merges complete, run:
+   - `cargo test` (catches compilation and unit regressions)
+   - `cargo clippy -- -D warnings`
+   - `pwsh tests/validate-swarm-backend.ps1` (if backend files touched)
+5. **Manual verification tasks**: For each at-risk feature that can't be fully tested automatically, create a task with the manual verification steps from the registry.
+
+### Report Annotations
+
+Add a `REGRESSION RISK` box after the tier report (before AUTO-MERGE RESULTS if present):
+
+```
+┌─ REGRESSION RISK ──────────────────────────────
+│ ⚠ Three-State Focus Borders — rendering.rs touched by ee35684
+│   Verify: alt-tab dimming still works
+│ ⚠ CustomPaneBackend — types.rs touched by b68962b
+│   Verify: pwsh tests/validate-swarm-backend.ps1
+│ ✓ DCS Passthrough — no risk files touched
+│ ✓ Session Resurrection — no risk files touched
+└─────────────────────────────────────────────────
+```
+
+### Task Annotations
+
+When creating merge tasks, append regression risk to the description:
+
+```
+REGRESSION RISK: This commit touches src/types.rs which is a risk file for:
+- CustomPaneBackend (dispatcher uses CtrlReq enum)
+- Remote Control Mode (protocol types)
+- Agent Orchestration (wait-pane commands)
+After merge, run: pwsh tests/validate-swarm-backend.ps1
+```
+
+### Registry Maintenance
+
+When a new feature lands on ohboy-builds, add it to `docs/ohboy-builds-features.md` with:
+- Files it owns
+- Risk files from upstream
+- Test command (automated)
+- Manual verification steps

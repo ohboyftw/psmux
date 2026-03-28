@@ -72,6 +72,17 @@ Assign each change to exactly one tier:
 - New integration points
 - Quality-of-life improvements
 
+## Feature Regression Analysis
+
+After tiering changes, cross-reference each item's changed files against the ohboy-builds feature registry (`docs/ohboy-builds-features.md`). For each feature in the registry, check if any upstream commit touches its "Risk from upstream" files.
+
+Output a REGRESSION RISK section listing:
+- Features at risk (with the commit that touches their risk files)
+- Features safe (no risk files touched)
+- Recommended verification steps for at-risk features
+
+This analysis is mandatory for every upstream-pulse run. It appears in the report after the tier listing.
+
 ## Output Format
 
 For each change item, output:
@@ -80,6 +91,7 @@ For each change item, output:
 - **Tier N** | source: one-line summary
   - Reasoning: why this tier
   - Action: what to do in ohboy-builds (merge, cherry-pick, port, ignore, verify)
+  - Regression risk: [feature names at risk, or "none"]
 ```
 
 Group by tier (1 first, 5 last). Within each tier, group by source.
