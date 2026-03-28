@@ -36,40 +36,82 @@ pub fn serialize_screen_rows(screen: &vt100::Screen, rows: u16, cols: u16) -> Ve
                 let cell_fg = cell.fgcolor();
                 let cell_bg = cell.bgcolor();
                 let mut w = UnicodeWidthStr::width(t) as u16;
-                if w == 0 { w = 1; }
+                if w == 0 {
+                    w = 1;
+                }
                 let mut fl = 0u8;
-                if cell.dim() { fl |= FLAG_DIM; }
-                if cell.bold() { fl |= FLAG_BOLD; }
-                if cell.italic() { fl |= FLAG_ITALIC; }
-                if cell.underline() { fl |= FLAG_UNDERLINE; }
-                if cell.inverse() { fl |= FLAG_INVERSE; }
-                if cell.blink() { fl |= FLAG_BLINK; }
-                if cell.hidden() { fl |= FLAG_HIDDEN; }
+                if cell.dim() {
+                    fl |= FLAG_DIM;
+                }
+                if cell.bold() {
+                    fl |= FLAG_BOLD;
+                }
+                if cell.italic() {
+                    fl |= FLAG_ITALIC;
+                }
+                if cell.underline() {
+                    fl |= FLAG_UNDERLINE;
+                }
+                if cell.inverse() {
+                    fl |= FLAG_INVERSE;
+                }
+                if cell.blink() {
+                    fl |= FLAG_BLINK;
+                }
+                if cell.hidden() {
+                    fl |= FLAG_HIDDEN;
+                }
 
                 let merged = if let Some(last) = runs.last_mut() {
-                    if prev_fg_raw == Some(cell_fg) && prev_bg_raw == Some(cell_bg) && prev_flags == fl {
+                    if prev_fg_raw == Some(cell_fg)
+                        && prev_bg_raw == Some(cell_bg)
+                        && prev_flags == fl
+                    {
                         last.text.push_str(t);
                         last.width = last.width.saturating_add(w);
                         true
-                    } else { false }
-                } else { false };
+                    } else {
+                        false
+                    }
+                } else {
+                    false
+                };
                 if !merged {
                     let fg = crate::util::color_to_name(cell_fg);
                     let bg = crate::util::color_to_name(cell_bg);
-                    runs.push(CellRunJson { text: t.to_string(), fg: fg.into_owned(), bg: bg.into_owned(), flags: fl, width: w });
+                    runs.push(CellRunJson {
+                        text: t.to_string(),
+                        fg: fg.into_owned(),
+                        bg: bg.into_owned(),
+                        flags: fl,
+                        width: w,
+                    });
                 }
 
                 (w, cell_fg, cell_bg, fl)
             } else {
                 let merged = if let Some(last) = runs.last_mut() {
-                    if prev_fg_raw == Some(vt100::Color::Default) && prev_bg_raw == Some(vt100::Color::Default) && prev_flags == 0 {
+                    if prev_fg_raw == Some(vt100::Color::Default)
+                        && prev_bg_raw == Some(vt100::Color::Default)
+                        && prev_flags == 0
+                    {
                         last.text.push(' ');
                         last.width = last.width.saturating_add(1);
                         true
-                    } else { false }
-                } else { false };
+                    } else {
+                        false
+                    }
+                } else {
+                    false
+                };
                 if !merged {
-                    runs.push(CellRunJson { text: " ".to_string(), fg: "default".to_string(), bg: "default".to_string(), flags: 0, width: 1 });
+                    runs.push(CellRunJson {
+                        text: " ".to_string(),
+                        fg: "default".to_string(),
+                        bg: "default".to_string(),
+                        flags: 0,
+                        width: 1,
+                    });
                 }
                 (1u16, vt100::Color::Default, vt100::Color::Default, 0u8)
             };

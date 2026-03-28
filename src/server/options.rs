@@ -579,13 +579,8 @@ pub(crate) fn apply_set_option(app: &mut AppState, option: &str, value: &str, _q
                 if let Ok(port_str) = std::fs::read_to_string(&warm_port_path) {
                     if let Ok(port) = port_str.trim().parse::<u16>() {
                         let addr = format!("127.0.0.1:{}", port);
-                        let key = crate::session::read_session_key(&warm_base)
-                            .unwrap_or_default();
-                        let _ = crate::session::send_auth_cmd(
-                            &addr,
-                            &key,
-                            b"kill-server\n",
-                        );
+                        let key = crate::session::read_session_key(&warm_base).unwrap_or_default();
+                        let _ = crate::session::send_auth_cmd(&addr, &key, b"kill-server\n");
                     }
                 }
                 let _ = std::fs::remove_file(&warm_port_path);

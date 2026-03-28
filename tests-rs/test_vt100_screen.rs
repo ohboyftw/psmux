@@ -321,10 +321,10 @@ fn squelch_mixed_escape_sequences_before_clear() {
     let mut parser = crate::Parser::new(24, 80, 0);
     parser.screen_mut().set_squelch_clear_pending(true);
     // Cursor move, some text, color, then the clear
-    parser.process(b"\x1b[1;1H");        // cursor home
-    parser.process(b"PS C:\\> cd 'C:\\temp'; cls\r\n");  // injected command echo
-    parser.process(b"\x1b[0m");          // reset attributes
-    // Signal should NOT have fired yet (no CSI 2J/3J)
+    parser.process(b"\x1b[1;1H"); // cursor home
+    parser.process(b"PS C:\\> cd 'C:\\temp'; cls\r\n"); // injected command echo
+    parser.process(b"\x1b[0m"); // reset attributes
+                                // Signal should NOT have fired yet (no CSI 2J/3J)
     assert!(!parser.screen().squelch_cleared());
     // Now the actual clear arrives
     parser.process(b"\x1b[3J");

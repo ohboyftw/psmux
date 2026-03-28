@@ -882,10 +882,33 @@ pub fn execute_command_string(app: &mut AppState, cmd: &str) -> io::Result<()> {
             let mut i = 1;
             while i < parts.len() {
                 match parts[i] {
-                    "-w" => { if let Some(v) = parts.get(i + 1) { width_spec = v.to_string(); skip_indices.insert(i); skip_indices.insert(i + 1); i += 1; } }
-                    "-h" => { if let Some(v) = parts.get(i + 1) { height_spec = v.to_string(); skip_indices.insert(i); skip_indices.insert(i + 1); i += 1; } }
-                    "-d" | "-c" => { if let Some(v) = parts.get(i + 1) { start_dir = Some(v.to_string()); skip_indices.insert(i); skip_indices.insert(i + 1); i += 1; } }
-                    "-E" | "-K" => { skip_indices.insert(i); }
+                    "-w" => {
+                        if let Some(v) = parts.get(i + 1) {
+                            width_spec = v.to_string();
+                            skip_indices.insert(i);
+                            skip_indices.insert(i + 1);
+                            i += 1;
+                        }
+                    }
+                    "-h" => {
+                        if let Some(v) = parts.get(i + 1) {
+                            height_spec = v.to_string();
+                            skip_indices.insert(i);
+                            skip_indices.insert(i + 1);
+                            i += 1;
+                        }
+                    }
+                    "-d" | "-c" => {
+                        if let Some(v) = parts.get(i + 1) {
+                            start_dir = Some(v.to_string());
+                            skip_indices.insert(i);
+                            skip_indices.insert(i + 1);
+                            i += 1;
+                        }
+                    }
+                    "-E" | "-K" => {
+                        skip_indices.insert(i);
+                    }
                     _ => {}
                 }
                 i += 1;
@@ -895,7 +918,9 @@ pub fn execute_command_string(app: &mut AppState, cmd: &str) -> io::Result<()> {
             let width = parse_popup_dim_local(&width_spec, term_w, 80);
             let height = parse_popup_dim_local(&height_spec, term_h, 24);
             // Collect remaining args as the command
-            let rest: String = parts.iter().enumerate()
+            let rest: String = parts
+                .iter()
+                .enumerate()
                 .filter(|(idx, _)| !skip_indices.contains(idx))
                 .map(|(_, a)| *a)
                 .collect::<Vec<&str>>()
@@ -912,7 +937,9 @@ pub fn execute_command_string(app: &mut AppState, cmd: &str) -> io::Result<()> {
                     "1", // session name not available in local mode
                     &app.environment,
                 )
-            } else { None };
+            } else {
+                None
+            };
 
             app.mode = Mode::PopupMode {
                 command: rest,

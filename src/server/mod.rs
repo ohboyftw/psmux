@@ -23,8 +23,8 @@ use crate::tree::{
     resize_all_panes,
 };
 use crate::types::{
-    Action, AppState, Bind, CtrlReq, FocusDir, LayoutKind, Mode, Node, PipePaneState,
-    WaitChannel, WaitForOp, VERSION,
+    Action, AppState, Bind, CtrlReq, FocusDir, LayoutKind, Mode, Node, PipePaneState, WaitChannel,
+    WaitForOp, VERSION,
 };
 
 use helpers::{
@@ -113,7 +113,10 @@ fn serialize_overlay_json(app: &AppState) -> String {
                             out.push_str(&run.bg);
                             let _ = std::fmt::Write::write_fmt(
                                 &mut out,
-                                format_args!("\",\"flags\":{},\"width\":{}}}", run.flags, run.width),
+                                format_args!(
+                                    "\",\"flags\":{},\"width\":{}}}",
+                                    run.flags, run.width
+                                ),
                             );
                         }
                         out.push_str("]}");
@@ -1407,7 +1410,9 @@ pub fn run_server(
                                 && crate::tree::count_panes(&app.windows[target_win_idx].root) <= 1
                             {
                                 if let Node::Leaf(ref mut p) = app.windows[target_win_idx].root {
-                                    if (p.child.try_wait().ok().flatten().is_some() || p.dead || p.killed)
+                                    if (p.child.try_wait().ok().flatten().is_some()
+                                        || p.dead
+                                        || p.killed)
                                         && app.windows.len() > 1
                                     {
                                         app.windows.remove(target_win_idx);
@@ -1436,7 +1441,9 @@ pub fn run_server(
                                     && crate::tree::count_panes(&app.windows[wi].root) <= 1
                                 {
                                     if let Node::Leaf(ref mut p) = app.windows[wi].root {
-                                        if (p.child.try_wait().ok().flatten().is_some() || p.dead || p.killed)
+                                        if (p.child.try_wait().ok().flatten().is_some()
+                                            || p.dead
+                                            || p.killed)
                                             && app.windows.len() > 1
                                         {
                                             app.windows.remove(wi);
@@ -3369,8 +3376,9 @@ pub fn run_server(
                                                         .screen_mut()
                                                         .set_squelch_clear_pending(true);
                                                 }
-                                                p.squelch_until =
-                                                    Some(Instant::now() + Duration::from_millis(500));
+                                                p.squelch_until = Some(
+                                                    Instant::now() + Duration::from_millis(500),
+                                                );
                                                 let _ = p.writer.write_all(cd_cmd.as_bytes());
                                                 let _ = p.writer.flush();
                                             }
@@ -4462,16 +4470,30 @@ pub fn run_server(
                                 state_dirty = true;
                             }
                         }
-                        CtrlReq::DisplayPopup(command, width_spec, height_spec, close_on_exit, start_dir) => {
+                        CtrlReq::DisplayPopup(
+                            command,
+                            width_spec,
+                            height_spec,
+                            close_on_exit,
+                            start_dir,
+                        ) => {
                             // Resolve percentage dimensions against terminal area (#154)
                             let term_w = app.last_window_area.width;
                             let term_h = app.last_window_area.height;
                             let width = parse_popup_dim(&width_spec, term_w, 80);
                             let height = parse_popup_dim(&height_spec, term_h, 24);
                             // Expand format variables in start_dir (e.g. #{pane_current_path})
-                            let start_dir = start_dir.map(|d| expand_format(&d, &app)).filter(|d| !d.is_empty());
-                            let saved_dir = if start_dir.is_some() { env::current_dir().ok() } else { None };
-                            if let Some(dir) = &start_dir { let _ = env::set_current_dir(dir); }
+                            let start_dir = start_dir
+                                .map(|d| expand_format(&d, &app))
+                                .filter(|d| !d.is_empty());
+                            let saved_dir = if start_dir.is_some() {
+                                env::current_dir().ok()
+                            } else {
+                                None
+                            };
+                            if let Some(dir) = &start_dir {
+                                let _ = env::set_current_dir(dir);
+                            }
                             if !command.is_empty() {
                                 // Spawn popup as a real Pane via the popup module
                                 let inner_h = height.saturating_sub(2);
@@ -4485,7 +4507,9 @@ pub fn run_server(
                                     &app.session_name,
                                     &app.environment,
                                 );
-                                if let Some(prev) = saved_dir { let _ = env::set_current_dir(prev); }
+                                if let Some(prev) = saved_dir {
+                                    let _ = env::set_current_dir(prev);
+                                }
 
                                 app.mode = Mode::PopupMode {
                                     command: command.clone(),
@@ -4494,12 +4518,14 @@ pub fn run_server(
                                     width,
                                     height,
                                     close_on_exit,
-                                    popup_pane: pane_result,
+                                    popup_pane: pane_result.map(Box::new),
                                     scroll_offset: 0,
                                 };
                                 state_dirty = true;
                             } else {
-                                if let Some(prev) = saved_dir { let _ = env::set_current_dir(prev); }
+                                if let Some(prev) = saved_dir {
+                                    let _ = env::set_current_dir(prev);
+                                }
                                 app.mode = Mode::PopupMode {
                                     command: String::new(),
                                     output: "Press 'q' or Escape to close\n".to_string(),
@@ -4612,6 +4638,8 @@ pub fn run_server(
                             state_dirty = true;
                         }
                         CtrlReq::FocusIn => {
+                            app.window_focused = true;
+                            state_dirty = true;
                             if app.focus_events {
                                 // Forward focus-in escape sequence to all panes in active window
                                 let win = &mut app.windows[app.active_idx];
@@ -4633,6 +4661,8 @@ pub fn run_server(
                             hook_event = Some("pane-focus-in");
                         }
                         CtrlReq::FocusOut => {
+                            app.window_focused = false;
+                            state_dirty = true;
                             if app.focus_events {
                                 let win = &mut app.windows[app.active_idx];
                                 fn send_focus_seq(node: &mut Node, seq: &[u8]) {

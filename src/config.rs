@@ -655,6 +655,9 @@ pub fn parse_option_value(app: &mut AppState, rest: &str, _is_global: bool) {
         "pane-active-border-style" => {
             app.pane_active_border_style = value.to_string();
         }
+        "pane-border-unfocused-style" => {
+            app.pane_border_unfocused_style = value.to_string();
+        }
         "window-status-format" => {
             app.window_status_format = value.to_string();
         }

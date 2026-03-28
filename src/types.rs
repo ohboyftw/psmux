@@ -547,6 +547,9 @@ pub struct AppState {
     pub pane_base_index: usize,
     /// focus-events: pass focus events to apps
     pub focus_events: bool,
+    /// Whether the terminal window currently has OS-level focus.
+    /// Used to dim pane borders and status bar when psmux is backgrounded.
+    pub window_focused: bool,
     /// mode-keys: vi or emacs (stored for compat, default emacs)
     pub mode_keys: String,
     /// status: whether status bar is shown
@@ -596,6 +599,8 @@ pub struct AppState {
     pub pane_border_style: String,
     /// pane-active-border-style: style for active pane borders
     pub pane_active_border_style: String,
+    /// pane-border-unfocused-style: style for all pane borders when window lacks OS focus
+    pub pane_border_unfocused_style: String,
     /// window-status-format: format for inactive window tabs
     pub window_status_format: String,
     /// window-status-current-format: format for active window tab
@@ -785,6 +790,7 @@ impl AppState {
             display_panes_time_ms: 1000,
             pane_base_index: 0,
             focus_events: false,
+            window_focused: true,
             mode_keys: "emacs".to_string(),
             status_visible: true,
             status_position: "bottom".to_string(),
@@ -818,6 +824,7 @@ impl AppState {
             user_options: std::collections::HashMap::new(),
             pane_border_style: String::new(),
             pane_active_border_style: "fg=green".to_string(),
+            pane_border_unfocused_style: "fg=darkgray,dim".to_string(),
             window_status_format: "#I:#W#{?window_flags,#{window_flags}, }".to_string(),
             window_status_current_format: "#I:#W#{?window_flags,#{window_flags}, }".to_string(),
             window_status_separator: " ".to_string(),

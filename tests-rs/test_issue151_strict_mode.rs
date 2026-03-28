@@ -47,9 +47,11 @@ fn cwd_sync_guard_present_with_env_shim() {
 fn cwd_sync_sets_guard_variable_after_check() {
     let init = build_psrl_init(false, false);
     // The guard should set the variable to $true after the Test-Path check
-    let test_path_pos = init.find("Test-Path variable:Global:__psmux_cwd_hook")
+    let test_path_pos = init
+        .find("Test-Path variable:Global:__psmux_cwd_hook")
         .expect("Test-Path guard not found in init string");
-    let set_pos = init.find("$Global:__psmux_cwd_hook = $true")
+    let set_pos = init
+        .find("$Global:__psmux_cwd_hook = $true")
         .expect("Guard variable assignment not found in init string");
     assert!(
         set_pos > test_path_pos,
@@ -60,9 +62,18 @@ fn cwd_sync_sets_guard_variable_after_check() {
 #[test]
 fn cwd_sync_wraps_set_push_pop_location() {
     let init = build_psrl_init(false, false);
-    assert!(init.contains("function Global:Set-Location"), "Must wrap Set-Location");
-    assert!(init.contains("function Global:Push-Location"), "Must wrap Push-Location");
-    assert!(init.contains("function Global:Pop-Location"), "Must wrap Pop-Location");
+    assert!(
+        init.contains("function Global:Set-Location"),
+        "Must wrap Set-Location"
+    );
+    assert!(
+        init.contains("function Global:Push-Location"),
+        "Must wrap Push-Location"
+    );
+    assert!(
+        init.contains("function Global:Pop-Location"),
+        "Must wrap Pop-Location"
+    );
 }
 
 #[test]

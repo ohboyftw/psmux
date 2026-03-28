@@ -120,6 +120,7 @@ pub fn render_window(f: &mut Frame, app: &mut AppState, area: Rect) {
     let dim_preds = app.prediction_dimming;
     let border_style = parse_tmux_style(&app.pane_border_style);
     let active_border_style = parse_tmux_style(&app.pane_active_border_style);
+    let unfocused_border_style = parse_tmux_style(&app.pane_border_unfocused_style);
     let copy_cursor = if matches!(app.mode, Mode::CopyMode | Mode::CopySearch { .. }) {
         app.copy_pos
     } else {
@@ -140,6 +141,8 @@ pub fn render_window(f: &mut Frame, app: &mut AppState, area: Rect) {
         dim_preds,
         border_style,
         active_border_style,
+        unfocused_border_style,
+        app.window_focused,
         copy_cursor,
         active_rect,
         zoomed,
@@ -223,6 +226,8 @@ pub fn render_node(
     dim_preds: bool,
     border_style: Style,
     active_border_style: Style,
+    unfocused_border_style: Style,
+    window_focused: bool,
     copy_cursor: Option<(u16, u16)>,
     active_rect: Option<Rect>,
     zoomed: bool,
@@ -359,6 +364,8 @@ pub fn render_node(
                         dim_preds,
                         border_style,
                         active_border_style,
+                        unfocused_border_style,
+                        window_focused,
                         copy_cursor,
                         active_rect,
                         zoomed,
@@ -372,6 +379,17 @@ pub fn render_node(
                 return;
             }
             let buf = f.buffer_mut();
+            // Three-way style: unfocused overrides everything
+            let eff_border = if window_focused {
+                border_style
+            } else {
+                unfocused_border_style
+            };
+            let eff_active = if window_focused {
+                active_border_style
+            } else {
+                unfocused_border_style
+            };
             for i in 0..children.len().saturating_sub(1) {
                 if i >= rects.len() {
                     break;
@@ -389,16 +407,8 @@ pub fn render_node(
                             let right_active = cur_path.len() < active_path.len()
                                 && active_path[..cur_path.len()] == cur_path[..]
                                 && active_path[cur_path.len()] == i + 1;
-                            let left_sty = if left_active {
-                                active_border_style
-                            } else {
-                                border_style
-                            };
-                            let right_sty = if right_active {
-                                active_border_style
-                            } else {
-                                border_style
-                            };
+                            let left_sty = if left_active { eff_active } else { eff_border };
+                            let right_sty = if right_active { eff_active } else { eff_border };
                             let mid_y = area.y + area.height / 2;
                             for y in area.y..area.y + area.height {
                                 let sty = if y < mid_y { left_sty } else { right_sty };
@@ -416,11 +426,7 @@ pub fn render_node(
                                         && y < ar.y + ar.height
                                         && (sep_x == ar.x + ar.width || sep_x + 1 == ar.x)
                                 });
-                                let sty = if active {
-                                    active_border_style
-                                } else {
-                                    border_style
-                                };
+                                let sty = if active { eff_active } else { eff_border };
                                 let idx = (y - buf.area.y) as usize * buf.area.width as usize
                                     + (sep_x - buf.area.x) as usize;
                                 if idx < buf.content.len() {
@@ -440,16 +446,8 @@ pub fn render_node(
                             let bot_active = cur_path.len() < active_path.len()
                                 && active_path[..cur_path.len()] == cur_path[..]
                                 && active_path[cur_path.len()] == i + 1;
-                            let top_sty = if top_active {
-                                active_border_style
-                            } else {
-                                border_style
-                            };
-                            let bot_sty = if bot_active {
-                                active_border_style
-                            } else {
-                                border_style
-                            };
+                            let top_sty = if top_active { eff_active } else { eff_border };
+                            let bot_sty = if bot_active { eff_active } else { eff_border };
                             let mid_x = area.x + area.width / 2;
                             for x in area.x..area.x + area.width {
                                 let sty = if x < mid_x { top_sty } else { bot_sty };
@@ -467,11 +465,7 @@ pub fn render_node(
                                         && x < ar.x + ar.width
                                         && (sep_y == ar.y + ar.height || sep_y + 1 == ar.y)
                                 });
-                                let sty = if active {
-                                    active_border_style
-                                } else {
-                                    border_style
-                                };
+                                let sty = if active { eff_active } else { eff_border };
                                 let idx = (sep_y - buf.area.y) as usize * buf.area.width as usize
                                     + (x - buf.area.x) as usize;
                                 if idx < buf.content.len() {

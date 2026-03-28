@@ -682,7 +682,12 @@ pub fn run(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> io::Result<
             combined.extend(right_styled);
             // Truncate overall status line to fit the available width
             truncate_spans_to_width(&mut combined, status_chunk.width as usize);
-            let status_bar = Paragraph::new(Line::from(combined)).style(base_status_style);
+            let final_status_style = if app.window_focused {
+                base_status_style
+            } else {
+                base_status_style.add_modifier(Modifier::DIM)
+            };
+            let status_bar = Paragraph::new(Line::from(combined)).style(final_status_style);
             f.render_widget(Clear, status_chunk);
             f.render_widget(status_bar, status_chunk);
 

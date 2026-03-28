@@ -27,8 +27,8 @@ pub fn expand_run_shell_path(cmd: &str) -> String {
     let classic_win = format!("{}\\.psmux\\plugins\\", home);
     if cmd.contains(&classic_fwd) || cmd.contains(&classic_win) {
         let classic_dir = std::path::Path::new(&home).join(".psmux").join("plugins");
-        let xdg_base = std::env::var("XDG_CONFIG_HOME")
-            .unwrap_or_else(|_| format!("{}\\.config", home));
+        let xdg_base =
+            std::env::var("XDG_CONFIG_HOME").unwrap_or_else(|_| format!("{}\\.config", home));
         let xdg_dir = std::path::Path::new(&xdg_base)
             .join("psmux")
             .join("plugins");
@@ -475,7 +475,10 @@ mod tests {
         let cwd = "C:\\Program Files\\My App\\Data";
         let cmd = format!("claim-session s1 {}", quote_arg(cwd));
         let args = parse_command_line(&cmd);
-        assert_eq!(args, vec!["claim-session", "s1", "C:\\Program Files\\My App\\Data"]);
+        assert_eq!(
+            args,
+            vec!["claim-session", "s1", "C:\\Program Files\\My App\\Data"]
+        );
     }
 
     #[test]
@@ -491,7 +494,10 @@ mod tests {
         let cwd = "\\\\server\\share\\folder";
         let cmd = format!("claim-session s1 {}", quote_arg(cwd));
         let args = parse_command_line(&cmd);
-        assert_eq!(args, vec!["claim-session", "s1", "\\\\server\\share\\folder"]);
+        assert_eq!(
+            args,
+            vec!["claim-session", "s1", "\\\\server\\share\\folder"]
+        );
     }
 
     #[test]
@@ -499,7 +505,10 @@ mod tests {
         let cwd = "C:\\Program Files (x86)\\App";
         let cmd = format!("claim-session s1 {}", quote_arg(cwd));
         let args = parse_command_line(&cmd);
-        assert_eq!(args, vec!["claim-session", "s1", "C:\\Program Files (x86)\\App"]);
+        assert_eq!(
+            args,
+            vec!["claim-session", "s1", "C:\\Program Files (x86)\\App"]
+        );
     }
 
     #[test]

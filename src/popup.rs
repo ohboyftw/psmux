@@ -14,7 +14,7 @@
 use std::sync::{Arc, Mutex};
 
 use crate::layout::serialize_screen_rows;
-use crate::types::{Pane, AppState, Mode, PassthroughQueue};
+use crate::types::{AppState, Mode, Pane, PassthroughQueue};
 
 // ── Popup pane creation ─────────────────────────────────────────────
 
@@ -41,9 +41,8 @@ pub fn create_popup_pane(
     };
     let pair = pty_sys.openpty(pty_size).ok()?;
 
-    let mut cmd_builder = portable_pty::CommandBuilder::new(
-        if cfg!(windows) { "pwsh" } else { "sh" },
-    );
+    let mut cmd_builder =
+        portable_pty::CommandBuilder::new(if cfg!(windows) { "pwsh" } else { "sh" });
     if let Some(dir) = start_dir {
         cmd_builder.cwd(dir);
     } else if let Ok(dir) = std::env::current_dir() {
@@ -63,8 +62,7 @@ pub fn create_popup_pane(
     let child = pair.slave.spawn_command(cmd_builder).ok()?;
     drop(pair.slave); // required for ConPTY
 
-    let term: Arc<Mutex<vt100::Parser>> =
-        Arc::new(Mutex::new(vt100::Parser::new(rows, cols, 0)));
+    let term: Arc<Mutex<vt100::Parser>> = Arc::new(Mutex::new(vt100::Parser::new(rows, cols, 0)));
     let term_reader = term.clone();
 
     // Reader thread (same as regular pane reader)
@@ -191,7 +189,10 @@ pub fn serialize_popup_overlay(app: &AppState) -> String {
                             out.push_str(&run.bg);
                             let _ = std::fmt::Write::write_fmt(
                                 &mut out,
-                                format_args!("\",\"flags\":{},\"width\":{}}}", run.flags, run.width),
+                                format_args!(
+                                    "\",\"flags\":{},\"width\":{}}}",
+                                    run.flags, run.width
+                                ),
                             );
                         }
                         out.push_str("]}");
@@ -251,20 +252,26 @@ pub fn serialize_popup_overlay(app: &AppState) -> String {
         }
         Mode::ConfirmMode { prompt, .. } => {
             out.push_str(",\"popup_active\":false,\"popup_rows\":[],\"popup_lines\":[],\"popup_has_pty\":false");
-            out.push_str(",\"menu_active\":false,\"menu_title\":\"\",\"menu_selected\":0,\"menu_items\":[]");
+            out.push_str(
+                ",\"menu_active\":false,\"menu_title\":\"\",\"menu_selected\":0,\"menu_items\":[]",
+            );
             out.push_str(",\"confirm_active\":true,\"confirm_prompt\":\"");
             out.push_str(&json_escape_string(prompt));
             out.push('"');
         }
         Mode::PaneChooser { .. } => {
             out.push_str(",\"popup_active\":false,\"popup_rows\":[],\"popup_lines\":[],\"popup_has_pty\":false");
-            out.push_str(",\"menu_active\":false,\"menu_title\":\"\",\"menu_selected\":0,\"menu_items\":[]");
+            out.push_str(
+                ",\"menu_active\":false,\"menu_title\":\"\",\"menu_selected\":0,\"menu_items\":[]",
+            );
             out.push_str(",\"confirm_active\":false,\"confirm_prompt\":\"\"");
             out.push_str(",\"display_panes\":true");
         }
         _ => {
             out.push_str(",\"popup_active\":false,\"popup_rows\":[],\"popup_lines\":[],\"popup_has_pty\":false");
-            out.push_str(",\"menu_active\":false,\"menu_title\":\"\",\"menu_selected\":0,\"menu_items\":[]");
+            out.push_str(
+                ",\"menu_active\":false,\"menu_title\":\"\",\"menu_selected\":0,\"menu_items\":[]",
+            );
             out.push_str(",\"confirm_active\":false,\"confirm_prompt\":\"\"");
             out.push_str(",\"display_panes\":false");
         }
@@ -293,11 +300,7 @@ pub fn json_esc_inline(s: &str, out: &mut String) {
 /// Used by the in-process (non-server) rendering path in `app.rs`.
 /// Reads the popup pane's vt100 screen directly and renders with full
 /// color/style support.
-pub fn render_popup_overlay(
-    f: &mut ratatui::Frame,
-    area: ratatui::prelude::Rect,
-    app: &AppState,
-) {
+pub fn render_popup_overlay(f: &mut ratatui::Frame, area: ratatui::prelude::Rect, app: &AppState) {
     use ratatui::prelude::*;
     use ratatui::widgets::{Block, Borders, Clear, Paragraph};
 
@@ -320,11 +323,7 @@ pub fn render_popup_overlay(
             height: h,
         };
 
-        let title = if command.is_empty() {
-            "Popup"
-        } else {
-            command
-        };
+        let title = if command.is_empty() { "Popup" } else { command };
         let block = Block::default()
             .borders(Borders::ALL)
             .border_style(Style::default().fg(Color::Yellow))

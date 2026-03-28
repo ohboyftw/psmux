@@ -1881,16 +1881,51 @@ pub(crate) fn handle_connection(
                 let mut i = 0;
                 while i < args.len() {
                     match args[i] {
-                        "-w" => { if let Some(v) = args.get(i+1) { width_spec = v.to_string(); skip_indices.insert(i); skip_indices.insert(i+1); i += 1; } }
-                        "-h" => { if let Some(v) = args.get(i+1) { height_spec = v.to_string(); skip_indices.insert(i); skip_indices.insert(i+1); i += 1; } }
-                        "-d" | "-c" => { if let Some(v) = args.get(i+1) { start_dir = Some(v.to_string()); skip_indices.insert(i); skip_indices.insert(i+1); i += 1; } }
-                        "-E" | "-K" => { skip_indices.insert(i); }
+                        "-w" => {
+                            if let Some(v) = args.get(i + 1) {
+                                width_spec = v.to_string();
+                                skip_indices.insert(i);
+                                skip_indices.insert(i + 1);
+                                i += 1;
+                            }
+                        }
+                        "-h" => {
+                            if let Some(v) = args.get(i + 1) {
+                                height_spec = v.to_string();
+                                skip_indices.insert(i);
+                                skip_indices.insert(i + 1);
+                                i += 1;
+                            }
+                        }
+                        "-d" | "-c" => {
+                            if let Some(v) = args.get(i + 1) {
+                                start_dir = Some(v.to_string());
+                                skip_indices.insert(i);
+                                skip_indices.insert(i + 1);
+                                i += 1;
+                            }
+                        }
+                        "-E" | "-K" => {
+                            skip_indices.insert(i);
+                        }
                         _ => {}
                     }
                     i += 1;
                 }
-                let content = args.iter().enumerate().filter(|(idx, _)| !skip_indices.contains(idx)).map(|(_, a)| *a).collect::<Vec<&str>>().join(" ");
-                let _ = tx.send(CtrlReq::DisplayPopup(content, width_spec, height_spec, close_on_exit, start_dir));
+                let content = args
+                    .iter()
+                    .enumerate()
+                    .filter(|(idx, _)| !skip_indices.contains(idx))
+                    .map(|(_, a)| *a)
+                    .collect::<Vec<&str>>()
+                    .join(" ");
+                let _ = tx.send(CtrlReq::DisplayPopup(
+                    content,
+                    width_spec,
+                    height_spec,
+                    close_on_exit,
+                    start_dir,
+                ));
             }
             "confirm-before" | "confirm" => {
                 let mut prompt: Option<String> = None;
