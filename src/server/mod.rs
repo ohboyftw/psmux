@@ -1803,6 +1803,9 @@ pub fn run_server(
                                 json_escape_string(&expand_format(&app.status_right, &app));
                             let pbs_escaped = json_escape_string(&app.pane_border_style);
                             let pabs_escaped = json_escape_string(&app.pane_active_border_style);
+                            let pbs_status_escaped = json_escape_string(&app.pane_border_status);
+                            let pbf_escaped = json_escape_string(&app.pane_border_format);
+                            let sus_escaped = json_escape_string(&app.status_unfocused_style);
                             let wsf_escaped = json_escape_string(&app.window_status_format);
                             let wscf_escaped =
                                 json_escape_string(&app.window_status_current_format);
@@ -1829,13 +1832,14 @@ pub fn run_server(
                             };
                             let cursor_style_code = crate::rendering::configured_cursor_code();
                             let _ = std::fmt::Write::write_fmt(&mut combined_buf, format_args!(
-                        "{{\"layout\":{},\"windows\":{},\"prefix\":\"{}\",\"prefix2\":\"{}\",\"tree\":{},\"base_index\":{},\"prediction_dimming\":{},\"status_style\":\"{}\",\"status_left\":\"{}\",\"status_right\":\"{}\",\"pane_border_style\":\"{}\",\"pane_active_border_style\":\"{}\",\"wsf\":\"{}\",\"wscf\":\"{}\",\"wss\":\"{}\",\"ws_style\":\"{}\",\"wsc_style\":\"{}\",\"clock_mode\":{},\"bindings\":{},\"status_left_length\":{},\"status_right_length\":{},\"status_lines\":{},\"status_format\":{},\"mode_style\":\"{}\",\"status_position\":\"{}\",\"status_justify\":\"{}\",\"cursor_style_code\":{},\"status_visible\":{},\"repeat_time\":{},\"zoomed\":{}}}",
+                        "{{\"layout\":{},\"windows\":{},\"prefix\":\"{}\",\"prefix2\":\"{}\",\"tree\":{},\"base_index\":{},\"prediction_dimming\":{},\"status_style\":\"{}\",\"status_left\":\"{}\",\"status_right\":\"{}\",\"pane_border_style\":\"{}\",\"pane_active_border_style\":\"{}\",\"wsf\":\"{}\",\"wscf\":\"{}\",\"wss\":\"{}\",\"ws_style\":\"{}\",\"wsc_style\":\"{}\",\"clock_mode\":{},\"bindings\":{},\"status_left_length\":{},\"status_right_length\":{},\"status_lines\":{},\"status_format\":{},\"mode_style\":\"{}\",\"status_position\":\"{}\",\"status_justify\":\"{}\",\"cursor_style_code\":{},\"status_visible\":{},\"repeat_time\":{},\"zoomed\":{},\"pane_border_status\":\"{}\",\"pane_border_format\":\"{}\",\"status_unfocused_style\":\"{}\"}}",
                         layout_json, cached_windows_json, cached_prefix_str, cached_prefix2_str, cached_tree_json, cached_base_index, cached_pred_dim, ss_escaped, sl_expanded, sr_expanded, pbs_escaped, pabs_escaped, wsf_escaped, wscf_escaped, wss_escaped, ws_style_escaped, wsc_style_escaped,
                         matches!(app.mode, Mode::ClockMode), cached_bindings_json,
                         app.status_left_length, app.status_right_length, app.status_lines, status_format_json,
                         mode_style_escaped, status_position_escaped, status_justify_escaped,
                         cursor_style_code, app.status_visible, app.repeat_time_ms,
                         app.windows.get(app.active_idx).is_some_and(|w| w.zoom_saved.is_some()),
+                        pbs_status_escaped, pbf_escaped, sus_escaped,
                     ));
                             // Inject overlay state (popup, menu, confirm, display_panes)
                             {
@@ -3759,6 +3763,15 @@ pub fn run_server(
                                     "pane-active-border-style" => {
                                         app.pane_active_border_style = "fg=green".to_string();
                                     }
+                                    "pane-border-status" => {
+                                        app.pane_border_status = "top".to_string();
+                                    }
+                                    "pane-border-format" => {
+                                        app.pane_border_format = "#{pane_index}: #{pane_title}".to_string();
+                                    }
+                                    "status-unfocused-style" => {
+                                        app.status_unfocused_style = String::new();
+                                    }
                                     "window-status-format" => {
                                         app.window_status_format =
                                             "#I:#W#{?window_flags,#{window_flags}, }".to_string();
@@ -3923,6 +3936,24 @@ pub fn run_server(
                                 output.push_str(&format!(
                                     "pane-active-border-style \"{}\"\n",
                                     app.pane_active_border_style
+                                ));
+                            }
+                            if !app.pane_border_status.is_empty() {
+                                output.push_str(&format!(
+                                    "pane-border-status \"{}\"\n",
+                                    app.pane_border_status
+                                ));
+                            }
+                            if !app.pane_border_format.is_empty() {
+                                output.push_str(&format!(
+                                    "pane-border-format \"{}\"\n",
+                                    app.pane_border_format
+                                ));
+                            }
+                            if !app.status_unfocused_style.is_empty() {
+                                output.push_str(&format!(
+                                    "status-unfocused-style \"{}\"\n",
+                                    app.status_unfocused_style
                                 ));
                             }
                             if !app.status_style.is_empty() {
@@ -5358,6 +5389,9 @@ pub fn run_server(
             let sr_expanded = json_escape_string(&expand_format(&app.status_right, &app));
             let pbs_escaped = json_escape_string(&app.pane_border_style);
             let pabs_escaped = json_escape_string(&app.pane_active_border_style);
+            let pbs_status_escaped = json_escape_string(&app.pane_border_status);
+            let pbf_escaped = json_escape_string(&app.pane_border_format);
+            let sus_escaped = json_escape_string(&app.status_unfocused_style);
             let wsf_escaped = json_escape_string(&app.window_status_format);
             let wscf_escaped = json_escape_string(&app.window_status_current_format);
             let wss_escaped = json_escape_string(&app.window_status_separator);
@@ -5381,13 +5415,14 @@ pub fn run_server(
             };
             let cursor_style_code = crate::rendering::configured_cursor_code();
             let _ = std::fmt::Write::write_fmt(&mut combined_buf, format_args!(
-                "{{\"layout\":{},\"windows\":{},\"prefix\":\"{}\",\"prefix2\":\"{}\",\"tree\":{},\"base_index\":{},\"prediction_dimming\":{},\"status_style\":\"{}\",\"status_left\":\"{}\",\"status_right\":\"{}\",\"pane_border_style\":\"{}\",\"pane_active_border_style\":\"{}\",\"wsf\":\"{}\",\"wscf\":\"{}\",\"wss\":\"{}\",\"ws_style\":\"{}\",\"wsc_style\":\"{}\",\"clock_mode\":{},\"bindings\":{},\"status_left_length\":{},\"status_right_length\":{},\"status_lines\":{},\"status_format\":{},\"mode_style\":\"{}\",\"status_position\":\"{}\",\"status_justify\":\"{}\",\"cursor_style_code\":{},\"status_visible\":{},\"repeat_time\":{},\"zoomed\":{}}}",
+                "{{\"layout\":{},\"windows\":{},\"prefix\":\"{}\",\"prefix2\":\"{}\",\"tree\":{},\"base_index\":{},\"prediction_dimming\":{},\"status_style\":\"{}\",\"status_left\":\"{}\",\"status_right\":\"{}\",\"pane_border_style\":\"{}\",\"pane_active_border_style\":\"{}\",\"wsf\":\"{}\",\"wscf\":\"{}\",\"wss\":\"{}\",\"ws_style\":\"{}\",\"wsc_style\":\"{}\",\"clock_mode\":{},\"bindings\":{},\"status_left_length\":{},\"status_right_length\":{},\"status_lines\":{},\"status_format\":{},\"mode_style\":\"{}\",\"status_position\":\"{}\",\"status_justify\":\"{}\",\"cursor_style_code\":{},\"status_visible\":{},\"repeat_time\":{},\"zoomed\":{},\"pane_border_status\":\"{}\",\"pane_border_format\":\"{}\",\"status_unfocused_style\":\"{}\"}}",
                 layout_json, cached_windows_json, cached_prefix_str, cached_prefix2_str, cached_tree_json, cached_base_index, cached_pred_dim, ss_escaped, sl_expanded, sr_expanded, pbs_escaped, pabs_escaped, wsf_escaped, wscf_escaped, wss_escaped, ws_style_escaped, wsc_style_escaped,
                 matches!(app.mode, Mode::ClockMode), cached_bindings_json,
                 app.status_left_length, app.status_right_length, app.status_lines, status_format_json,
                 mode_style_escaped, status_position_escaped, status_justify_escaped,
                 cursor_style_code, app.status_visible, app.repeat_time_ms,
                 app.windows.get(app.active_idx).is_some_and(|w| w.zoom_saved.is_some()),
+                pbs_status_escaped, pbf_escaped, sus_escaped,
             ));
             // Inject overlay state (popup, menu, confirm, display_panes)
             {
