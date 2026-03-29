@@ -161,12 +161,32 @@ pub fn render_window(f: &mut Frame, app: &mut AppState, area: Rect) {
     if pane_border_status != "off" {
         if let Some(win) = app.windows.get(app.active_idx) {
             let pane_ids = crate::tree::collect_pane_ids(&win.root);
+            let active_pane_id = crate::tree::get_active_pane_id(
+                &app.windows[app.active_idx].root,
+                &app.windows[app.active_idx].active_path,
+            );
             for (pos, pane_id) in pane_ids.iter().enumerate() {
                 crate::format::set_pane_pos_override(Some(pos));
-                let title = crate::format::expand_format(&pane_border_format, app);
+                let mut title = crate::format::expand_format(&pane_border_format, app);
+                crate::format::set_pane_pos_override(None);
+
+                // Add mode/state prefix for active pane
+                if Some(*pane_id) == active_pane_id {
+                    let prefix = match app.mode {
+                        Mode::CopyMode => "[CPY] ",
+                        Mode::CopySearch { .. } => "[SEARCH] ",
+                        _ => "",
+                    };
+                    if !prefix.is_empty() {
+                        title = format!("{}{}", prefix, title);
+                    }
+                    if zoomed {
+                        title = format!("[Z] {}", title);
+                    }
+                }
+
                 pane_titles.insert(*pane_id, title);
             }
-            crate::format::set_pane_pos_override(None);
         }
     }
 
