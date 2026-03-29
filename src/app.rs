@@ -27,7 +27,8 @@ use crate::layout::dump_layout_json;
 use crate::pane::{create_window, kill_active_pane, kill_pane_by_id, split_active_with_command};
 use crate::rendering::{centered_rect, parse_status, render_window};
 use crate::style::{
-    parse_inline_styles, parse_tmux_style, spans_visual_width, truncate_spans_to_width,
+    desaturate_style, parse_inline_styles, parse_tmux_style, spans_visual_width,
+    truncate_spans_to_width,
 };
 use crate::tree::{
     active_pane_mut, compute_rects, find_window_index_by_id, focus_pane_by_id, focus_pane_by_index,
@@ -684,8 +685,10 @@ pub fn run(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> io::Result<
             truncate_spans_to_width(&mut combined, status_chunk.width as usize);
             let final_status_style = if app.window_focused {
                 base_status_style
+            } else if !app.status_unfocused_style.is_empty() {
+                parse_tmux_style(&app.status_unfocused_style)
             } else {
-                base_status_style.add_modifier(Modifier::DIM)
+                desaturate_style(base_status_style)
             };
             let status_bar = Paragraph::new(Line::from(combined)).style(final_status_style);
             f.render_widget(Clear, status_chunk);
