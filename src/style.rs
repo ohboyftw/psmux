@@ -416,3 +416,55 @@ pub fn parse_status(
     }
     spans
 }
+
+// ─── Desaturation helpers ──────────────────────────────────────────────────
+
+/// Convert a ratatui Color to its grayscale equivalent using luminance weighting.
+/// Formula: gray = 0.299*R + 0.587*G + 0.114*B
+pub fn desaturate_color(c: Color) -> Color {
+    match c {
+        Color::Rgb(r, g, b) => {
+            let gray = (0.299 * r as f32 + 0.587 * g as f32 + 0.114 * b as f32) as u8;
+            Color::Rgb(gray, gray, gray)
+        }
+        Color::Red => Color::Rgb(76, 76, 76),
+        Color::Green => Color::Rgb(75, 75, 75),
+        Color::Blue => Color::Rgb(29, 29, 29),
+        Color::Yellow => Color::Rgb(150, 150, 150),
+        Color::Magenta => Color::Rgb(53, 53, 53),
+        Color::Cyan => Color::Rgb(117, 117, 117),
+        Color::White => Color::Rgb(200, 200, 200),
+        Color::Black => Color::Rgb(20, 20, 20),
+        Color::Gray => Color::Rgb(128, 128, 128),
+        Color::DarkGray => Color::Rgb(80, 80, 80),
+        Color::LightRed => Color::Rgb(120, 120, 120),
+        Color::LightGreen => Color::Rgb(120, 120, 120),
+        Color::LightBlue => Color::Rgb(80, 80, 80),
+        Color::LightYellow => Color::Rgb(180, 180, 180),
+        Color::LightMagenta => Color::Rgb(100, 100, 100),
+        Color::LightCyan => Color::Rgb(150, 150, 150),
+        Color::Indexed(i) => {
+            if i < 8 {
+                Color::Rgb(80, 80, 80)
+            } else if i < 16 {
+                Color::Rgb(120, 120, 120)
+            } else {
+                Color::Rgb(100, 100, 100)
+            }
+        }
+        Color::Reset => Color::Reset,
+    }
+}
+
+/// Desaturate a full Style — convert fg/bg to grayscale and add DIM modifier.
+pub fn desaturate_style(style: Style) -> Style {
+    let mut result = style;
+    if let Some(fg) = style.fg {
+        result.fg = Some(desaturate_color(fg));
+    }
+    if let Some(bg) = style.bg {
+        result.bg = Some(desaturate_color(bg));
+    }
+    result = result.add_modifier(Modifier::DIM);
+    result
+}
