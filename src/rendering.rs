@@ -478,23 +478,20 @@ pub fn render_node(
                 let buf = f.buffer_mut();
 
                 if is_single_pane {
-                    // ┌─ title ──...──┐ (top row)
-                    // NOTE: pane-border-status "bottom" for single-pane box is handled
-                    // in Task 5 — currently title always appears on the top row.
+                    let title_on_bottom = pane_border_status == "bottom";
                     let w = area.width as usize;
                     let y = area.y;
                     let x0 = area.x;
                     if w >= 4 {
-                        // Top-left corner
+                        // ┌─ title ──┐ (top row) or ┌──────────┐ (plain when bottom mode)
                         let idx = (y - buf.area.y) as usize * buf.area.width as usize
                             + (x0 - buf.area.x) as usize;
                         if idx < buf.content.len() {
                             buf.content[idx].set_char('┌');
                             buf.content[idx].set_style(title_style);
                         }
-                        // Title text + ─ fill (between corners)
-                        draw_title_line(buf, x0 + 1, y, w.saturating_sub(2), title_text, title_style);
-                        // Top-right corner
+                        let top_title = if title_on_bottom { "" } else { title_text };
+                        draw_title_line(buf, x0 + 1, y, w.saturating_sub(2), top_title, title_style);
                         let idx = (y - buf.area.y) as usize * buf.area.width as usize
                             + (x0 + w as u16 - 1 - buf.area.x) as usize;
                         if idx < buf.content.len() {
@@ -522,7 +519,7 @@ pub fn render_node(
                             buf.content[idx].set_style(title_style);
                         }
                     }
-                    // Bottom border └──...──┘
+                    // └─ title ──┘ (bottom row when bottom mode) or └──────────┘ (plain)
                     let bottom_y = area.y + area.height.saturating_sub(1);
                     if w >= 2 {
                         let idx = (bottom_y - buf.area.y) as usize * buf.area.width as usize
@@ -531,14 +528,8 @@ pub fn render_node(
                             buf.content[idx].set_char('└');
                             buf.content[idx].set_style(title_style);
                         }
-                        for col in 1..w.saturating_sub(1) {
-                            let idx = (bottom_y - buf.area.y) as usize * buf.area.width as usize
-                                + (area.x + col as u16 - buf.area.x) as usize;
-                            if idx < buf.content.len() {
-                                buf.content[idx].set_char('─');
-                                buf.content[idx].set_style(title_style);
-                            }
-                        }
+                        let bottom_title = if title_on_bottom { title_text } else { "" };
+                        draw_title_line(buf, area.x + 1, bottom_y, w.saturating_sub(2), bottom_title, title_style);
                         let idx = (bottom_y - buf.area.y) as usize * buf.area.width as usize
                             + (area.x + w as u16 - 1 - buf.area.x) as usize;
                         if idx < buf.content.len() {
