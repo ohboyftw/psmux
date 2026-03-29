@@ -1344,9 +1344,7 @@ pub fn parse_key_string(key: &str) -> Option<(KeyCode, KeyModifiers)> {
     let keycode = match key_part.to_lowercase().as_str() {
         // Single character keys: preserve the ORIGINAL case from key_part, not the lowercased version.
         // This is critical for case-sensitive bind-key (issue #157): bind-key T != bind-key t.
-        _ if key_part.len() == 1 => {
-            KeyCode::Char(key_part.chars().next().unwrap())
-        }
+        _ if key_part.len() == 1 => KeyCode::Char(key_part.chars().next().unwrap()),
         "space" => KeyCode::Char(' '),
         "enter" | "return" => KeyCode::Enter,
         "tab" => KeyCode::Tab,

@@ -36,7 +36,7 @@ pub fn vt_to_color(c: vt100::Color) -> Color {
         vt100::Color::Idx(4) => Color::Blue,
         vt100::Color::Idx(5) => Color::Magenta,
         vt100::Color::Idx(6) => Color::Cyan,
-        vt100::Color::Idx(7) => Color::Gray,       // index 7 = light gray (SGR 37)
+        vt100::Color::Idx(7) => Color::Gray, // index 7 = light gray (SGR 37)
         vt100::Color::Idx(8) => Color::DarkGray,
         vt100::Color::Idx(9) => Color::LightRed,
         vt100::Color::Idx(10) => Color::LightGreen,
@@ -44,7 +44,7 @@ pub fn vt_to_color(c: vt100::Color) -> Color {
         vt100::Color::Idx(12) => Color::LightBlue,
         vt100::Color::Idx(13) => Color::LightMagenta,
         vt100::Color::Idx(14) => Color::LightCyan,
-        vt100::Color::Idx(15) => Color::White,     // index 15 = bright white (SGR 97)
+        vt100::Color::Idx(15) => Color::White, // index 15 = bright white (SGR 97)
         vt100::Color::Idx(i) => Color::Indexed(i),
         vt100::Color::Rgb(r, g, b) => Color::Rgb(r, g, b),
     }
@@ -282,7 +282,14 @@ pub fn fix_border_intersections(buf: &mut Buffer) {
 /// Draw a title bar line: fills columns with title text (Unicode-width aware),
 /// then pads with '─' to the end. Used for both single-pane frame top/bottom
 /// and multi-pane title bars.
-fn draw_title_line(buf: &mut Buffer, x0: u16, y: u16, width: usize, title_text: &str, style: Style) {
+fn draw_title_line(
+    buf: &mut Buffer,
+    x0: u16,
+    y: u16,
+    width: usize,
+    title_text: &str,
+    style: Style,
+) {
     let title_display = if title_text.is_empty() {
         String::new()
     } else {
@@ -364,7 +371,12 @@ pub fn render_node(
                     Rect::new(area.x, area.y, area.width, area.height.saturating_sub(1))
                 } else {
                     // "top" (default)
-                    Rect::new(area.x, area.y + 1, area.width, area.height.saturating_sub(1))
+                    Rect::new(
+                        area.x,
+                        area.y + 1,
+                        area.width,
+                        area.height.saturating_sub(1),
+                    )
                 }
             } else {
                 area
@@ -490,10 +502,7 @@ pub fn render_node(
                     border_style
                 };
 
-                let title_text = pane_titles
-                    .get(&pane.id)
-                    .map(|s| s.as_str())
-                    .unwrap_or("");
+                let title_text = pane_titles.get(&pane.id).map(|s| s.as_str()).unwrap_or("");
 
                 let buf = f.buffer_mut();
 
@@ -511,7 +520,14 @@ pub fn render_node(
                             buf.content[idx].set_style(title_style);
                         }
                         let top_title = if title_on_bottom { "" } else { title_text };
-                        draw_title_line(buf, x0 + 1, y, w.saturating_sub(2), top_title, title_style);
+                        draw_title_line(
+                            buf,
+                            x0 + 1,
+                            y,
+                            w.saturating_sub(2),
+                            top_title,
+                            title_style,
+                        );
                         let idx = (y - buf.area.y) as usize * buf.area.width as usize
                             + (x0 + w as u16 - 1 - buf.area.x) as usize;
                         if idx < buf.content.len() {
@@ -549,7 +565,14 @@ pub fn render_node(
                             buf.content[idx].set_style(title_style);
                         }
                         let bottom_title = if title_on_bottom { title_text } else { "" };
-                        draw_title_line(buf, area.x + 1, bottom_y, w.saturating_sub(2), bottom_title, title_style);
+                        draw_title_line(
+                            buf,
+                            area.x + 1,
+                            bottom_y,
+                            w.saturating_sub(2),
+                            bottom_title,
+                            title_style,
+                        );
                         let idx = (bottom_y - buf.area.y) as usize * buf.area.width as usize
                             + (area.x + w as u16 - 1 - buf.area.x) as usize;
                         if idx < buf.content.len() {
@@ -564,7 +587,14 @@ pub fn render_node(
                     } else {
                         area.y
                     };
-                    draw_title_line(buf, area.x, title_y, area.width as usize, title_text, title_style);
+                    draw_title_line(
+                        buf,
+                        area.x,
+                        title_y,
+                        area.width as usize,
+                        title_text,
+                        title_style,
+                    );
                 }
             }
         }
