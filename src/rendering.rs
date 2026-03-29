@@ -151,6 +151,25 @@ pub fn render_window(f: &mut Frame, app: &mut AppState, area: Rect) {
         .windows
         .get(app.active_idx)
         .is_some_and(|w| w.zoom_saved.is_some());
+
+    // Pre-compute pane title bar text before the mutable borrow of win.root.
+    // We need &AppState for format expansion, which conflicts with &mut win.root.
+    let pane_border_status = app.pane_border_status.clone();
+    let pane_border_format = app.pane_border_format.clone();
+    let mut pane_titles: std::collections::HashMap<usize, String> =
+        std::collections::HashMap::new();
+    if pane_border_status != "off" {
+        if let Some(win) = app.windows.get(app.active_idx) {
+            let pane_ids = crate::tree::collect_pane_ids(&win.root);
+            for (pos, pane_id) in pane_ids.iter().enumerate() {
+                crate::format::set_pane_pos_override(Some(pos));
+                let title = crate::format::expand_format(&pane_border_format, app);
+                pane_titles.insert(*pane_id, title);
+            }
+            crate::format::set_pane_pos_override(None);
+        }
+    }
+
     let win = &mut app.windows[app.active_idx];
     let active_rect = compute_active_rect(&win.root, &win.active_path, area);
     render_node(
@@ -167,6 +186,9 @@ pub fn render_window(f: &mut Frame, app: &mut AppState, area: Rect) {
         copy_cursor,
         active_rect,
         zoomed,
+        &pane_border_status,
+        &pane_titles,
+        true,
     );
     fix_border_intersections(f.buffer_mut());
 }
@@ -237,6 +259,50 @@ pub fn fix_border_intersections(buf: &mut Buffer) {
     }
 }
 
+/// Draw a title bar line: fills columns with title text (Unicode-width aware),
+/// then pads with '─' to the end. Used for both single-pane frame top/bottom
+/// and multi-pane title bars.
+fn draw_title_line(buf: &mut Buffer, x0: u16, y: u16, width: usize, title_text: &str, style: Style) {
+    let title_display = if title_text.is_empty() {
+        String::new()
+    } else {
+        format!(" {} ", title_text)
+    };
+    // Walk the title string tracking display width, writing one char per column
+    let mut col = 0usize;
+    for ch in title_display.chars() {
+        if col >= width {
+            break;
+        }
+        let ch_width = unicode_width::UnicodeWidthChar::width(ch).unwrap_or(1);
+        let idx = (y - buf.area.y) as usize * buf.area.width as usize
+            + (x0 + col as u16 - buf.area.x) as usize;
+        if idx < buf.content.len() {
+            buf.content[idx].set_char(ch);
+            buf.content[idx].set_style(style);
+        }
+        // For wide chars, fill the second column with a space placeholder
+        if ch_width >= 2 && col + 1 < width {
+            let idx2 = idx + 1;
+            if idx2 < buf.content.len() {
+                buf.content[idx2].set_char(' ');
+                buf.content[idx2].set_style(style);
+            }
+        }
+        col += ch_width;
+    }
+    // Fill remaining columns with ─
+    while col < width {
+        let idx = (y - buf.area.y) as usize * buf.area.width as usize
+            + (x0 + col as u16 - buf.area.x) as usize;
+        if idx < buf.content.len() {
+            buf.content[idx].set_char('─');
+            buf.content[idx].set_style(style);
+        }
+        col += 1;
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 pub fn render_node(
     f: &mut Frame,
@@ -252,11 +318,39 @@ pub fn render_node(
     copy_cursor: Option<(u16, u16)>,
     active_rect: Option<Rect>,
     zoomed: bool,
+    pane_border_status: &str,
+    pane_titles: &std::collections::HashMap<usize, String>,
+    is_root: bool,
 ) {
     match node {
         Node::Leaf(pane) => {
             let is_active = *cur_path == *active_path;
-            let inner = area;
+
+            // ── Title bar & frame layout ──
+            let is_single_pane = is_root; // root leaf = only pane in window
+            let min_height: u16 = if is_single_pane { 3 } else { 2 };
+            let has_title_bar = pane_border_status != "off" && area.height >= min_height;
+
+            let content_area = if has_title_bar {
+                if is_single_pane {
+                    // Full box: top title row, left/right cols, bottom row
+                    Rect::new(
+                        area.x + 1,
+                        area.y + 1,
+                        area.width.saturating_sub(2),
+                        area.height.saturating_sub(2),
+                    )
+                } else if pane_border_status == "bottom" {
+                    Rect::new(area.x, area.y, area.width, area.height.saturating_sub(1))
+                } else {
+                    // "top" (default)
+                    Rect::new(area.x, area.y + 1, area.width, area.height.saturating_sub(1))
+                }
+            } else {
+                area
+            };
+
+            let inner = content_area;
             let target_rows = inner.height.max(1);
             let target_cols = inner.width.max(1);
             if pane.last_rows != target_rows || pane.last_cols != target_cols {
@@ -365,6 +459,103 @@ pub fn render_node(
                     f.set_cursor_position((cx, cy));
                 }
             }
+
+            // ── Draw title bar and frame ──
+            if has_title_bar {
+                let title_style = if !window_focused {
+                    unfocused_border_style
+                } else if is_active {
+                    active_border_style
+                } else {
+                    border_style
+                };
+
+                let title_text = pane_titles
+                    .get(&pane.id)
+                    .map(|s| s.as_str())
+                    .unwrap_or("");
+
+                let buf = f.buffer_mut();
+
+                if is_single_pane {
+                    // ┌─ title ──...──┐ (top row)
+                    // NOTE: pane-border-status "bottom" for single-pane box is handled
+                    // in Task 5 — currently title always appears on the top row.
+                    let w = area.width as usize;
+                    let y = area.y;
+                    let x0 = area.x;
+                    if w >= 4 {
+                        // Top-left corner
+                        let idx = (y - buf.area.y) as usize * buf.area.width as usize
+                            + (x0 - buf.area.x) as usize;
+                        if idx < buf.content.len() {
+                            buf.content[idx].set_char('┌');
+                            buf.content[idx].set_style(title_style);
+                        }
+                        // Title text + ─ fill (between corners)
+                        draw_title_line(buf, x0 + 1, y, w.saturating_sub(2), title_text, title_style);
+                        // Top-right corner
+                        let idx = (y - buf.area.y) as usize * buf.area.width as usize
+                            + (x0 + w as u16 - 1 - buf.area.x) as usize;
+                        if idx < buf.content.len() {
+                            buf.content[idx].set_char('┐');
+                            buf.content[idx].set_style(title_style);
+                        }
+                    }
+
+                    // Left border │
+                    for row_y in (area.y + 1)..(area.y + area.height.saturating_sub(1)) {
+                        let idx = (row_y - buf.area.y) as usize * buf.area.width as usize
+                            + (area.x - buf.area.x) as usize;
+                        if idx < buf.content.len() {
+                            buf.content[idx].set_char('│');
+                            buf.content[idx].set_style(title_style);
+                        }
+                    }
+                    // Right border │
+                    let right_x = area.x + area.width.saturating_sub(1);
+                    for row_y in (area.y + 1)..(area.y + area.height.saturating_sub(1)) {
+                        let idx = (row_y - buf.area.y) as usize * buf.area.width as usize
+                            + (right_x - buf.area.x) as usize;
+                        if idx < buf.content.len() {
+                            buf.content[idx].set_char('│');
+                            buf.content[idx].set_style(title_style);
+                        }
+                    }
+                    // Bottom border └──...──┘
+                    let bottom_y = area.y + area.height.saturating_sub(1);
+                    if w >= 2 {
+                        let idx = (bottom_y - buf.area.y) as usize * buf.area.width as usize
+                            + (area.x - buf.area.x) as usize;
+                        if idx < buf.content.len() {
+                            buf.content[idx].set_char('└');
+                            buf.content[idx].set_style(title_style);
+                        }
+                        for col in 1..w.saturating_sub(1) {
+                            let idx = (bottom_y - buf.area.y) as usize * buf.area.width as usize
+                                + (area.x + col as u16 - buf.area.x) as usize;
+                            if idx < buf.content.len() {
+                                buf.content[idx].set_char('─');
+                                buf.content[idx].set_style(title_style);
+                            }
+                        }
+                        let idx = (bottom_y - buf.area.y) as usize * buf.area.width as usize
+                            + (area.x + w as u16 - 1 - buf.area.x) as usize;
+                        if idx < buf.content.len() {
+                            buf.content[idx].set_char('┘');
+                            buf.content[idx].set_style(title_style);
+                        }
+                    }
+                } else {
+                    // Multi-pane: ── title ──...── (title bar only, no box)
+                    let title_y = if pane_border_status == "bottom" {
+                        area.y + area.height.saturating_sub(1)
+                    } else {
+                        area.y
+                    };
+                    draw_title_line(buf, area.x, title_y, area.width as usize, title_text, title_style);
+                }
+            }
         }
         Node::Split {
             kind,
@@ -395,6 +586,9 @@ pub fn render_node(
                         copy_cursor,
                         active_rect,
                         zoomed,
+                        pane_border_status,
+                        pane_titles,
+                        false,
                     );
                 }
                 cur_path.pop();

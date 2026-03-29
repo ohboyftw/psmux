@@ -27,6 +27,11 @@ pub fn set_buffer_idx_override(idx: Option<usize>) {
     BUFFER_IDX_OVERRIDE.set(idx);
 }
 
+/// Set the pane position override for per-pane format expansion.
+pub fn set_pane_pos_override(pos: Option<usize>) {
+    PANE_POS_OVERRIDE.set(pos);
+}
+
 // ─────────────────── tmux window_layout generation ────────────────────
 
 /// Generate a tmux-compatible window_layout string from the pane tree.
