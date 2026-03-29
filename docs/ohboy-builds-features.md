@@ -75,6 +75,13 @@ Mark any broken feature with `BROKEN` and the commit that caused it.
 - **Verify**: `psmux display-message "#{pane_current_path}"` expands correctly
 - **Risk from upstream**: Format variable additions (usually additive, low risk)
 
+### 11. Pane Focus Visibility (Frame + Title Bar + Status Desaturation)
+- **Files**: `src/rendering.rs` (title bar, frame border, draw_title_line helper), `src/app.rs` (status desaturation), `src/style.rs` (desaturate helpers)
+- **Config**: `pane-border-status top|bottom|off`, `pane-border-format`, `status-unfocused-style`
+- **Test**: `cargo test` + manual visual check
+- **Verify**: Start psmux, verify title bar visible on panes, split panes to check multi-pane titles, alt-tab to check status desaturation, `set -g pane-border-status off` disables all
+- **Risk from upstream**: Changes to `render_node` signature in `src/rendering.rs`, status bar rendering in `src/app.rs`, border drawing logic
+
 ---
 
 ## Post-Merge Quick Smoke Test
