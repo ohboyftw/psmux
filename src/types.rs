@@ -601,6 +601,12 @@ pub struct AppState {
     pub pane_active_border_style: String,
     /// pane-border-unfocused-style: style for all pane borders when window lacks OS focus
     pub pane_border_unfocused_style: String,
+    /// pane-border-status: "top", "bottom", or "off" (default "top")
+    pub pane_border_status: String,
+    /// pane-border-format: format string for pane title bars
+    pub pane_border_format: String,
+    /// status-unfocused-style: explicit style override when window loses focus (empty = auto-desaturate)
+    pub status_unfocused_style: String,
     /// window-status-format: format for inactive window tabs
     pub window_status_format: String,
     /// window-status-current-format: format for active window tab
@@ -825,6 +831,9 @@ impl AppState {
             pane_border_style: String::new(),
             pane_active_border_style: "fg=green".to_string(),
             pane_border_unfocused_style: "fg=darkgray,dim".to_string(),
+            pane_border_status: "top".to_string(),
+            pane_border_format: "#{pane_index}: #{pane_title}".to_string(),
+            status_unfocused_style: String::new(),
             window_status_format: "#I:#W#{?window_flags,#{window_flags}, }".to_string(),
             window_status_current_format: "#I:#W#{?window_flags,#{window_flags}, }".to_string(),
             window_status_separator: " ".to_string(),

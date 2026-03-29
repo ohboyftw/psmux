@@ -154,6 +154,10 @@ pub(crate) fn get_option_value(app: &AppState, name: &str) -> String {
         "word-separators" => app.word_separators.clone(),
         "pane-border-style" => app.pane_border_style.clone(),
         "pane-active-border-style" => app.pane_active_border_style.clone(),
+        "pane-border-unfocused-style" => app.pane_border_unfocused_style.clone(),
+        "pane-border-status" => app.pane_border_status.clone(),
+        "pane-border-format" => app.pane_border_format.clone(),
+        "status-unfocused-style" => app.status_unfocused_style.clone(),
         "status-style" => app.status_style.clone(),
         "window-status-format" => app.window_status_format.clone(),
         "window-status-current-format" => app.window_status_current_format.clone(),
@@ -481,6 +485,18 @@ pub(crate) fn apply_set_option(app: &mut AppState, option: &str, value: &str, _q
         }
         "pane-active-border-style" => {
             app.pane_active_border_style = value.to_string();
+        }
+        "pane-border-status" => {
+            match value {
+                "top" | "bottom" | "off" => app.pane_border_status = value.to_string(),
+                _ => {}
+            }
+        }
+        "pane-border-format" => {
+            app.pane_border_format = value.to_string();
+        }
+        "status-unfocused-style" => {
+            app.status_unfocused_style = value.to_string();
         }
         "window-status-format" => {
             app.window_status_format = value.to_string();

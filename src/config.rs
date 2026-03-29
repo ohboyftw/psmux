@@ -658,6 +658,18 @@ pub fn parse_option_value(app: &mut AppState, rest: &str, _is_global: bool) {
         "pane-border-unfocused-style" => {
             app.pane_border_unfocused_style = value.to_string();
         }
+        "pane-border-status" => {
+            match value {
+                "top" | "bottom" | "off" => app.pane_border_status = value.to_string(),
+                _ => {} // ignore invalid values
+            }
+        }
+        "pane-border-format" => {
+            app.pane_border_format = value.to_string();
+        }
+        "status-unfocused-style" => {
+            app.status_unfocused_style = value.to_string();
+        }
         "window-status-format" => {
             app.window_status_format = value.to_string();
         }
@@ -735,9 +747,6 @@ pub fn parse_option_value(app: &mut AppState, rest: &str, _is_global: bool) {
             app.status_right_style = value.to_string();
         }
         "clock-mode-colour" | "clock-mode-style" => {
-            app.user_options.insert(key.to_string(), value.to_string());
-        }
-        "pane-border-format" | "pane-border-status" => {
             app.user_options.insert(key.to_string(), value.to_string());
         }
         "popup-style" | "popup-border-style" | "popup-border-lines" => {
