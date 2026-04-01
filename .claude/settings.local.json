@@ -6,7 +6,14 @@
       "mcp__plugin_serena_serena__get_symbols_overview",
       "mcp__plugin_serena_serena__list_dir",
       "Bash(find /d/home/psmux -name *.md -type f -exec grep -l \"upstream\\\\|master\\\\|dependency\\\\|sync\" {})",
-      "Bash(2)"
+      "Bash(2)",
+      "Bash(git fetch:*)",
+      "WebFetch(domain:registry.npmjs.org)",
+      "WebFetch(domain:raw.githubusercontent.com)",
+      "mcp__plugin_serena_serena__read_file",
+      "Bash(cargo check:*)",
+      "Bash(git log:*)",
+      "Bash(cargo test:*)"
     ]
   }
 }

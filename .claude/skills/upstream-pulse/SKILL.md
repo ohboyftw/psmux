@@ -126,6 +126,8 @@ Sources checked:
   Claude Code    v2.1.79 → v2.2.0   (1 release)
   Pi Agent       v0.8.2  → v0.8.2   (no changes)
 
+Upstream HEAD: a3bc4f2 feat: example commit message
+
 ┌─ TIER 1: MERGES (N items) ─────────────────────
 │ ● source: summary
 │   → action to take
