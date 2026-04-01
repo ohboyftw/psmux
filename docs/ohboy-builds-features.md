@@ -82,6 +82,30 @@ Mark any broken feature with `BROKEN` and the commit that caused it.
 - **Verify**: Start psmux, verify title bar visible on panes, split panes to check multi-pane titles, alt-tab to check status desaturation, `set -g pane-border-status off` disables all
 - **Risk from upstream**: Changes to `render_node` signature in `src/rendering.rs`, status bar rendering in `src/app.rs`, border drawing logic
 
+### 12. VT Terminal State Tracking (Focus Reporting + Cursor Style)
+- **Files**: `crates/vt100-psmux/src/screen.rs` (mode bits, accessors, state_diff), `crates/vt100-psmux/src/perform.rs` (DECSCUSR handler), `crates/vt100-psmux/src/term.rs` (FocusEvents struct)
+- **Server wiring**: `src/server/helpers.rs` (`send_focus_events()`), `src/server/mod.rs` (FocusPane/FocusPaneCmd handlers)
+- **Capabilities**:
+  - `screen.focus_reporting()` — tracks DECSET ?1004h/?1004l
+  - `screen.cursor_style()` — tracks DECSCUSR (CSI Ps SP q, values 0-6)
+  - `state_diff()` emits both when switching panes
+  - Focus events (\x1b[I / \x1b[O) injected on pane switch for neovim autoread
+  - Cursor shape (block/bar/underline) restored on pane switch for neovim mode indicators
+- **Test**: `cargo test --test test_feature_contracts` (33 tests), `cargo test --test test_boundary_contracts` (60 tests)
+- **Verify**: Run neovim in a pane, split, switch panes — cursor shape should follow, `:checktime` should trigger on focus
+- **Risk from upstream**: VT parser changes in `crates/vt100-psmux/`, DECSET handler additions
+
+### 13. Encoding-Aware Mouse Protocol
+- **Files**: `src/window_ops.rs` (`write_mouse_to_pty`)
+- **Capabilities**:
+  - Checks `mouse_protocol_encoding()` from pane's VT parser before emitting mouse events
+  - SGR format (`\x1b[<btn;col;rowM/m`) when child requested ?1006h
+  - X10 normal format (`\x1b[Mcbcxcy`) with coordinate clamping (max 222) and press-only semantics when child uses default encoding
+  - Fixes pre-existing X10 coordinate overflow bug (`col as u8` wrapping for values > 255)
+- **Test**: `cargo test --test test_boundary_contracts` (mouse encoding tests), `cargo test --test test_feature_contracts` (X10 clamping)
+- **Verify**: Run neovim (SGR) and a legacy app (X10) — mouse clicks/scrolling should work in both
+- **Risk from upstream**: Changes to mouse injection pipeline in `src/window_ops.rs`, `src/input.rs`
+
 ---
 
 ## Post-Merge Quick Smoke Test
