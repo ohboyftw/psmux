@@ -818,6 +818,7 @@ pub(crate) fn handle_connection(
                 let literal = args.contains(&"-l");
                 let paste_mode = args.contains(&"-p");
                 let has_x = args.contains(&"-X");
+                let hex_mode = args.contains(&"-H");
                 let wait_ready = args.contains(&"--wait-ready");
                 // Parse -N <count> for repeat
                 let mut repeat_count: usize = 1;
@@ -866,6 +867,23 @@ pub(crate) fn handle_connection(
                         .collect();
                     for _ in 0..repeat_count {
                         let _ = tx.send(CtrlReq::SendKeysX(cmd_parts.join(" ")));
+                    }
+                } else if hex_mode {
+                    // send-keys -H: treat arguments as hex byte values
+                    let hex_args: Vec<&str> = args
+                        .iter()
+                        .enumerate()
+                        .filter(|(i, a)| {
+                            !a.starts_with('-')
+                                && **a != "-t"
+                                && **a != "--wait-ready"
+                                && !(i > &0
+                                    && args.get(i - 1).is_some_and(|prev| *prev == "-N"))
+                        })
+                        .map(|(_, a)| *a)
+                        .collect();
+                    for _ in 0..repeat_count {
+                        let _ = tx.send(CtrlReq::SendKeysHex(hex_args.join(" ")));
                     }
                 } else {
                     let keys: Vec<&str> = args

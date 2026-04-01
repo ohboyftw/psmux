@@ -106,6 +106,7 @@ KEY BINDING COMMANDS:
     list-keys, lsk          List all key bindings
     send-keys, send         Send keys to a pane
         -l                  Send literally (no key parsing)
+        -H                  Send hex byte values (e.g. 1b 5b 41)
         -p                  Paste text (legacy compatibility)
         -t <target>         Target pane
 

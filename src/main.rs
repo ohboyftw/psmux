@@ -1435,14 +1435,18 @@ fn run_main() -> io::Result<()> {
         // send-keys - Send keys to a pane (critical for scripting)
         "send-keys" | "send" | "send-key" => {
             let mut literal = false;
+            let mut hex_mode = false;
             let mut wait_ready = false;
             let mut keys: Vec<String> = Vec::new();
-            // Getopt-style parsing: -t consumes next arg, -l/-R are boolean
+            // Getopt-style parsing: -t consumes next arg, -l/-R/-H are boolean
             let mut i = 1;
             while i < cmd_args.len() {
                 match cmd_args[i].as_str() {
                     "-l" => {
                         literal = true;
+                    }
+                    "-H" => {
+                        hex_mode = true;
                     }
                     "-R" => {
                         keys.push("__RESET__".to_string());
@@ -1463,6 +1467,9 @@ fn run_main() -> io::Result<()> {
                 i += 1;
             }
             let mut cmd = "send-keys".to_string();
+            if hex_mode {
+                cmd.push_str(" -H");
+            }
             if literal {
                 cmd.push_str(" -l");
             }
