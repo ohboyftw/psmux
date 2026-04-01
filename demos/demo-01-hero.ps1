@@ -23,17 +23,23 @@ VTest-Init -OutputDir "$PSScriptRoot/screenshots/hero" -WindowTitle "psmux-demo"
 
 # ── Step 1: Create a named session (attached) ──
 # Start psmux in a standalone conhost window (bypasses Windows Terminal
-# tab absorption). The "title" command gives it a fixed, findable name
-# for screenshot capture. conhost.exe guarantees a separate window.
+# tab absorption). Uses bash --norc to skip profile (fastfetch etc).
 $psmuxProc = Start-Process -FilePath "conhost.exe" `
     -ArgumentList "cmd.exe /c `"title psmux-demo && psmux new-session -s hero`"" `
     -PassThru -WindowStyle Normal
-Start-Sleep -Milliseconds 5000  # warm pane + PowerShell profile load
+Start-Sleep -Milliseconds 5000
+
+# Set default shell to Git Bash (not WSL) for new panes
+Demo-Run 'set -g default-shell "C:/Program Files/Git/usr/bin/bash.exe"' -WaitMs 500
 
 VTest-Assert -Label "session_created" `
     -Should "Terminal shows a psmux session with a green status bar at the bottom showing [hero]"
 
 # ── Step 2: Type welcome message ──
+# Prime the WSL pane manually (input_primed works for native ConPTY
+# but WSL has its own bridge layer that eats the first char)
+& psmux send-keys -t hero Space BSpace
+Start-Sleep -Milliseconds 200
 & psmux send-keys -t hero -l -- "echo Welcome to psmux"
 & psmux send-keys -t hero Enter
 Start-Sleep -Milliseconds 1500

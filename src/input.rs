@@ -2999,14 +2999,43 @@ pub fn send_paste_to_active(app: &mut AppState, text: &str) -> io::Result<()> {
 /// Inject a Space+Backspace primer on the first send-keys to a pane.
 /// This absorbs the ConPTY/PSReadLine race that eats the first character
 /// of programmatic input delivered shortly after the shell prompt appears.
+///
+/// The primer is readiness-gated: it waits until the pane has produced
+/// output (data_version > 0) AND the output has stabilized (no new output
+/// for 300ms). This ensures the shell prompt is actually displayed before
+/// the primer fires, which handles WSL bridges, slow shells, and any
+/// PTY layer that adds startup latency.
 fn prime_pane_input(pane: &mut Pane) {
-    if !pane.input_primed {
-        pane.input_primed = true;
-        let _ = pane.writer.write_all(b" \x08"); // Space + Backspace
-        let _ = pane.writer.flush();
-        // Brief pause for ConPTY to process the primer
+    if pane.input_primed {
+        return;
+    }
+    pane.input_primed = true;
+
+    // Wait for pane readiness: output produced AND stabilized
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    loop {
+        let dv = pane.data_version.load(std::sync::atomic::Ordering::Relaxed);
+        let lot = pane.last_output_time.load(std::sync::atomic::Ordering::Relaxed);
+        if dv > 0 && lot > 0 {
+            let now_ms = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_millis() as u64;
+            // Output stabilized for 300ms — shell prompt is likely displayed
+            if now_ms.saturating_sub(lot) >= 300 {
+                break;
+            }
+        }
+        if std::time::Instant::now() >= deadline {
+            break; // Don't block forever
+        }
         std::thread::sleep(std::time::Duration::from_millis(50));
     }
+
+    let _ = pane.writer.write_all(b" \x08"); // Space + Backspace
+    let _ = pane.writer.flush();
+    // Brief pause for the primer to be processed
+    std::thread::sleep(std::time::Duration::from_millis(100));
 }
 
 pub fn send_text_to_active(app: &mut AppState, text: &str) -> io::Result<()> {
@@ -3104,12 +3133,7 @@ pub fn send_text_to_active(app: &mut AppState, text: &str) -> io::Result<()> {
         fn write_all_panes(node: &mut Node, text: &[u8]) {
             match node {
                 Node::Leaf(p) => {
-                    if !p.input_primed {
-                        p.input_primed = true;
-                        let _ = p.writer.write_all(b" \x08");
-                        let _ = p.writer.flush();
-                        std::thread::sleep(std::time::Duration::from_millis(50));
-                    }
+                    prime_pane_input(p);
                     let _ = p.writer.write_all(text);
                     let _ = p.writer.flush();
                 }
