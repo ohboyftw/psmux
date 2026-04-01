@@ -89,11 +89,20 @@ function Demo-Wait {
 }
 
 function Demo-SaveCaptions {
-    param([string]$Path)
+    # Generate SRT with frame-aligned timestamps (2s per frame)
+    # so captions sync with the screenshot-stitched GIF/MP4.
+    param(
+        [string]$Path,
+        [double]$FrameDuration = 2.0
+    )
     $srt = ""
+    $frameIdx = 0
     foreach ($c in $script:CaptionLog) {
-        $startTs = [TimeSpan]::FromSeconds($c.Start).ToString("hh\:mm\:ss\,fff")
-        $endTs   = [TimeSpan]::FromSeconds($c.End).ToString("hh\:mm\:ss\,fff")
+        $start = $frameIdx * $FrameDuration
+        $end = $start + $FrameDuration
+        $frameIdx++
+        $startTs = [TimeSpan]::FromSeconds($start).ToString("hh\:mm\:ss\,fff")
+        $endTs   = [TimeSpan]::FromSeconds($end).ToString("hh\:mm\:ss\,fff")
         $srt += "$($c.Index)`r`n"
         $srt += "$startTs --> $endTs`r`n"
         $srt += "$($c.Text)`r`n"

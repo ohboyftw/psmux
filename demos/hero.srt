@@ -1,53 +1,43 @@
 1
-00:00:09,128 --> 00:00:12,128
-psmux: tmux-compatible multiplexer for Windows
+00:00:00,000 --> 00:00:02,000
+psmux new-session -s hero
 
 2
-00:00:11,696 --> 00:00:14,696
-Ctrl+b % — vertical split
+00:00:02,000 --> 00:00:04,000
+echo Welcome to psmux
 
 3
-00:00:13,987 --> 00:00:16,987
-ripgrep in the right pane
+00:00:04,000 --> 00:00:06,000
+Ctrl+b %  —  vertical split
 
 4
-00:00:16,508 --> 00:00:19,508
-Ctrl+b " — horizontal split
+00:00:06,000 --> 00:00:08,000
+ripgrep in the right pane
 
 5
-00:00:18,776 --> 00:00:21,776
-fd in the bottom-right pane
+00:00:08,000 --> 00:00:10,000
+Ctrl+b "  —  horizontal split
 
 6
-00:00:19,637 --> 00:00:22,637
-Ctrl+b Left — navigate panes
+00:00:10,000 --> 00:00:12,000
+Three panes with rg, bat, fd
 
 7
-00:00:20,916 --> 00:00:23,916
-bat in the left pane
+00:00:12,000 --> 00:00:14,000
+Ctrl+b z  —  zoom pane (fullscreen)
 
 8
-00:00:23,961 --> 00:00:26,961
-Ctrl+b z — zoom pane (fullscreen)
+00:00:14,000 --> 00:00:16,000
+Ctrl+b z  —  unzoom
 
 9
-00:00:26,468 --> 00:00:29,468
-Ctrl+b z — unzoom
+00:00:16,000 --> 00:00:18,000
+Ctrl+b ,  —  rename window to 'dev'
 
 10
-00:00:28,663 --> 00:00:31,663
-Ctrl+b , — rename window to 'dev'
+00:00:18,000 --> 00:00:20,000
+Ctrl+b 0  —  switch to window 0
 
 11
-00:00:31,186 --> 00:00:34,186
-Ctrl+b c — new window
-
-12
-00:00:33,815 --> 00:00:36,815
-Ctrl+b 0 — switch to window 0
-
-13
-00:00:36,884 --> 00:00:39,884
-92 tmux commands. Native Windows. No WSL required.
-
-
+00:00:20,000 --> 00:00:22,000
+92 tmux commands. Native Windows. No WSL.
