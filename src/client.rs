@@ -623,6 +623,9 @@ pub fn run_remote(
         /// Whether a pane is currently zoomed (borders should be hidden)
         #[serde(default)]
         zoomed: bool,
+        /// Whether synchronize-panes is active (input broadcast to all panes)
+        #[serde(default)]
+        sync_input: bool,
         // ── Server-side overlay state ──
         /// Popup overlay active
         #[serde(default)]
@@ -3600,9 +3603,12 @@ pub fn run_remote(
             // ── Build three separate span groups: left, tabs, right ──
             use unicode_width::UnicodeWidthStr;
             // Left portion: custom status_left or default [session] prefix
-            let left_prefix = match custom_status_left {
-                Some(ref sl) => sl.clone(),
-                None => format!("[{}] ", name),
+            let left_prefix = {
+                let base = match custom_status_left {
+                    Some(ref sl) => sl.clone(),
+                    None => format!("[{}] ", name),
+                };
+                if state.sync_input { format!("[SYNC] {}", base) } else { base }
             };
             if client_log_enabled() {
                 client_log("status", &format!("parsing left_prefix ({} chars): [{}]",

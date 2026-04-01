@@ -997,6 +997,7 @@ pub fn run_server(
                             | CtrlReq::SendText(_)
                             | CtrlReq::SendKey(_)
                             | CtrlReq::SendPaste(_)
+                            | CtrlReq::SendKeysHex(_)
                     );
                     let is_temp_focus = matches!(
                         &req,
@@ -1857,14 +1858,14 @@ pub fn run_server(
                             };
                             let cursor_style_code = crate::rendering::configured_cursor_code();
                             let _ = std::fmt::Write::write_fmt(&mut combined_buf, format_args!(
-                        "{{\"layout\":{},\"windows\":{},\"prefix\":\"{}\",\"prefix2\":\"{}\",\"tree\":{},\"base_index\":{},\"prediction_dimming\":{},\"status_style\":\"{}\",\"status_left\":\"{}\",\"status_right\":\"{}\",\"pane_border_style\":\"{}\",\"pane_active_border_style\":\"{}\",\"wsf\":\"{}\",\"wscf\":\"{}\",\"wss\":\"{}\",\"ws_style\":\"{}\",\"wsc_style\":\"{}\",\"clock_mode\":{},\"bindings\":{},\"status_left_length\":{},\"status_right_length\":{},\"status_lines\":{},\"status_format\":{},\"mode_style\":\"{}\",\"status_position\":\"{}\",\"status_justify\":\"{}\",\"cursor_style_code\":{},\"status_visible\":{},\"repeat_time\":{},\"zoomed\":{},\"pane_border_status\":\"{}\",\"pane_border_format\":\"{}\",\"status_unfocused_style\":\"{}\"}}",
+                        "{{\"layout\":{},\"windows\":{},\"prefix\":\"{}\",\"prefix2\":\"{}\",\"tree\":{},\"base_index\":{},\"prediction_dimming\":{},\"status_style\":\"{}\",\"status_left\":\"{}\",\"status_right\":\"{}\",\"pane_border_style\":\"{}\",\"pane_active_border_style\":\"{}\",\"wsf\":\"{}\",\"wscf\":\"{}\",\"wss\":\"{}\",\"ws_style\":\"{}\",\"wsc_style\":\"{}\",\"clock_mode\":{},\"bindings\":{},\"status_left_length\":{},\"status_right_length\":{},\"status_lines\":{},\"status_format\":{},\"mode_style\":\"{}\",\"status_position\":\"{}\",\"status_justify\":\"{}\",\"cursor_style_code\":{},\"status_visible\":{},\"repeat_time\":{},\"zoomed\":{},\"pane_border_status\":\"{}\",\"pane_border_format\":\"{}\",\"status_unfocused_style\":\"{}\",\"sync_input\":{}}}",
                         layout_json, cached_windows_json, cached_prefix_str, cached_prefix2_str, cached_tree_json, cached_base_index, cached_pred_dim, ss_escaped, sl_expanded, sr_expanded, pbs_escaped, pabs_escaped, wsf_escaped, wscf_escaped, wss_escaped, ws_style_escaped, wsc_style_escaped,
                         matches!(app.mode, Mode::ClockMode), cached_bindings_json,
                         app.status_left_length, app.status_right_length, app.status_lines, status_format_json,
                         mode_style_escaped, status_position_escaped, status_justify_escaped,
                         cursor_style_code, app.status_visible, app.repeat_time_ms,
                         app.windows.get(app.active_idx).is_some_and(|w| w.zoom_saved.is_some()),
-                        pbs_status_escaped, pbf_escaped, sus_escaped,
+                        pbs_status_escaped, pbf_escaped, sus_escaped, app.sync_input,
                     ));
                             // Inject overlay state (popup, menu, confirm, display_panes)
                             {
@@ -5218,6 +5219,20 @@ pub fn run_server(
                             };
                             let _ = resp.send(cwd);
                         }
+                        CtrlReq::SendKeysHex(hex_str) => {
+                            // send-keys -H: parse hex bytes and write raw to active pane PTY
+                            let bytes: Vec<u8> = hex_str
+                                .split_whitespace()
+                                .filter_map(|tok| u8::from_str_radix(tok, 16).ok())
+                                .collect();
+                            if !bytes.is_empty() {
+                                let win = &mut app.windows[app.active_idx];
+                                if let Some(p) = active_pane_mut(&mut win.root, &win.active_path) {
+                                    let _ = p.writer.write_all(&bytes);
+                                    let _ = p.writer.flush();
+                                }
+                            }
+                        }
                         CtrlReq::Exec {
                             command,
                             shell,
@@ -5443,14 +5458,14 @@ pub fn run_server(
             };
             let cursor_style_code = crate::rendering::configured_cursor_code();
             let _ = std::fmt::Write::write_fmt(&mut combined_buf, format_args!(
-                "{{\"layout\":{},\"windows\":{},\"prefix\":\"{}\",\"prefix2\":\"{}\",\"tree\":{},\"base_index\":{},\"prediction_dimming\":{},\"status_style\":\"{}\",\"status_left\":\"{}\",\"status_right\":\"{}\",\"pane_border_style\":\"{}\",\"pane_active_border_style\":\"{}\",\"wsf\":\"{}\",\"wscf\":\"{}\",\"wss\":\"{}\",\"ws_style\":\"{}\",\"wsc_style\":\"{}\",\"clock_mode\":{},\"bindings\":{},\"status_left_length\":{},\"status_right_length\":{},\"status_lines\":{},\"status_format\":{},\"mode_style\":\"{}\",\"status_position\":\"{}\",\"status_justify\":\"{}\",\"cursor_style_code\":{},\"status_visible\":{},\"repeat_time\":{},\"zoomed\":{},\"pane_border_status\":\"{}\",\"pane_border_format\":\"{}\",\"status_unfocused_style\":\"{}\"}}",
+                "{{\"layout\":{},\"windows\":{},\"prefix\":\"{}\",\"prefix2\":\"{}\",\"tree\":{},\"base_index\":{},\"prediction_dimming\":{},\"status_style\":\"{}\",\"status_left\":\"{}\",\"status_right\":\"{}\",\"pane_border_style\":\"{}\",\"pane_active_border_style\":\"{}\",\"wsf\":\"{}\",\"wscf\":\"{}\",\"wss\":\"{}\",\"ws_style\":\"{}\",\"wsc_style\":\"{}\",\"clock_mode\":{},\"bindings\":{},\"status_left_length\":{},\"status_right_length\":{},\"status_lines\":{},\"status_format\":{},\"mode_style\":\"{}\",\"status_position\":\"{}\",\"status_justify\":\"{}\",\"cursor_style_code\":{},\"status_visible\":{},\"repeat_time\":{},\"zoomed\":{},\"pane_border_status\":\"{}\",\"pane_border_format\":\"{}\",\"status_unfocused_style\":\"{}\",\"sync_input\":{}}}",
                 layout_json, cached_windows_json, cached_prefix_str, cached_prefix2_str, cached_tree_json, cached_base_index, cached_pred_dim, ss_escaped, sl_expanded, sr_expanded, pbs_escaped, pabs_escaped, wsf_escaped, wscf_escaped, wss_escaped, ws_style_escaped, wsc_style_escaped,
                 matches!(app.mode, Mode::ClockMode), cached_bindings_json,
                 app.status_left_length, app.status_right_length, app.status_lines, status_format_json,
                 mode_style_escaped, status_position_escaped, status_justify_escaped,
                 cursor_style_code, app.status_visible, app.repeat_time_ms,
                 app.windows.get(app.active_idx).is_some_and(|w| w.zoom_saved.is_some()),
-                pbs_status_escaped, pbf_escaped, sus_escaped,
+                pbs_status_escaped, pbf_escaped, sus_escaped, app.sync_input,
             ));
             // Inject overlay state (popup, menu, confirm, display_panes)
             {
