@@ -125,6 +125,7 @@ pub fn create_popup_pane(
         pane_style: None,
         metadata: std::collections::HashMap::new(),
         passthrough_queue: PassthroughQueue::new(64),
+        input_primed: false,
         spawn_cwd: start_dir.map(std::path::PathBuf::from),
         shell_name: None,
         spawn_command: Some(command.to_string()),

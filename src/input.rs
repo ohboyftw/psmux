@@ -2996,6 +2996,19 @@ pub fn send_paste_to_active(app: &mut AppState, text: &str) -> io::Result<()> {
     Ok(())
 }
 
+/// Inject a Space+Backspace primer on the first send-keys to a pane.
+/// This absorbs the ConPTY/PSReadLine race that eats the first character
+/// of programmatic input delivered shortly after the shell prompt appears.
+fn prime_pane_input(pane: &mut Pane) {
+    if !pane.input_primed {
+        pane.input_primed = true;
+        let _ = pane.writer.write_all(b" \x08"); // Space + Backspace
+        let _ = pane.writer.flush();
+        // Brief pause for ConPTY to process the primer
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+}
+
 pub fn send_text_to_active(app: &mut AppState, text: &str) -> io::Result<()> {
     // In clock mode, any input exits back to passthrough
     if matches!(app.mode, Mode::ClockMode) {
@@ -3091,6 +3104,12 @@ pub fn send_text_to_active(app: &mut AppState, text: &str) -> io::Result<()> {
         fn write_all_panes(node: &mut Node, text: &[u8]) {
             match node {
                 Node::Leaf(p) => {
+                    if !p.input_primed {
+                        p.input_primed = true;
+                        let _ = p.writer.write_all(b" \x08");
+                        let _ = p.writer.flush();
+                        std::thread::sleep(std::time::Duration::from_millis(50));
+                    }
                     let _ = p.writer.write_all(text);
                     let _ = p.writer.flush();
                 }
@@ -3105,6 +3124,7 @@ pub fn send_text_to_active(app: &mut AppState, text: &str) -> io::Result<()> {
     } else {
         let win = &mut app.windows[app.active_idx];
         if let Some(p) = active_pane_mut(&mut win.root, &win.active_path) {
+            prime_pane_input(p);
             let _ = p.writer.write_all(text.as_bytes());
             let _ = p.writer.flush();
         }

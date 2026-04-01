@@ -145,6 +145,7 @@ pub fn create_window(
             pane_style: None,
             metadata: std::collections::HashMap::new(),
             passthrough_queue: PassthroughQueue::new(64),
+            input_primed: false,
             spawn_cwd: std::env::current_dir().ok(),
             shell_name: Some(warm_shell_name.clone()),
             spawn_command: command.map(|s| s.to_string()),
@@ -305,6 +306,7 @@ pub fn create_window(
         pane_style: None,
         metadata: std::collections::HashMap::new(),
         passthrough_queue: PassthroughQueue::new(64),
+        input_primed: false,
         spawn_cwd: start_dir
             .map(std::path::PathBuf::from)
             .or_else(|| std::env::current_dir().ok()),
@@ -538,6 +540,7 @@ pub fn create_window_raw(
         pane_style: None,
         metadata: std::collections::HashMap::new(),
         passthrough_queue: PassthroughQueue::new(64),
+        input_primed: false,
         spawn_cwd: std::env::current_dir().ok(),
         shell_name: Some(raw_win_name.clone()),
         spawn_command: Some(raw_args.join(" ")),
@@ -727,6 +730,7 @@ pub fn split_active_with_command(
             pane_style: None,
             metadata: std::collections::HashMap::new(),
             passthrough_queue: PassthroughQueue::new(64),
+            input_primed: false,
             spawn_cwd: std::env::current_dir().ok(),
             shell_name: Some(configured_shell_name),
             spawn_command: command.map(|s| s.to_string()),
@@ -865,6 +869,7 @@ pub fn split_active_with_command(
         pane_style: None,
         metadata: std::collections::HashMap::new(),
         passthrough_queue: PassthroughQueue::new(64),
+        input_primed: false,
         spawn_cwd: start_dir
             .map(std::path::PathBuf::from)
             .or_else(|| std::env::current_dir().ok()),
