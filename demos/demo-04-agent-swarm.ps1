@@ -1,117 +1,65 @@
 # Demo 04: Agent Swarm — AI Multi-Agent Orchestration
-# Shows: JSON layout, multi-pane spawn, capture-pane, wait-pane,
-#        synchronize-panes, agent metadata
-#
-# Short (README): 15s — layout spawn + capture-pane
-# Full (social): 40s — full agent workflow with monitoring
+# Shows: multi-pane layout, send-keys, capture-pane, synchronize-panes, JSON output
 
-$delay = 50
+. "$PSScriptRoot/lib-demo.ps1"
 
-function Type($text) { foreach ($c in $text.ToCharArray()) { [Console]::Write($c); Start-Sleep -Milliseconds $delay } }
-function Enter { [Console]::Write("`r`n"); Start-Sleep -Milliseconds 300 }
-function Wait($ms) { Start-Sleep -Milliseconds $ms }
-function Pause { Start-Sleep -Milliseconds 1500 }
+Demo-Init -SessionName "swarm"
 
-# ── Scene 1: Create agent workspace ──
-Wait 500
-Type "psmux new-session -s swarm"
-Enter
-Wait 2000
+psmux new-session -d -s swarm
+Start-Sleep -Milliseconds 1500
 
-# ── Scene 2: Create a multi-pane layout for agents ──
-Type "# Create a 3-pane agent workspace"
-Enter
-Wait 500
+# ── Build 3-pane agent workspace ──
+Demo-Type "echo '=== Coordinator ==='" -Caption "Create agent workspace — coordinator pane"
 
-# Split for agent 1
-[Console]::Write("`u{0002}")
-Wait 200
-[Console]::Write("%")
-Wait 1000
+Demo-Prefix "%" -Caption "Split for research agent"
+Demo-Type "echo '=== Research Agent ==='" -WaitMs 500
 
-# Split bottom for agent 2
-[Console]::Write("`u{0002}")
-Wait 200
-[Console]::Write('"')
-Wait 1000
+Demo-Prefix '"' -Caption "Split for code agent"
+Demo-Type "echo '=== Code Agent ==='" -WaitMs 500
 
-# ── Scene 3: Label the panes with agent roles ──
-# Go to first pane
-[Console]::Write("`u{0002}")
-Wait 200
-[Console]::Write("0")
-Wait 500
-Type "echo '=== Coordinator Agent ==='"
-Enter
-Wait 500
+# ── Focus coordinator ──
+psmux send-keys -t swarm:0.0 "" # ensure pane 0 is selectable
+Demo-Prefix "0" -Caption "Focus coordinator pane"
+Demo-Wait 500
 
-# Second pane
-[Console]::Write("`u{0002}")
-Wait 200
-[Console]::Write("1")
-Wait 500
-Type "echo '=== Research Agent ==='"
-Enter
-Wait 500
+# ── Dispatch commands to agents via send-keys ──
+Demo-Type "echo 'Dispatching tasks to agents...'" -Caption "Orchestrate agents via CLI" -WaitMs 800
 
-# Third pane
-[Console]::Write("`u{0002}")
-Wait 200
-[Console]::Write("2")
-Wait 500
-Type "echo '=== Code Agent ==='"
-Enter
-Wait 800
+psmux send-keys -t swarm:0.1 "rg TODO --type rust --count" Enter
+Demo-Caption "send-keys -t %1: research agent searches TODOs"
+Demo-Wait 2000
 
-# ── Scene 4: Simulate agent work with send-keys ──
-Type "# Orchestrate via CLI — send commands to any pane"
-Enter
-Wait 500
+psmux send-keys -t swarm:0.2 "fd test --extension rs" Enter
+Demo-Caption "send-keys -t %2: code agent finds test files"
+Demo-Wait 2000
 
-# Back to coordinator
-[Console]::Write("`u{0002}")
-Wait 200
-[Console]::Write("0")
-Wait 500
+# ── Capture output ──
+Demo-Type "psmux capture-pane -t %1 -p | tail -5" `
+    -Caption "capture-pane -t %1 — read agent output programmatically" -WaitMs 2500
 
-Type "psmux send-keys -t %1 'rg TODO --type rust --count' Enter"
-Enter
-Wait 2000
+# ── Synchronize panes ──
+Demo-Type "psmux set -g synchronize-panes on" `
+    -Caption "synchronize-panes on — broadcast input to ALL panes" -WaitMs 1000
 
-Type "psmux send-keys -t %2 'fd test --extension rs' Enter"
-Enter
-Wait 2000
+Demo-Type "echo 'All agents see this command'" `
+    -Caption "[SYNC] indicator appears — every pane receives input" -WaitMs 2000
 
-# ── Scene 5: Capture output from agent panes ──
-Type "# Capture agent output programmatically"
-Enter
-Wait 500
-Type "psmux capture-pane -t %1 -p | tail -5"
-Enter
-Wait 2000
+Demo-Type "psmux set -g synchronize-panes off" `
+    -Caption "synchronize-panes off — back to single-pane input" -WaitMs 1000
 
-# ── Scene 6: Synchronize panes ──
-Type "psmux set -g synchronize-panes on"
-Enter
-Wait 800
-Type "echo 'All panes receive this!'"
-Enter
-Wait 2000
-Type "psmux set -g synchronize-panes off"
-Enter
-Wait 1500
+# ── JSON output for monitoring ──
+Demo-Type "psmux list-panes --json" `
+    -Caption "list-panes --json — structured output for agent monitoring" -WaitMs 2500
 
-# ── Scene 7: Show list-panes with metadata ──
-Type "psmux list-panes -F '#{pane_index}: #{pane_title} [#{pane_width}x#{pane_height}]'"
-Enter
-Wait 2000
+# ── show wait-pane ──
+Demo-Type "echo '# wait-pane -S ready: block until agent signals readiness'" `
+    -Caption "wait-pane: server-side readiness polling for agent spawn"
 
-# ── Scene 8: JSON output for agent monitoring ──
-Type "psmux list-panes --json"
-Enter
-Wait 2500
+Demo-Type "echo '# CustomPaneBackend: JSON-RPC for Claude Code TeammateTool'" `
+    -Caption "Built-in Claude Code agent teams backend"
 
-# ── Fin ──
-Type "# psmux: the tmux backend for Claude Code agent teams on Windows"
-Enter
-Wait 3000
+Demo-SaveCaptions "$PSScriptRoot/agent-swarm.srt"
+
+Write-Host "Attaching..." -ForegroundColor Cyan
+Demo-Wait 500
+Demo-Attach

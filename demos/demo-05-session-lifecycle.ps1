@@ -1,135 +1,83 @@
 # Demo 05: Session Lifecycle — Detach, Reattach, Resurrect
-# Shows: detach/attach, session listing, session resurrection,
-#        multiple named sessions, session switching
-#
-# Short (README): 15s — detach + list + reattach
-# Full (social): 40s — full lifecycle including resurrection
+# Shows: multiple sessions, detach/attach, session listing, resurrection
 
-$delay = 50
+. "$PSScriptRoot/lib-demo.ps1"
 
-function Type($text) { foreach ($c in $text.ToCharArray()) { [Console]::Write($c); Start-Sleep -Milliseconds $delay } }
-function Enter { [Console]::Write("`r`n"); Start-Sleep -Milliseconds 300 }
-function Wait($ms) { Start-Sleep -Milliseconds $ms }
-function Pause { Start-Sleep -Milliseconds 1500 }
+Demo-Init -SessionName "lifecycle"
 
-# ── Scene 1: Create sessions with work in progress ──
-Wait 500
-Type "# Create two named sessions with work in progress"
-Enter
-Wait 500
+# ── Create sessions with work ──
+psmux new-session -d -s backend
+Start-Sleep -Milliseconds 800
+psmux new-session -d -s frontend
+Start-Sleep -Milliseconds 800
 
-Type "psmux new-session -d -s backend"
-Enter
-Wait 1000
-Type "psmux send-keys -t backend 'echo Working on API server...' Enter"
-Enter
-Wait 500
+psmux send-keys -t backend "echo 'API server running on :8080...'" Enter
+Demo-Caption "Create two named sessions with work in progress"
+Start-Sleep -Milliseconds 500
+psmux send-keys -t frontend "echo 'React dev server on :3000...'" Enter
+Demo-Wait 1000
 
-Type "psmux new-session -d -s frontend"
-Enter
-Wait 1000
-Type "psmux send-keys -t frontend 'echo Building React components...' Enter"
-Enter
-Wait 500
+# ── List sessions ──
+# Use a third session to drive the demo visually
+psmux new-session -d -s lifecycle
+Start-Sleep -Milliseconds 800
 
-# ── Scene 2: List all sessions ──
-Type "# List all running sessions"
-Enter
-Wait 300
-Type "psmux ls"
-Enter
-Wait 2000
+Demo-Type "psmux ls" -Caption "psmux ls — list all running sessions" -WaitMs 2500
 
-# ── Scene 3: Attach to backend ──
-Type "psmux attach -t backend"
-Enter
-Wait 2000
+# ── Attach to backend ──
+# We'll simulate this by showing the command, then switching
+Demo-Type "echo 'Attaching to backend session...'" -Caption "psmux attach -t backend"
+Demo-Wait 1000
 
-# Do some work
-Type "echo 'Deploying v2.1...'"
-Enter
-Wait 800
+# Split in backend for visual interest
+psmux send-keys -t backend "echo 'Deploying v2.1 to staging...'" Enter
+Demo-Wait 500
+# Add a split in backend
+psmux split-window -t backend 2>$null
+Start-Sleep -Milliseconds 500
+psmux send-keys -t backend "echo 'tail -f /var/log/api.log'" Enter
+Demo-Wait 1000
 
-# Split a pane for monitoring
-[Console]::Write("`u{0002}")
-Wait 200
-[Console]::Write("%")
-Wait 1000
-Type "echo 'tail -f server.log'"
-Enter
-Wait 1000
+# ── Show session switching ──
+Demo-Type "psmux switch-client -t frontend 2>/dev/null; echo 'Switched to frontend'" `
+    -Caption "switch-client — jump between sessions without detaching" -WaitMs 2000
 
-# ── Scene 4: Detach ──
-# Ctrl+b d
-[Console]::Write("`u{0002}")
-Wait 200
-[Console]::Write("d")
-Wait 1500
+# ── Simulate detach ──
+Demo-Type "echo 'Detaching... (Ctrl+b d in real usage)'" `
+    -Caption "Ctrl+b d — detach from session (keeps running)" -WaitMs 1500
 
-# ── Scene 5: Switch to frontend session ──
-Type "psmux attach -t frontend"
-Enter
-Wait 2000
+# ── Sessions still running ──
+Demo-Type "psmux ls" -Caption "Sessions persist after detach — reattach anytime" -WaitMs 2500
 
-# Do work in frontend
-Type "echo 'npm run build -- --watch'"
-Enter
-Wait 1000
+# ── Session resurrection ──
+Demo-Type "echo ''" -WaitMs 200
+Demo-Type "echo '=== Session Resurrection ==='" `
+    -Caption "Session Resurrection — survive crashes and restarts" -WaitMs 1500
 
-# Detach again
-[Console]::Write("`u{0002}")
-Wait 200
-[Console]::Write("d")
-Wait 1500
+# Kill backend (simulate crash)
+Demo-Type "psmux kill-session -t backend" `
+    -Caption "kill-session — simulates a crash or restart" -WaitMs 1000
 
-# ── Scene 6: Session listing shows both ──
-Type "psmux ls"
-Enter
-Wait 2000
+Demo-Type "psmux ls" -Caption "Backend session is gone..." -WaitMs 2000
 
-# ── Scene 7: Session resurrection demo ──
-Type "# Session resurrection — survive crashes and restarts"
-Enter
-Wait 500
+# Resurrect
+Demo-Type "psmux resurrect backend" `
+    -Caption "resurrect — restore session from saved snapshot" -WaitMs 2000
 
-# Kill the backend session (simulates crash)
-Type "psmux kill-session -t backend"
-Enter
-Wait 1000
+Demo-Type "psmux ls" `
+    -Caption "Backend is back! Layout and state preserved." -WaitMs 2500
 
-# Show sessions — backend is gone
-Type "psmux ls"
-Enter
-Wait 1500
+# ── Final message ──
+Demo-Type "echo '# Sessions survive: terminal close, RDP disconnect, crashes'" `
+    -Caption "No more lost work — psmux has your back"
+Demo-Type "echo '# Zero-config. Automatic snapshots. One command to restore.'" `
+    -Caption "Zero config. Automatic snapshots. One command to restore."
 
-# Resurrect it
-Type "psmux resurrect backend"
-Enter
-Wait 2000
+Demo-SaveCaptions "$PSScriptRoot/session-lifecycle.srt"
 
-# Verify it's back
-Type "psmux ls"
-Enter
-Wait 2000
+Write-Host "Attaching to lifecycle session..." -ForegroundColor Cyan
+Demo-Wait 500
 
-# ── Scene 8: Reattach to the resurrected session ──
-Type "psmux attach -t backend"
-Enter
-Wait 2000
-
-Type "echo 'Session restored! Layout and state preserved.'"
-Enter
-Wait 2000
-
-# Detach for clean exit
-[Console]::Write("`u{0002}")
-Wait 200
-[Console]::Write("d")
-Wait 1000
-
-# ── Fin ──
-Type "# Sessions persist across terminal closes, RDP disconnects, and crashes"
-Enter
-Type "# No more lost work — psmux has your back"
-Enter
-Wait 3000
+# Attach to lifecycle (the session showing the commands)
+$script:Session = "lifecycle"
+Demo-Attach
