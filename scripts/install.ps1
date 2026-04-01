@@ -1,16 +1,108 @@
-# psmux installation script for Windows
-# Run as: irm https://raw.githubusercontent.com/psmux/psmux/master/scripts/install.ps1 | iex
+# psmux Power Pack installer for Windows
+# Run as: irm https://raw.githubusercontent.com/ohboyftw/psmux/ohboy-builds/scripts/install.ps1 | iex
 # Or locally: .\scripts\install.ps1
+#
+# Installs psmux + optional companion tools:
+#   ripgrep, fd, bat, zoxide, fzf, starship, fastfetch
+#
+# Flags:
+#   -Full         Install psmux + all companion tools
+#   -ToolsOnly    Install companion tools only (skip psmux binary)
+#   -NoTools      Install psmux only (skip companion tools)
+#   -Force        Overwrite existing installations
 
 param(
     [string]$InstallDir = "$env:LOCALAPPDATA\psmux",
+    [switch]$Full,
+    [switch]$ToolsOnly,
+    [switch]$NoTools,
     [switch]$Force
 )
 
 $ErrorActionPreference = 'Stop'
 
-Write-Host "psmux installer" -ForegroundColor Cyan
-Write-Host "===============" -ForegroundColor Cyan
+Write-Host ""
+Write-Host "  psmux Power Pack" -ForegroundColor Cyan
+Write-Host "  tmux for Windows, built for AI agents" -ForegroundColor DarkGray
+Write-Host ""
+
+# ── Companion tools (winget-based) ──────────────────────────────────
+
+$CompanionTools = @(
+    @{ Name = "ripgrep";   WingetId = "BurntSushi.ripgrep.MSVC"; Cmd = "rg";        Desc = "Fast search (grep replacement)" }
+    @{ Name = "fd";        WingetId = "sharkdp.fd";              Cmd = "fd";        Desc = "Fast find (find replacement)" }
+    @{ Name = "bat";       WingetId = "sharkdp.bat";             Cmd = "bat";       Desc = "Syntax-highlighted cat" }
+    @{ Name = "zoxide";    WingetId = "ajeetdsouza.zoxide";      Cmd = "zoxide";    Desc = "Smart cd (frecency)" }
+    @{ Name = "fzf";       WingetId = "junegunn.fzf";            Cmd = "fzf";       Desc = "Fuzzy finder" }
+    @{ Name = "starship";  WingetId = "Starship.Starship";       Cmd = "starship";  Desc = "Cross-shell prompt" }
+    @{ Name = "fastfetch"; WingetId = "Fastfetch-cli.Fastfetch"; Cmd = "fastfetch"; Desc = "System info splash" }
+)
+
+function Install-CompanionTools {
+    $hasWinget = Get-Command winget -ErrorAction SilentlyContinue
+    if (-not $hasWinget) {
+        Write-Host "  winget not found -- skipping companion tools" -ForegroundColor Yellow
+        Write-Host "  Install winget from aka.ms/winget then re-run with -Full" -ForegroundColor DarkGray
+        return
+    }
+
+    Write-Host "Installing companion tools via winget..." -ForegroundColor Cyan
+    $installed = 0
+    $skipped = 0
+    foreach ($tool in $CompanionTools) {
+        $exists = Get-Command $tool.Cmd -ErrorAction SilentlyContinue
+        if ($exists -and -not $Force) {
+            Write-Host "  $($tool.Name) -- already installed" -ForegroundColor DarkGray
+            $skipped++
+            continue
+        }
+        Write-Host "  $($tool.Name) -- $($tool.Desc)" -ForegroundColor Green
+        try {
+            winget install --id $tool.WingetId --accept-source-agreements --accept-package-agreements --silent 2>$null | Out-Null
+            $installed++
+        } catch {
+            Write-Host "    failed: $_" -ForegroundColor Yellow
+        }
+    }
+    Write-Host "  Done: $installed installed, $skipped already present" -ForegroundColor Cyan
+    Write-Host ""
+}
+
+function Install-ShellIntegration {
+    # ── zoxide init ──
+    if (Get-Command zoxide -ErrorAction SilentlyContinue) {
+        $profilePath = $PROFILE.CurrentUserAllHosts
+        if ($profilePath -and (Test-Path $profilePath)) {
+            $profileContent = Get-Content $profilePath -Raw -ErrorAction SilentlyContinue
+            if ($profileContent -notmatch 'Invoke-Expression.*zoxide init') {
+                Write-Host "  Adding zoxide init to PowerShell profile..." -ForegroundColor Green
+                Add-Content -Path $profilePath -Value "`n# zoxide smart-cd (added by psmux installer)`nInvoke-Expression (& { (zoxide init powershell | Out-String) })"
+            } else {
+                Write-Host "  zoxide already in PowerShell profile" -ForegroundColor DarkGray
+            }
+        }
+    }
+
+    # ── starship init ──
+    if (Get-Command starship -ErrorAction SilentlyContinue) {
+        $profilePath = $PROFILE.CurrentUserAllHosts
+        if ($profilePath -and (Test-Path $profilePath)) {
+            $profileContent = Get-Content $profilePath -Raw -ErrorAction SilentlyContinue
+            if ($profileContent -notmatch 'Invoke-Expression.*starship init') {
+                Write-Host "  Adding starship init to PowerShell profile..." -ForegroundColor Green
+                Add-Content -Path $profilePath -Value "`n# starship prompt (added by psmux installer)`nInvoke-Expression (& starship init powershell)"
+            } else {
+                Write-Host "  starship already in PowerShell profile" -ForegroundColor DarkGray
+            }
+        }
+    }
+}
+
+# ── psmux binary installation ───────────────────────────────────────
+
+if ($ToolsOnly) {
+    Write-Host "Skipping psmux binary (--ToolsOnly mode)" -ForegroundColor DarkGray
+} else {
 
 # Determine if we're installing from local build or downloading
 # When run via iex, $PSScriptRoot is empty
@@ -136,3 +228,51 @@ Write-Host "  psmux attach -t name     # Attach to session"
 Write-Host ""
 Write-Host "Note: Restart your terminal or run:" -ForegroundColor Yellow
 Write-Host '  $env:Path = [Environment]::GetEnvironmentVariable("Path", "User") + ";" + [Environment]::GetEnvironmentVariable("Path", "Machine")'
+
+} # end if (-not $ToolsOnly)
+
+# ── Companion tools ─────────────────────────────────────────────────
+
+if ($Full -or $ToolsOnly) {
+    Install-CompanionTools
+    Install-ShellIntegration
+} elseif (-not $NoTools) {
+    Write-Host ""
+    Write-Host "Tip: Run with -Full to also install companion tools:" -ForegroundColor DarkGray
+    Write-Host "  irm https://raw.githubusercontent.com/ohboyftw/psmux/ohboy-builds/scripts/install.ps1 | iex -Full" -ForegroundColor DarkGray
+    Write-Host "  Tools: ripgrep, fd, bat, zoxide, fzf, starship, fastfetch" -ForegroundColor DarkGray
+}
+
+# ── Default config ──────────────────────────────────────────────────
+
+$configDir = "$env:USERPROFILE"
+$configFile = "$configDir\.psmux.conf"
+if (-not (Test-Path $configFile)) {
+    Write-Host ""
+    Write-Host "Creating default config at $configFile..." -ForegroundColor Green
+    @"
+# psmux configuration (tmux-compatible syntax)
+# See: psmux list-keys, psmux show-options
+
+# Prefix key (default: Ctrl+b)
+# set -g prefix C-b
+
+# Enable mouse support
+set -g mouse on
+
+# Set default shell (uncomment to change from PowerShell)
+# set -g default-shell bash
+
+# Status bar
+set -g status-position bottom
+set -g status-justify centre
+
+# Zoxide directory picker (requires zoxide + fzf)
+bind z run 'pwsh -NoProfile -File "$env:LOCALAPPDATA\psmux\zoxide-pick.ps1"'
+"@ | Set-Content -Path $configFile -Encoding UTF8
+    Write-Host "  Edit with: notepad $configFile" -ForegroundColor DarkGray
+}
+
+Write-Host ""
+Write-Host "Done!" -ForegroundColor Green
+Write-Host ""
