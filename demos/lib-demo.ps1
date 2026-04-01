@@ -4,6 +4,7 @@
 $script:CaptionLog = @()
 $script:CaptionIndex = 0
 $script:StartTime = $null
+$script:Session = "demo"
 
 function Demo-Init {
     param([string]$SessionName = "demo")
@@ -12,9 +13,9 @@ function Demo-Init {
     $script:CaptionIndex = 0
     $script:Session = $SessionName
 
-    # Kill any existing demo session
-    psmux kill-session -t $SessionName 2>$null
-    Start-Sleep -Milliseconds 500
+    # Kill any leftover sessions
+    & psmux kill-server 2>$null
+    Start-Sleep -Milliseconds 1000
 }
 
 function Demo-Caption {
@@ -24,28 +25,47 @@ function Demo-Caption {
     $script:CaptionLog += [PSCustomObject]@{
         Index = $script:CaptionIndex
         Start = $elapsed
-        End   = $elapsed + 3.0  # default 3s display
+        End   = $elapsed + 3.0
         Text  = $Text
     }
 }
 
-function Demo-Send {
-    # Send keys to the demo session target pane, with caption
+function Demo-Run {
+    # Run a psmux CLI command (split-window, select-pane, etc.)
+    # These are direct commands, not send-keys — no quoting issues.
     param(
-        [string]$Keys,
+        [string]$Cmd,
         [string]$Caption = "",
-        [string]$Target = "",
-        [int]$WaitMs = 800
+        [int]$WaitMs = 1000
     )
-    $t = if ($Target) { "-t $Target" } else { "-t $script:Session" }
-    $cmd = "psmux send-keys $t $Keys"
-    Invoke-Expression $cmd
+    Invoke-Expression "psmux $Cmd"
     if ($Caption) { Demo-Caption $Caption }
     Start-Sleep -Milliseconds $WaitMs
 }
 
-function Demo-Type {
-    # Type text followed by Enter, with caption showing the command
+function Demo-Keys {
+    # Send literal keystrokes to a pane's shell.
+    # Each argument is a separate send-keys token.
+    # Use -- to prevent psmux from eating flags in the text.
+    param(
+        [string]$Target,
+        [string[]]$Keys,
+        [string]$Caption = "",
+        [int]$WaitMs = 1000
+    )
+    $t = if ($Target) { $Target } else { $script:Session }
+    foreach ($k in $Keys) {
+        & psmux send-keys -t $t -l -- $k
+    }
+    & psmux send-keys -t $t Enter
+    if ($Caption) { Demo-Caption $Caption }
+    Start-Sleep -Milliseconds $WaitMs
+}
+
+function Demo-ShellCmd {
+    # Type a shell command into the active pane.
+    # Uses send-keys -l (literal) to avoid key-name interpretation,
+    # then sends Enter separately.
     param(
         [string]$Text,
         [string]$Caption = "",
@@ -53,23 +73,11 @@ function Demo-Type {
         [int]$WaitMs = 1200
     )
     $t = if ($Target) { $Target } else { $script:Session }
-    psmux send-keys -t $t "$Text" Enter
+    # -l flag treats the text as literal (no key-name parsing)
+    & psmux send-keys -t $t -l -- $Text
+    & psmux send-keys -t $t Enter
     $cap = if ($Caption) { $Caption } else { "$ $Text" }
     Demo-Caption $cap
-    Start-Sleep -Milliseconds $WaitMs
-}
-
-function Demo-Prefix {
-    # Send Ctrl+b followed by a key
-    param(
-        [string]$Key,
-        [string]$Caption = "",
-        [int]$WaitMs = 1000
-    )
-    psmux send-keys -t $script:Session C-b
-    Start-Sleep -Milliseconds 200
-    psmux send-keys -t $script:Session $Key
-    if ($Caption) { Demo-Caption $Caption }
     Start-Sleep -Milliseconds $WaitMs
 }
 
@@ -80,7 +88,6 @@ function Demo-Wait {
 
 function Demo-SaveCaptions {
     param([string]$Path)
-    # Write SRT subtitle file
     $srt = ""
     foreach ($c in $script:CaptionLog) {
         $startTs = [TimeSpan]::FromSeconds($c.Start).ToString("hh\:mm\:ss\,fff")
@@ -95,15 +102,9 @@ function Demo-SaveCaptions {
 }
 
 function Demo-Attach {
-    # Attach to the session — this is what PowerSession records
-    param([int]$DurationMs = 0)
-    if ($DurationMs -gt 0) {
-        # Auto-detach after duration (for automated recording)
-        Start-Job -ScriptBlock {
-            param($ms, $session)
-            Start-Sleep -Milliseconds $ms
-            psmux detach-client -t $session 2>$null
-        } -ArgumentList $DurationMs, $script:Session | Out-Null
-    }
-    psmux attach -t $script:Session
+    param([string]$Target = "")
+    $t = if ($Target) { $Target } else { $script:Session }
+    Write-Host "Attaching to $t (Ctrl+b d to stop recording)..." -ForegroundColor Cyan
+    Start-Sleep -Milliseconds 500
+    & psmux attach -t $t
 }

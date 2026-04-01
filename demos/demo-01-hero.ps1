@@ -1,61 +1,51 @@
 # Demo 01: Hero — psmux in 30 seconds
-# Drives psmux via send-keys, then attaches for PowerSession recording.
-#
-# Usage:
-#   pwsh -NoProfile -File demos/demo-01-hero.ps1           # interactive
-#   PowerSession rec -c "pwsh -NoProfile -File demos/demo-01-hero.ps1" demos/hero.cast
+# All pane management uses direct CLI commands (not send-keys for prefix actions).
+# Shell commands use send-keys -l (literal mode) to avoid quoting issues.
 
 . "$PSScriptRoot/lib-demo.ps1"
 
 Demo-Init -SessionName "hero"
 
-# ── Setup: create session with splits ──
-psmux new-session -d -s hero
-Start-Sleep -Milliseconds 1500
+# ── Create session ──
+Demo-Run "new-session -d -s hero" -Caption "psmux new-session -s hero" -WaitMs 1500
 
-# Type welcome message
-Demo-Type "echo 'Welcome to psmux — tmux for Windows'" -Caption "psmux: tmux-compatible multiplexer for Windows"
+# ── Type welcome ──
+Demo-ShellCmd "echo Welcome to psmux" -Caption "psmux: tmux-compatible multiplexer for Windows"
 
-# Vertical split
-Demo-Prefix "%" -Caption "Ctrl+b % — vertical split"
+# ── Vertical split (direct command, not Ctrl+b %) ──
+Demo-Run "split-window -h -t hero" -Caption "Ctrl+b % — vertical split" -WaitMs 1200
 
-# Type in right pane
-Demo-Type "rg --version" -Caption "ripgrep in the right pane"
+# ── Type in right pane ──
+Demo-ShellCmd "rg --version" -Caption "ripgrep in the right pane"
 
-# Horizontal split in right pane
-Demo-Prefix '"' -Caption 'Ctrl+b " — horizontal split'
-Demo-Type "fd --version" -Caption "fd in the bottom-right pane"
+# ── Horizontal split ──
+Demo-Run "split-window -v -t hero" -Caption 'Ctrl+b " — horizontal split' -WaitMs 1200
 
-# Navigate to left pane
-Demo-Prefix "Left" -Caption "Ctrl+b Left — navigate panes"
-Demo-Type "bat --version" -Caption "bat in the left pane"
+Demo-ShellCmd "fd --version" -Caption "fd in the bottom-right pane"
 
-# Zoom the left pane
-Demo-Prefix "z" -Caption "Ctrl+b z — zoom pane (fullscreen)"
+# ── Navigate to left pane ──
+Demo-Run "select-pane -L -t hero" -Caption "Ctrl+b Left — navigate panes" -WaitMs 800
+
+Demo-ShellCmd "bat --version" -Caption "bat in the left pane"
+
+# ── Zoom pane ──
+Demo-Run "resize-pane -Z -t hero" -Caption "Ctrl+b z — zoom pane (fullscreen)" -WaitMs 2000
+Demo-Run "resize-pane -Z -t hero" -Caption "Ctrl+b z — unzoom" -WaitMs 1500
+
+# ── Rename window ──
+Demo-Run "rename-window -t hero dev" -Caption "Ctrl+b , — rename window to 'dev'" -WaitMs 1200
+
+# ── New window ──
+Demo-Run "new-window -t hero" -Caption "Ctrl+b c — new window" -WaitMs 1200
+Demo-ShellCmd "echo Window 2 - monitoring" -Caption "Second window for monitoring"
+
+# ── Switch back to window 0 ──
+Demo-Run "select-window -t hero:0" -Caption "Ctrl+b 0 — switch to window 0" -WaitMs 1500
+
+# ── Final message ──
+Demo-ShellCmd "echo 92 tmux commands. Native Windows. No WSL." `
+    -Caption "92 tmux commands. Native Windows. No WSL required."
+
 Demo-Wait 2000
-Demo-Prefix "z" -Caption "Ctrl+b z — unzoom"
-
-# Rename window
-Demo-Prefix "," -Caption "Ctrl+b , — rename window"
-Start-Sleep -Milliseconds 500
-psmux send-keys -t hero "dev" Enter
-Demo-Caption "Renamed to 'dev'"
-Demo-Wait 1000
-
-# New window
-Demo-Prefix "c" -Caption "Ctrl+b c — new window"
-Demo-Type "echo 'Window 2 — monitoring'" -Caption "Second window for monitoring"
-
-# Switch back
-Demo-Send "0" -Caption "Ctrl+b 0 — switch to window 0"
-Demo-Wait 1500
-
-Demo-Type "echo '# 92 tmux commands, native Windows, zero WSL'" -Caption "92 tmux commands. Native Windows. No WSL required."
-
-# Save captions
 Demo-SaveCaptions "$PSScriptRoot/hero.srt"
-
-# ── Attach for visual recording ──
-Write-Host "Attaching to session (press Ctrl+b d to detach when done)..." -ForegroundColor Cyan
-Demo-Wait 500
-Demo-Attach
+Demo-Attach -Target "hero"

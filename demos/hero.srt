@@ -1,0 +1,61 @@
+1
+00:00:02,269 --> 00:00:05,269
+psmux: tmux-compatible multiplexer for Windows
+
+2
+00:00:03,779 --> 00:00:06,779
+Ctrl+b % — vertical split
+
+3
+00:00:04,819 --> 00:00:07,819
+ripgrep in the right pane
+
+4
+00:00:06,315 --> 00:00:09,315
+Ctrl+b " — horizontal split
+
+5
+00:00:07,370 --> 00:00:10,370
+fd in the bottom-right pane
+
+6
+00:00:08,867 --> 00:00:11,867
+Ctrl+b Left — navigate panes
+
+7
+00:00:09,915 --> 00:00:12,915
+bat in the left pane
+
+8
+00:00:11,419 --> 00:00:14,419
+Ctrl+b z — zoom pane (fullscreen)
+
+9
+00:00:14,724 --> 00:00:17,724
+Ctrl+b z — unzoom
+
+10
+00:00:15,998 --> 00:00:18,998
+Ctrl+b , — rename window
+
+11
+00:00:17,556 --> 00:00:20,556
+Renamed to 'dev'
+
+12
+00:00:18,868 --> 00:00:21,868
+Ctrl+b c — new window
+
+13
+00:00:19,922 --> 00:00:22,922
+Second window for monitoring
+
+14
+00:00:21,190 --> 00:00:24,190
+Ctrl+b 0 — switch to window 0
+
+15
+00:00:23,556 --> 00:00:26,556
+92 tmux commands. Native Windows. No WSL required.
+
+
