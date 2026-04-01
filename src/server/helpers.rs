@@ -308,6 +308,47 @@ pub(crate) fn check_window_activity(app: &mut AppState) {
     }
 }
 
+/// Send focus events to panes when the active pane changes.
+///
+/// If the old active pane has focus reporting enabled (?1004h), send FocusOut (\x1b[O).
+/// If the new active pane has focus reporting enabled, send FocusIn (\x1b[I).
+pub(crate) fn send_focus_events(
+    app: &mut AppState,
+    old_path: &[usize],
+    new_path: &[usize],
+) {
+    use crate::tree::active_pane_mut;
+    use std::io::Write;
+
+    if old_path == new_path {
+        return;
+    }
+
+    let win = &mut app.windows[app.active_idx];
+
+    // Send FocusOut to old pane
+    if let Some(old_pane) = active_pane_mut(&mut win.root, old_path) {
+        if let Ok(parser) = old_pane.term.lock() {
+            if parser.screen().focus_reporting() {
+                drop(parser);
+                let _ = old_pane.writer.write_all(b"\x1b[O");
+                let _ = old_pane.writer.flush();
+            }
+        }
+    }
+
+    // Send FocusIn to new pane
+    if let Some(new_pane) = active_pane_mut(&mut win.root, new_path) {
+        if let Ok(parser) = new_pane.term.lock() {
+            if parser.screen().focus_reporting() {
+                drop(parser);
+                let _ = new_pane.writer.write_all(b"\x1b[I");
+                let _ = new_pane.writer.flush();
+            }
+        }
+    }
+}
+
 /// Walk a pane tree and check/consume bell_pending flags.
 /// Returns true if any pane had a pending bell.
 fn check_pane_bells(node: &Node) -> bool {

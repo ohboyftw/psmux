@@ -1515,7 +1515,9 @@ pub fn run_server(
                             switch_with_copy_save(&mut app, |app| {
                                 focus_pane_by_id(app, pid);
                             });
-                            if app.windows[app.active_idx].active_path != old_path {
+                            let new_path = app.windows[app.active_idx].active_path.clone();
+                            if new_path != old_path {
+                                helpers::send_focus_events(&mut app, &old_path, &new_path);
                                 unzoom_if_zoomed(&mut app);
                             }
                             meta_dirty = true;
@@ -1525,7 +1527,9 @@ pub fn run_server(
                             switch_with_copy_save(&mut app, |app| {
                                 focus_pane_by_index(app, idx);
                             });
-                            if app.windows[app.active_idx].active_path != old_path {
+                            let new_path = app.windows[app.active_idx].active_path.clone();
+                            if new_path != old_path {
+                                helpers::send_focus_events(&mut app, &old_path, &new_path);
                                 unzoom_if_zoomed(&mut app);
                             }
                             // Update MRU so directional navigation remembers this focus change
@@ -2002,7 +2006,9 @@ pub fn run_server(
                             switch_with_copy_save(&mut app, |app| {
                                 focus_pane_by_id(app, pid);
                             });
-                            if app.windows[app.active_idx].active_path != old_path {
+                            let new_path = app.windows[app.active_idx].active_path.clone();
+                            if new_path != old_path {
+                                helpers::send_focus_events(&mut app, &old_path, &new_path);
                                 unzoom_if_zoomed(&mut app);
                             }
                             meta_dirty = true;
