@@ -306,36 +306,56 @@ fn inject_sgr_mouse(pane: &mut Pane, col: i16, row: i16, vt_button: u8, press: b
     }
 }
 
-/// Write a SGR mouse event to the pane's PTY master pipe.
+/// Write a mouse event to the pane's PTY master pipe, respecting the
+/// encoding mode requested by the child (SGR or X10 normal).
 ///
-/// This is the same mechanism Windows Terminal uses: write VT SGR mouse
-/// escape sequences directly to the ConPTY input pipe.  ConPTY/conhost
-/// then automatically:
-///  - Translates SGR → MOUSE_EVENT records for apps using ReadConsoleInputW
-///    (crossterm/ratatui: pstop, claude, opencode, etc.)
-///  - Passes VT through for apps reading text/VT input (nvim, vim)
+/// ConPTY/conhost translates these escape sequences:
+///  - SGR → MOUSE_EVENT records for ReadConsoleInputW apps (crossterm/ratatui)
+///  - VT pass-through for text/VT apps (nvim, vim)
 ///
-/// This works universally for ALL native ConPTY children — no need to
-/// distinguish between crossterm vs nvim.  (fixes #60)
+/// This works universally for ALL native ConPTY children.  (fixes #60)
 fn write_mouse_to_pty(pane: &mut Pane, col: i16, row: i16, vt_button: u8, press: bool) {
     use std::io::Write as _;
-    let vt_col = (col + 1).max(1) as u16;
-    let vt_row = (row + 1).max(1) as u16;
-    let ch = if press { b'M' } else { b'm' };
-    // Stack-allocated buffer — avoids heap allocation per mouse event.
-    // Max SGR sequence: ESC[<btn;col;rowM = ~20 bytes worst case.
+
+    // Check which encoding the child requested
+    let encoding = pane
+        .term
+        .lock()
+        .ok()
+        .map(|p| p.screen().mouse_protocol_encoding())
+        .unwrap_or(vt100::MouseProtocolEncoding::Default);
+
     let mut buf = [0u8; 32];
-    let len = {
-        let mut cursor = std::io::Cursor::new(&mut buf[..]);
-        let _ = write!(
-            cursor,
-            "\x1b[<{};{};{}{}",
-            vt_button, vt_col, vt_row, ch as char
-        );
-        cursor.position() as usize
+    let len = match encoding {
+        vt100::MouseProtocolEncoding::Sgr => {
+            let vt_col = (col + 1).max(1) as u16;
+            let vt_row = (row + 1).max(1) as u16;
+            let ch = if press { 'M' } else { 'm' };
+            let mut cursor = std::io::Cursor::new(&mut buf[..]);
+            let _ = write!(cursor, "\x1b[<{};{};{}{}", vt_button, vt_col, vt_row, ch);
+            cursor.position() as usize
+        }
+        _ => {
+            // X10 normal encoding: only press events, max coordinate 222
+            if !press {
+                return; // X10 has no release encoding
+            }
+            let cb = vt_button + 32;
+            let cx = ((col + 1).max(1).min(223) as u8) + 32;
+            let cy = ((row + 1).max(1).min(223) as u8) + 32;
+            buf[0] = 0x1b;
+            buf[1] = b'[';
+            buf[2] = b'M';
+            buf[3] = cb;
+            buf[4] = cx;
+            buf[5] = cy;
+            6
+        }
     };
+
     mouse_log(&format!(
-        "  -> PTY pipe SGR mouse: seq={:?}",
+        "  -> PTY pipe mouse ({}): seq={:?}",
+        if matches!(encoding, vt100::MouseProtocolEncoding::Sgr) { "SGR" } else { "X10" },
         std::str::from_utf8(&buf[..len]).unwrap_or("?")
     ));
     let _ = pane.writer.write_all(&buf[..len]);
