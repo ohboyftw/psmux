@@ -66,6 +66,10 @@ function Demo-ShellCmd {
     # Type a shell command into the active pane.
     # Uses send-keys -l (literal) to avoid key-name interpretation,
     # then sends Enter separately.
+    #
+    # WORKAROUND: ConPTY/PSReadLine race eats the first character of
+    # send-keys input. We send a brief delay + space + backspace before
+    # the actual text to absorb the race, then send the real command.
     param(
         [string]$Text,
         [string]$Caption = "",
@@ -73,6 +77,9 @@ function Demo-ShellCmd {
         [int]$WaitMs = 1200
     )
     $t = if ($Target) { $Target } else { $script:Session }
+    # Prime the input buffer — absorbs the first-char truncation
+    & psmux send-keys -t $t Space BSpace
+    Start-Sleep -Milliseconds 100
     # -l flag treats the text as literal (no key-name parsing)
     & psmux send-keys -t $t -l -- $Text
     & psmux send-keys -t $t Enter
