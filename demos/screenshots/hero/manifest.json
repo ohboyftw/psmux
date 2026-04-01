@@ -3,70 +3,70 @@
   "total": 11,
   "assertions": [
     {
-      "index": 1,
+      "file": "001_session_created.png",
       "assertion": "Terminal shows a psmux session with a green status bar at the bottom showing [hero]",
       "result": "pending",
-      "file": "001_session_created.png"
+      "index": 1
     },
     {
-      "index": 2,
+      "file": "002_welcome_typed.png",
       "assertion": "The pane shows 'Welcome to psmux' text output",
       "result": "pending",
-      "file": "002_welcome_typed.png"
+      "index": 2
     },
     {
-      "index": 3,
+      "file": "003_vertical_split.png",
       "assertion": "Two panes side by side separated by a vertical border line",
       "result": "pending",
-      "file": "003_vertical_split.png"
+      "index": 3
     },
     {
-      "index": 4,
+      "file": "004_right_pane_rg.png",
       "assertion": "Right pane shows ripgrep version output",
       "result": "pending",
-      "file": "004_right_pane_rg.png"
+      "index": 4
     },
     {
-      "index": 5,
+      "file": "005_three_panes.png",
       "assertion": "Three panes visible: one large on left, two stacked on right",
       "result": "pending",
-      "file": "005_three_panes.png"
+      "index": 5
     },
     {
-      "index": 6,
+      "file": "006_three_panes_with_tools.png",
       "assertion": "Three panes each showing a different tool version output (bat, rg, fd)",
       "result": "pending",
-      "file": "006_three_panes_with_tools.png"
+      "index": 6
     },
     {
-      "index": 7,
+      "file": "007_zoomed.png",
       "assertion": "Single pane taking the full terminal area, no split borders visible",
       "result": "pending",
-      "file": "007_zoomed.png"
+      "index": 7
     },
     {
-      "index": 8,
+      "file": "008_unzoomed.png",
       "assertion": "Three panes restored with split borders",
       "result": "pending",
-      "file": "008_unzoomed.png"
+      "index": 8
     },
     {
-      "index": 9,
+      "file": "009_renamed.png",
       "assertion": "Status bar shows window name 'dev' instead of default",
       "result": "pending",
-      "file": "009_renamed.png"
+      "index": 9
     },
     {
-      "index": 10,
+      "file": "010_back_to_window0.png",
       "assertion": "Three-pane layout from window 0 visible again, status bar shows window 0 highlighted",
       "result": "pending",
-      "file": "010_back_to_window0.png"
+      "index": 10
     },
     {
-      "index": 11,
+      "file": "011_final.png",
       "assertion": "Pane shows '92 tmux commands' message, three-pane layout intact",
       "result": "pending",
-      "file": "011_final.png"
+      "index": 11
     }
   ]
 }
