@@ -19,13 +19,16 @@ param([switch]$Validate)
 . "$PSScriptRoot/lib-visual-test.ps1"
 
 Demo-Init -SessionName "hero"
-VTest-Init -OutputDir "$PSScriptRoot/screenshots/hero"
+VTest-Init -OutputDir "$PSScriptRoot/screenshots/hero" -WindowTitle "psmux-demo"
 
 # ── Step 1: Create a named session (attached) ──
-# We need an attached session for the screenshots to capture.
-# Start psmux in a new Windows Terminal tab, or use start-process.
-Start-Process -FilePath "psmux" -ArgumentList "new-session","-s","hero" -WindowStyle Normal
-Start-Sleep -Milliseconds 3000
+# Start psmux in a standalone conhost window (bypasses Windows Terminal
+# tab absorption). The "title" command gives it a fixed, findable name
+# for screenshot capture. conhost.exe guarantees a separate window.
+$psmuxProc = Start-Process -FilePath "conhost.exe" `
+    -ArgumentList "cmd.exe /c `"title psmux-demo && psmux new-session -s hero`"" `
+    -PassThru -WindowStyle Normal
+Start-Sleep -Milliseconds 5000  # warm pane + PowerShell profile load
 
 VTest-Assert -Label "session_created" `
     -Should "Terminal shows a psmux session with a green status bar at the bottom showing [hero]"

@@ -1,0 +1,72 @@
+{
+  "screenshots": "D:\\Home\\psmux\\demos/screenshots/hero",
+  "total": 11,
+  "assertions": [
+    {
+      "index": 1,
+      "assertion": "Terminal shows a psmux session with a green status bar at the bottom showing [hero]",
+      "result": "pending",
+      "file": "001_session_created.png"
+    },
+    {
+      "index": 2,
+      "assertion": "The pane shows 'Welcome to psmux' text output",
+      "result": "pending",
+      "file": "002_welcome_typed.png"
+    },
+    {
+      "index": 3,
+      "assertion": "Two panes side by side separated by a vertical border line",
+      "result": "pending",
+      "file": "003_vertical_split.png"
+    },
+    {
+      "index": 4,
+      "assertion": "Right pane shows ripgrep version output",
+      "result": "pending",
+      "file": "004_right_pane_rg.png"
+    },
+    {
+      "index": 5,
+      "assertion": "Three panes visible: one large on left, two stacked on right",
+      "result": "pending",
+      "file": "005_three_panes.png"
+    },
+    {
+      "index": 6,
+      "assertion": "Three panes each showing a different tool version output (bat, rg, fd)",
+      "result": "pending",
+      "file": "006_three_panes_with_tools.png"
+    },
+    {
+      "index": 7,
+      "assertion": "Single pane taking the full terminal area, no split borders visible",
+      "result": "pending",
+      "file": "007_zoomed.png"
+    },
+    {
+      "index": 8,
+      "assertion": "Three panes restored with split borders",
+      "result": "pending",
+      "file": "008_unzoomed.png"
+    },
+    {
+      "index": 9,
+      "assertion": "Status bar shows window name 'dev' instead of default",
+      "result": "pending",
+      "file": "009_renamed.png"
+    },
+    {
+      "index": 10,
+      "assertion": "Three-pane layout from window 0 visible again, status bar shows window 0 highlighted",
+      "result": "pending",
+      "file": "010_back_to_window0.png"
+    },
+    {
+      "index": 11,
+      "assertion": "Pane shows '92 tmux commands' message, three-pane layout intact",
+      "result": "pending",
+      "file": "011_final.png"
+    }
+  ]
+}
