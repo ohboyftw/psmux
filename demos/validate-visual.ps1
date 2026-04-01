@@ -17,7 +17,7 @@
 
 param(
     [Parameter(Mandatory)][string]$Demo,
-    [string]$Provider = "claude",
+    [string]$Provider = "local",
     [string]$Model = ""
 )
 
@@ -105,7 +105,7 @@ FAIL: <what you see instead>
                 $resp.choices[0].message.content
             }
             "local" {
-                $m = if ($Model) { $Model } else { "llava" }
+                $m = if ($Model) { $Model } else { "qwen3.5:397b-cloud" }
                 $body = @{
                     model = $m
                     prompt = $prompt
