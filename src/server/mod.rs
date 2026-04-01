@@ -672,7 +672,7 @@ pub fn run_server(
     // initialization.  By the time create_window() consumes it, the shell
     // has had the full config-load duration (~100-500ms) as a head start.
     // Only when we have real dimensions and default shell (no custom command).
-    let early_warm = if init_size.is_some()
+    let mut early_warm = if init_size.is_some()
         && initial_command.is_none()
         && raw_command.is_none()
         && start_dir.is_none()
@@ -683,6 +683,27 @@ pub fn run_server(
     };
 
     load_config(&mut app);
+
+    // If config enabled allow-predictions, the early warm pane was spawned
+    // with the wrong PSReadLine init string (predictions disabled). Kill it
+    // and respawn with the correct init string that preserves the user's
+    // PredictionViewStyle setting (#165).
+    if app.allow_predictions {
+        if let Some(mut stale) = early_warm.take() {
+            stale.child.kill().ok();
+        }
+    }
+    // Refill early_warm if it was killed (or never spawned)
+    let early_warm = if early_warm.is_none()
+        && init_size.is_some()
+        && initial_command.is_none()
+        && raw_command.is_none()
+        && start_dir.is_none()
+    {
+        spawn_warm_pane(&*pty_system, &mut app).ok()
+    } else {
+        early_warm
+    };
 
     // Apply --layout file if PSMUX_LAYOUT_FILE env var is set
     if let Ok(layout_path) = std::env::var("PSMUX_LAYOUT_FILE") {
