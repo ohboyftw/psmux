@@ -494,6 +494,28 @@ impl BufWrite for BracketedPaste {
 
 #[derive(Default, Debug)]
 #[must_use = "this struct does nothing unless you call write_buf"]
+pub(crate) struct FocusEvents {
+    on: bool,
+}
+
+impl FocusEvents {
+    pub(crate) fn new(on: bool) -> Self {
+        Self { on }
+    }
+}
+
+impl BufWrite for FocusEvents {
+    fn write_buf(&self, buf: &mut Vec<u8>) {
+        if self.on {
+            buf.extend_from_slice(b"\x1b[?1004h");
+        } else {
+            buf.extend_from_slice(b"\x1b[?1004l");
+        }
+    }
+}
+
+#[derive(Default, Debug)]
+#[must_use = "this struct does nothing unless you call write_buf"]
 pub struct MouseProtocolMode {
     mode: crate::MouseProtocolMode,
     prev: crate::MouseProtocolMode,

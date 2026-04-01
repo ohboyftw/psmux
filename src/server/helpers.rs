@@ -275,14 +275,17 @@ pub(crate) fn check_window_activity(app: &mut AppState) {
 
         // ── Activity detection ──
         if i == active {
-            // Active window: clear activity flag, update version
+            // Active window: clear all notification flags (#162)
             win.activity_flag = false;
-            win.last_seen_version = window_data_version(win);
-            // Update last_output_time for active window too
+            win.bell_flag = false;
+            win.silence_flag = false;
+            // Update last_output_time before advancing last_seen_version,
+            // so monitor-silence timestamps stay accurate after switching away.
             let cur = window_data_version(win);
             if cur != win.last_seen_version {
                 win.last_output_time = std::time::Instant::now();
             }
+            win.last_seen_version = cur;
             continue;
         }
         let cur = window_data_version(win);

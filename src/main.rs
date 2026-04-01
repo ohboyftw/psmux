@@ -3679,6 +3679,11 @@ fn run_main() -> io::Result<()> {
 
     let mut stdout = crate::platform::create_writer();
     enable_virtual_terminal_processing();
+    // Disable VTI on stdin for ConPTY-hosted terminals (WezTerm, JetBrains)
+    // before crossterm enables raw mode — prevents INPUT_RECORD parsing breakage (#56, #87).
+    if !is_ssh_session() {
+        crate::platform::disable_vti_on_stdin();
+    }
     enable_raw_mode()?;
     execute!(
         stdout,

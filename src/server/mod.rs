@@ -3767,7 +3767,8 @@ pub fn run_server(
                                         app.pane_border_status = "top".to_string();
                                     }
                                     "pane-border-format" => {
-                                        app.pane_border_format = "#{pane_index}: #{pane_title}".to_string();
+                                        app.pane_border_format =
+                                            "#{pane_index}: #{pane_title}".to_string();
                                     }
                                     "status-unfocused-style" => {
                                         app.status_unfocused_style = String::new();

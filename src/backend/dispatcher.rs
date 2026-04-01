@@ -137,11 +137,19 @@ fn handle_spawn_agent(
         command.insert(1, "--bare".to_string());
     }
 
+    // Inject CLAUDE_CODE_NO_FLICKER for flicker-free alt-screen rendering in agent panes
+    let env = {
+        let mut map = p.env.unwrap_or_default();
+        map.entry("CLAUDE_CODE_NO_FLICKER".into())
+            .or_insert_with(|| "1".into());
+        Some(map)
+    };
+
     let (resp_tx, resp_rx) = mpsc::channel();
     tx.send(CtrlReq::BackendSpawnAgent {
         command,
         cwd: p.cwd,
-        env: p.env,
+        env,
         metadata,
         split_direction,
         shell: p.shell,

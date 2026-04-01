@@ -2919,20 +2919,14 @@ pub fn run_remote(
         }
         // Sync repeat-time from server
         repeat_time_ms = state.repeat_time;
-        // Update status-left / status-right from server (already format-expanded)
+        // Update status-left / status-right from server (already format-expanded).
+        // Accept empty strings so format conditionals (e.g. #{?client_prefix,...,})
+        // evaluating to empty properly clear stale content (#160).
         if let Some(sl) = state.status_left {
-            if !sl.is_empty() {
-                // Pass full string — visual truncation is handled by ratatui
-                // when rendering into the allocated status bar area.
-                // Do NOT naively truncate by char count as that can split
-                // inside #[...] style directives, causing parse failures.
-                custom_status_left = Some(sl);
-            }
+            custom_status_left = Some(sl);
         }
         if let Some(sr) = state.status_right {
-            if !sr.is_empty() {
-                custom_status_right = Some(sr);
-            }
+            custom_status_right = Some(sr);
         }
         let status_lines = if state.status_visible {
             state.status_lines
@@ -3755,13 +3749,14 @@ pub fn run_remote(
                 } else {
                     String::new()
                 };
+                // Parse inline style directives (#[fg=red] etc.) for status lines 1+ (#164)
+                let mut line_spans = crate::rendering::parse_inline_styles(&text, sb_base);
                 // Pad to full width
-                let padded: String = if text.len() < line_area.width as usize {
-                    format!("{}{}", text, " ".repeat(line_area.width as usize - text.len()))
-                } else {
-                    text.chars().take(line_area.width as usize).collect()
-                };
-                let line_widget = Paragraph::new(Line::from(Span::styled(padded, sb_base))).style(sb_base);
+                let visible_w: usize = line_spans.iter().map(|s| unicode_width::UnicodeWidthStr::width(s.content.as_ref())).sum();
+                if visible_w < line_area.width as usize {
+                    line_spans.push(Span::styled(" ".repeat(line_area.width as usize - visible_w), sb_base));
+                }
+                let line_widget = Paragraph::new(Line::from(line_spans)).style(sb_base);
                 f.render_widget(line_widget, line_area);
             }
             if renaming {

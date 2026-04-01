@@ -178,6 +178,16 @@ impl<CB: crate::callbacks::Callbacks> vte::Perform for WrappedScreen<CB> {
                     );
                 }
             },
+            Some(b' ') if c == 'q' => {
+                // DECSCUSR — Set Cursor Style (CSI Ps SP q)
+                let style = params
+                    .iter()
+                    .next()
+                    .and_then(|x| x.first().copied())
+                    .unwrap_or(0);
+                let style = if style > 6 { 0 } else { style };
+                self.screen.set_cursor_style(style as u8);
+            }
             Some(i) => {
                 self.callbacks.unhandled_csi(
                     &mut self.screen,

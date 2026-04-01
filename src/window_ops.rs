@@ -83,8 +83,8 @@ pub fn write_mouse_event_remote(
         _ => {
             if press {
                 let cb = button + 32;
-                let cx = ((col as u8).min(223)) + 32;
-                let cy = ((row as u8).min(223)) + 32;
+                let cx = (col.min(223) as u8) + 32;
+                let cy = (row.min(223) as u8) + 32;
                 let _ = master.write_all(&[0x1b, b'[', b'M', cb, cx, cy]);
                 let _ = master.flush();
             }

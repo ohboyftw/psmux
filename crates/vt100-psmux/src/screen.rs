@@ -45,6 +45,7 @@ const MODE_APPLICATION_CURSOR: u8 = 0b0000_0010;
 const MODE_HIDE_CURSOR: u8 = 0b0000_0100;
 const MODE_ALTERNATE_SCREEN: u8 = 0b0000_1000;
 const MODE_BRACKETED_PASTE: u8 = 0b0001_0000;
+const MODE_FOCUS_EVENTS: u8 = 0b0010_0000;
 
 /// The xterm mouse handling mode currently in use.
 #[derive(Copy, Clone, Debug, Eq, PartialEq, Default)]
@@ -102,6 +103,8 @@ pub struct Screen {
     mouse_protocol_mode: MouseProtocolMode,
     mouse_protocol_encoding: MouseProtocolEncoding,
 
+    cursor_style: u8,
+
     /// Window title set by the application via OSC 0 or OSC 2.
     osc_title: String,
 
@@ -138,6 +141,7 @@ impl Screen {
             modes: 0,
             mouse_protocol_mode: MouseProtocolMode::default(),
             mouse_protocol_encoding: MouseProtocolEncoding::default(),
+            cursor_style: 0,
             osc_title: String::new(),
             osc7_path: None,
             squelch_cleared: false,
@@ -424,6 +428,8 @@ impl Screen {
         crate::term::ApplicationKeypad::new(self.mode(MODE_APPLICATION_KEYPAD)).write_buf(contents);
         crate::term::ApplicationCursor::new(self.mode(MODE_APPLICATION_CURSOR)).write_buf(contents);
         crate::term::BracketedPaste::new(self.mode(MODE_BRACKETED_PASTE)).write_buf(contents);
+        crate::term::FocusEvents::new(self.mode(MODE_FOCUS_EVENTS))
+            .write_buf(contents);
         crate::term::MouseProtocolMode::new(self.mouse_protocol_mode, MouseProtocolMode::None)
             .write_buf(contents);
         crate::term::MouseProtocolEncoding::new(
@@ -431,6 +437,9 @@ impl Screen {
             MouseProtocolEncoding::Default,
         )
         .write_buf(contents);
+        if self.cursor_style != 0 {
+            contents.extend(format!("\x1b[{} q", self.cursor_style).as_bytes());
+        }
     }
 
     /// Returns terminal escape sequences sufficient to change the previous
@@ -455,6 +464,10 @@ impl Screen {
         if self.mode(MODE_BRACKETED_PASTE) != prev.mode(MODE_BRACKETED_PASTE) {
             crate::term::BracketedPaste::new(self.mode(MODE_BRACKETED_PASTE)).write_buf(contents);
         }
+        if self.mode(MODE_FOCUS_EVENTS) != prev.mode(MODE_FOCUS_EVENTS) {
+            crate::term::FocusEvents::new(self.mode(MODE_FOCUS_EVENTS))
+                .write_buf(contents);
+        }
         crate::term::MouseProtocolMode::new(self.mouse_protocol_mode, prev.mouse_protocol_mode)
             .write_buf(contents);
         crate::term::MouseProtocolEncoding::new(
@@ -462,6 +475,10 @@ impl Screen {
             prev.mouse_protocol_encoding,
         )
         .write_buf(contents);
+        if self.cursor_style != prev.cursor_style {
+            contents
+                .extend(format!("\x1b[{} q", self.cursor_style).as_bytes());
+        }
     }
 
     /// Returns terminal escape sequences sufficient to set the current
@@ -584,6 +601,18 @@ impl Screen {
     #[must_use]
     pub fn bracketed_paste(&self) -> bool {
         self.mode(MODE_BRACKETED_PASTE)
+    }
+
+    /// Returns whether the terminal has focus reporting enabled.
+    #[must_use]
+    pub fn focus_reporting(&self) -> bool {
+        self.mode(MODE_FOCUS_EVENTS)
+    }
+
+    /// Returns the current cursor style (DECSCUSR value, 0-6).
+    #[must_use]
+    pub fn cursor_style(&self) -> u8 {
+        self.cursor_style
     }
 
     /// Returns the currently active [`MouseProtocolMode`].
@@ -785,6 +814,10 @@ impl Screen {
         if self.mouse_protocol_encoding == encoding {
             self.mouse_protocol_encoding = MouseProtocolEncoding::default();
         }
+    }
+
+    pub(crate) fn set_cursor_style(&mut self, style: u8) {
+        self.cursor_style = style;
     }
 }
 
@@ -1173,6 +1206,7 @@ impl Screen {
                 [1006] => {
                     self.set_mouse_encoding(MouseProtocolEncoding::Sgr);
                 }
+                [1004] => self.set_mode(MODE_FOCUS_EVENTS),
                 [1049] => {
                     self.decsc();
                     self.alternate_grid.clear();
@@ -1210,6 +1244,7 @@ impl Screen {
                 [1006] => {
                     self.clear_mouse_encoding(MouseProtocolEncoding::Sgr);
                 }
+                [1004] => self.clear_mode(MODE_FOCUS_EVENTS),
                 [1049] => {
                     self.exit_alternate_grid();
                     self.decrc();

@@ -486,12 +486,10 @@ pub(crate) fn apply_set_option(app: &mut AppState, option: &str, value: &str, _q
         "pane-active-border-style" => {
             app.pane_active_border_style = value.to_string();
         }
-        "pane-border-status" => {
-            match value {
-                "top" | "bottom" | "off" => app.pane_border_status = value.to_string(),
-                _ => {}
-            }
-        }
+        "pane-border-status" => match value {
+            "top" | "bottom" | "off" => app.pane_border_status = value.to_string(),
+            _ => {}
+        },
         "pane-border-format" => {
             app.pane_border_format = value.to_string();
         }
