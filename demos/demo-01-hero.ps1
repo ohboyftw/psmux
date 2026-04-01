@@ -36,10 +36,6 @@ VTest-Assert -Label "session_created" `
     -Should "Terminal shows a psmux session with a green status bar at the bottom showing [hero]"
 
 # ── Step 2: Type welcome message ──
-# Prime the WSL pane manually (input_primed works for native ConPTY
-# but WSL has its own bridge layer that eats the first char)
-& psmux send-keys -t hero Space BSpace
-Start-Sleep -Milliseconds 200
 & psmux send-keys -t hero -l -- "echo Welcome to psmux"
 & psmux send-keys -t hero Enter
 Start-Sleep -Milliseconds 1500
