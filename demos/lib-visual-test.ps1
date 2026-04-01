@@ -6,13 +6,11 @@
 #   . "$PSScriptRoot/lib-demo.ps1"
 #   . "$PSScriptRoot/lib-visual-test.ps1"
 
-Add-Type -AssemblyName System.Windows.Forms
-Add-Type -AssemblyName System.Drawing
-
 $script:ScreenshotDir = ""
 $script:ScreenshotIndex = 0
 $script:Assertions = @()
 $script:WindowTitle = "Windows Terminal"
+$script:CaptureReady = $false
 
 function VTest-Init {
     param(
@@ -23,66 +21,87 @@ function VTest-Init {
     $script:ScreenshotIndex = 0
     $script:Assertions = @()
     $script:WindowTitle = $WindowTitle
+    $script:CaptureReady = $false
 
     if (-not (Test-Path $OutputDir)) {
         New-Item -ItemType Directory -Path $OutputDir -Force | Out-Null
     }
+
+    # Compile the Win32 capture helper once using Windows PowerShell
+    # (pwsh 7 on .NET Core lacks System.Drawing; Windows PS 5.1 has it)
+    $helperScript = Join-Path $OutputDir "_capture_helper.ps1"
+    @'
+param([string]$Title, [string]$OutPath)
+Add-Type -AssemblyName System.Windows.Forms
+Add-Type -AssemblyName System.Drawing
+Add-Type @"
+using System;
+using System.Runtime.InteropServices;
+public class WinApi {
+    [DllImport("user32.dll")] public static extern IntPtr FindWindow(string cls, string title);
+    [DllImport("user32.dll")] public static extern bool GetWindowRect(IntPtr hwnd, out RECT r);
+    [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr hwnd);
+    [DllImport("user32.dll")] public static extern bool EnumWindows(EnumWinProc cb, IntPtr lp);
+    [DllImport("user32.dll", CharSet=CharSet.Unicode)] public static extern int GetWindowText(IntPtr hwnd, System.Text.StringBuilder sb, int max);
+    [DllImport("user32.dll")] public static extern bool IsWindowVisible(IntPtr hwnd);
+    public delegate bool EnumWinProc(IntPtr hwnd, IntPtr lp);
+    [StructLayout(LayoutKind.Sequential)] public struct RECT { public int Left, Top, Right, Bottom; }
+}
+"@
+# Find window — exact match first, then partial
+$hwnd = [WinApi]::FindWindow([NullString]::Value, $Title)
+if ($hwnd -eq [IntPtr]::Zero) {
+    # Partial match via EnumWindows
+    $found = [IntPtr]::Zero
+    $cb = [WinApi+EnumWinProc]{
+        param($h, $l)
+        if ([WinApi]::IsWindowVisible($h)) {
+            $sb = New-Object System.Text.StringBuilder 512
+            [void][WinApi]::GetWindowText($h, $sb, 512)
+            if ($sb.ToString() -like "*$Title*") {
+                $script:found = $h
+                return $false
+            }
+        }
+        return $true
+    }
+    [WinApi]::EnumWindows($cb, [IntPtr]::Zero) | Out-Null
+    $hwnd = $found
+}
+if ($hwnd -eq [IntPtr]::Zero) { Write-Error "Window not found: $Title"; exit 1 }
+[WinApi]::SetForegroundWindow($hwnd) | Out-Null
+Start-Sleep -Milliseconds 300
+$r = New-Object WinApi+RECT
+[WinApi]::GetWindowRect($hwnd, [ref]$r) | Out-Null
+$w = $r.Right - $r.Left; $h = $r.Bottom - $r.Top
+if ($w -le 0 -or $h -le 0) { Write-Error "Invalid window rect"; exit 1 }
+$bmp = New-Object System.Drawing.Bitmap($w, $h)
+$g = [System.Drawing.Graphics]::FromImage($bmp)
+$g.CopyFromScreen($r.Left, $r.Top, 0, 0, (New-Object System.Drawing.Size($w, $h)))
+$g.Dispose()
+$bmp.Save($OutPath, [System.Drawing.Imaging.ImageFormat]::Png)
+$bmp.Dispose()
+'@ | Set-Content -Path $helperScript -Encoding UTF8
+    $script:CaptureReady = $true
 }
 
 function VTest-CaptureWindow {
-    # Capture a specific window by title using Win32 API
-    param([string]$Title = "")
-    $t = if ($Title) { $Title } else { $script:WindowTitle }
-
-    Add-Type @"
-    using System;
-    using System.Runtime.InteropServices;
-    using System.Drawing;
-    using System.Drawing.Imaging;
-    public class WindowCapture {
-        [DllImport("user32.dll")] static extern IntPtr FindWindow(string lpClassName, string lpWindowName);
-        [DllImport("user32.dll")] static extern bool GetWindowRect(IntPtr hWnd, out RECT lpRect);
-        [DllImport("user32.dll")] static extern bool SetForegroundWindow(IntPtr hWnd);
-        [StructLayout(LayoutKind.Sequential)] public struct RECT {
-            public int Left, Top, Right, Bottom;
-        }
-        public static Bitmap Capture(string title) {
-            IntPtr hwnd = FindWindow(null, title);
-            if (hwnd == IntPtr.Zero) return null;
-            SetForegroundWindow(hwnd);
-            System.Threading.Thread.Sleep(200);
-            RECT r;
-            GetWindowRect(hwnd, out r);
-            int w = r.Right - r.Left;
-            int h = r.Bottom - r.Top;
-            if (w <= 0 || h <= 0) return null;
-            var bmp = new Bitmap(w, h, PixelFormat.Format32bppArgb);
-            using (var g = Graphics.FromImage(bmp)) {
-                g.CopyFromScreen(r.Left, r.Top, 0, 0, new Size(w, h));
-            }
-            return bmp;
-        }
-    }
-"@ -ErrorAction SilentlyContinue
-
+    param([string]$OutPath)
+    if (-not $script:CaptureReady) { return $false }
+    $helper = Join-Path $script:ScreenshotDir "_capture_helper.ps1"
     try {
-        $bmp = [WindowCapture]::Capture($t)
-        if ($null -eq $bmp) {
-            # Fallback: try partial title match via process
-            $proc = Get-Process | Where-Object { $_.MainWindowTitle -like "*$t*" } | Select-Object -First 1
-            if ($proc) {
-                $bmp = [WindowCapture]::Capture($proc.MainWindowTitle)
-            }
-        }
-        return $bmp
+        # Run in Windows PowerShell 5.1 which has System.Drawing
+        $result = & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $helper -Title $script:WindowTitle -OutPath $OutPath 2>&1
+        if (Test-Path $OutPath) { return $true }
+        Write-Host "    Capture output: $result" -ForegroundColor Yellow
+        return $false
     } catch {
         Write-Host "    Screenshot failed: $_" -ForegroundColor Yellow
-        return $null
+        return $false
     }
 }
 
 function VTest-Screenshot {
-    # Take a screenshot and save it with an incremental name
     param(
         [string]$Label = "",
         [string]$Assertion = ""
@@ -93,10 +112,8 @@ function VTest-Screenshot {
     $filename = "${idx}_${safeName}.png"
     $filepath = Join-Path $script:ScreenshotDir $filename
 
-    $bmp = VTest-CaptureWindow
-    if ($bmp) {
-        $bmp.Save($filepath, [System.Drawing.Imaging.ImageFormat]::Png)
-        $bmp.Dispose()
+    $ok = VTest-CaptureWindow -OutPath $filepath
+    if ($ok) {
         Write-Host "    Screenshot: $filename" -ForegroundColor DarkGray
     } else {
         Write-Host "    Screenshot FAILED: $filename" -ForegroundColor Yellow
@@ -107,7 +124,7 @@ function VTest-Screenshot {
             Index      = $script:ScreenshotIndex
             File       = $filename
             Assertion  = $Assertion
-            Result     = "pending"  # filled in by VLM validation pass
+            Result     = "pending"
         }
     }
 
