@@ -716,6 +716,12 @@ pub struct AppState {
     pub resurrect_on_exit: bool,
     /// Custom resurrection snapshot directory (None = ~/.psmux/resurrect/).
     pub resurrect_dir: Option<String>,
+    // ── Shell command cache ──
+    /// Cache for `#(command)` shell command substitution in format strings.
+    /// Key: command string, Value: (stdout output, timestamp).
+    /// Results are cached for `status_interval` seconds (default 15) to avoid
+    /// repeated subprocess spawning on every status-bar render.
+    pub shell_cmd_cache: std::sync::Mutex<std::collections::HashMap<String, (String, Instant)>>,
     // ── Hints mode config ──
     /// Characters used for hint labels (default: home row "asdfjkl;").
     pub hint_keys: String,
@@ -880,6 +886,7 @@ impl AppState {
             wait_pane_queue: Vec::new(),
             resurrect_on_exit: false,
             resurrect_dir: None,
+            shell_cmd_cache: std::sync::Mutex::new(std::collections::HashMap::new()),
             hint_keys: "asdfjkl;".to_string(),
             hint_style: "fg=yellow,bold".to_string(),
             hint_timeout: 5000,
@@ -1038,7 +1045,8 @@ pub enum CtrlReq {
     SetPaneTitle(String),
     SetPaneStyle(String),
     SendKeys(String, bool),
-    SendKeysX(String), // send-keys -X copy-mode-command
+    SendKeysHex(String), // send-keys -H: hex byte values written raw to PTY
+    SendKeysX(String),   // send-keys -X copy-mode-command
     SelectPane(String),
     SelectWindow(usize),
     ListPanes(mpsc::Sender<String>),

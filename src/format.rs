@@ -140,15 +140,16 @@ pub fn expand_format_for_window(fmt: &str, app: &AppState, win_idx: usize) -> St
             }
             if bytes[i + 1] == b'(' {
                 // #(command) — shell command execution (tmux compat)
-                if let Some(end) = fmt[i + 2..].find(')') {
-                    let cmd = &fmt[i + 2..i + 2 + end];
-                    let output = run_shell_command(cmd);
+                // Handle nested parentheses by tracking depth.
+                if let Some(close) = find_matching_paren(fmt, i + 2) {
+                    let cmd = &fmt[i + 2..close];
+                    let output = run_shell_command(cmd, app);
                     if has_strftime {
                         result.push_str(&escape_strftime_percent(&output));
                     } else {
                         result.push_str(&output);
                     }
-                    i = i + 2 + end + 1;
+                    i = close + 1;
                     continue;
                 }
             }
@@ -267,17 +268,72 @@ pub fn expand_format_for_window(fmt: &str, app: &AppState, win_idx: usize) -> St
 
 /// Execute a shell command and return its stdout (trimmed).
 /// Used for `#(command)` expansion (tmux compatibility).
-/// Caches results for the lifetime of a single format expansion cycle to
-/// avoid repeated subprocess spawning on every refresh.
-fn run_shell_command(cmd: &str) -> String {
+///
+/// Results are cached for `status_interval` seconds (default 15) so the same
+/// command is not re-spawned on every render frame.  The cache lives on
+/// `AppState::shell_cmd_cache` behind a `Mutex` for interior mutability.
+///
+/// A 2-second timeout prevents slow/hanging commands from blocking the UI.
+fn run_shell_command(cmd: &str, app: &AppState) -> String {
     use std::process::Command;
-    let output = if cfg!(windows) {
-        Command::new("cmd").args(["/C", cmd]).output()
+    use std::time::{Duration, Instant};
+
+    // ── Check cache ──
+    if let Ok(cache) = app.shell_cmd_cache.lock() {
+        if let Some((ref output, ref ts)) = cache.get(cmd) {
+            if ts.elapsed().as_secs() < app.status_interval.max(1) {
+                return output.clone();
+            }
+        }
+    }
+
+    // ── Spawn the command with a timeout ──
+    let child = if cfg!(windows) {
+        Command::new("powershell")
+            .args(["-NoProfile", "-NonInteractive", "-Command", cmd])
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::null())
+            .spawn()
     } else {
-        Command::new("sh").args(["-c", cmd]).output()
+        Command::new("sh")
+            .args(["-c", cmd])
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::null())
+            .spawn()
     };
-    match output {
-        Ok(o) if o.status.success() => String::from_utf8_lossy(&o.stdout).trim().to_string(),
+
+    let output = match child {
+        Ok(child) => {
+            // Wait with a 2-second timeout using a helper thread.
+            let timeout = Duration::from_secs(2);
+            wait_with_timeout(child, timeout)
+        }
+        Err(_) => String::new(),
+    };
+
+    // ── Store in cache ──
+    if let Ok(mut cache) = app.shell_cmd_cache.lock() {
+        cache.insert(cmd.to_string(), (output.clone(), Instant::now()));
+    }
+
+    output
+}
+
+/// Wait for a child process with a timeout.  Returns trimmed stdout on
+/// success, empty string on failure or timeout.
+fn wait_with_timeout(child: std::process::Child, timeout: std::time::Duration) -> String {
+    use std::sync::mpsc;
+
+    let (tx, rx) = mpsc::channel();
+    std::thread::spawn(move || {
+        let result = child.wait_with_output();
+        let _ = tx.send(result);
+    });
+
+    match rx.recv_timeout(timeout) {
+        Ok(Ok(output)) if output.status.success() => {
+            String::from_utf8_lossy(&output.stdout).trim().to_string()
+        }
         _ => String::new(),
     }
 }
@@ -2075,6 +2131,27 @@ fn find_matching_brace(s: &str, start: usize) -> Option<usize> {
     None
 }
 
+/// Find the matching `)` for a `#(...)` shell command substitution,
+/// starting at `start` (the first byte after the opening `(`).
+/// Handles nested parentheses so commands like `echo $(date)` work.
+fn find_matching_paren(s: &str, start: usize) -> Option<usize> {
+    let bytes = s.as_bytes();
+    let mut depth = 1usize;
+    let mut i = start;
+    while i < bytes.len() {
+        if bytes[i] == b')' {
+            depth -= 1;
+            if depth == 0 {
+                return Some(i);
+            }
+        } else if bytes[i] == b'(' {
+            depth += 1;
+        }
+        i += 1;
+    }
+    None
+}
+
 fn split_at_depth0(s: &str, delim: u8) -> Vec<String> {
     let bytes = s.as_bytes();
     let mut parts = Vec::new();
@@ -2365,6 +2442,69 @@ mod tests {
         let app = mock_app();
         let val = apply_modifier(&Modifier::Quote, "(hello)", &app, 0);
         assert_eq!(val, "\\(hello\\)");
+    }
+
+    // ── #(command) shell substitution tests ──
+
+    #[test]
+    fn test_shell_command_echo() {
+        let app = mock_app();
+        // `echo hello` works on both cmd and powershell
+        let result = expand_format("#(echo hello)", &app);
+        assert_eq!(result, "hello");
+    }
+
+    #[test]
+    fn test_shell_command_caching() {
+        let app = mock_app();
+        // Run once to populate cache
+        let r1 = run_shell_command("echo cached", &app);
+        assert_eq!(r1, "cached");
+        // Second call should hit the cache (same result)
+        let r2 = run_shell_command("echo cached", &app);
+        assert_eq!(r2, "cached");
+        // Verify the cache contains the entry
+        let cache = app.shell_cmd_cache.lock().unwrap();
+        assert!(cache.contains_key("echo cached"));
+    }
+
+    #[test]
+    fn test_shell_command_failure_returns_empty() {
+        let app = mock_app();
+        // A command that will fail (non-existent executable)
+        let result = run_shell_command("__nonexistent_command_12345__", &app);
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn test_shell_command_unmatched_paren_is_literal() {
+        let app = mock_app();
+        // #( with no matching ) should be treated as literal text
+        let result = expand_format("#(unclosed", &app);
+        assert_eq!(result, "#(unclosed");
+    }
+
+    #[test]
+    fn test_find_matching_paren_simple() {
+        assert_eq!(find_matching_paren("hello)", 0), Some(5));
+    }
+
+    #[test]
+    fn test_find_matching_paren_nested() {
+        // "echo $(date)" — the inner parens should not end the match early
+        assert_eq!(find_matching_paren("echo $(date))", 0), Some(12));
+    }
+
+    #[test]
+    fn test_find_matching_paren_no_close() {
+        assert_eq!(find_matching_paren("no close paren", 0), None);
+    }
+
+    #[test]
+    fn test_shell_command_mixed_with_variables() {
+        let app = mock_app();
+        let result = expand_format("[#S] #(echo hi)", &app);
+        assert_eq!(result, "[test_session] hi");
     }
 }
 
