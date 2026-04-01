@@ -1,61 +1,61 @@
 1
-00:00:02,269 --> 00:00:05,269
-psmux: tmux-compatible multiplexer for Windows
+00:00:01,577 --> 00:00:04,577
+psmux new-session -s hero
 
 2
-00:00:03,779 --> 00:00:06,779
-Ctrl+b % — vertical split
+00:00:03,222 --> 00:00:06,222
+psmux: tmux-compatible multiplexer for Windows
 
 3
-00:00:04,819 --> 00:00:07,819
-ripgrep in the right pane
+00:00:04,493 --> 00:00:07,493
+Ctrl+b % — vertical split
 
 4
-00:00:06,315 --> 00:00:09,315
-Ctrl+b " — horizontal split
+00:00:05,777 --> 00:00:08,777
+ripgrep in the right pane
 
 5
-00:00:07,370 --> 00:00:10,370
-fd in the bottom-right pane
+00:00:07,057 --> 00:00:10,057
+Ctrl+b " — horizontal split
 
 6
-00:00:08,867 --> 00:00:11,867
-Ctrl+b Left — navigate panes
+00:00:08,376 --> 00:00:11,376
+fd in the bottom-right pane
 
 7
-00:00:09,915 --> 00:00:12,915
-bat in the left pane
+00:00:09,643 --> 00:00:12,643
+Ctrl+b Left — navigate panes
 
 8
-00:00:11,419 --> 00:00:14,419
-Ctrl+b z — zoom pane (fullscreen)
+00:00:10,523 --> 00:00:13,523
+bat in the left pane
 
 9
-00:00:14,724 --> 00:00:17,724
-Ctrl+b z — unzoom
+00:00:11,785 --> 00:00:14,785
+Ctrl+b z — zoom pane (fullscreen)
 
 10
-00:00:15,998 --> 00:00:18,998
-Ctrl+b , — rename window
+00:00:13,819 --> 00:00:16,819
+Ctrl+b z — unzoom
 
 11
-00:00:17,556 --> 00:00:20,556
-Renamed to 'dev'
+00:00:15,387 --> 00:00:18,387
+Ctrl+b , — rename window to 'dev'
 
 12
-00:00:18,868 --> 00:00:21,868
+00:00:16,641 --> 00:00:19,641
 Ctrl+b c — new window
 
 13
-00:00:19,922 --> 00:00:22,922
+00:00:17,947 --> 00:00:20,947
 Second window for monitoring
 
 14
-00:00:21,190 --> 00:00:24,190
+00:00:19,205 --> 00:00:22,205
 Ctrl+b 0 — switch to window 0
 
 15
-00:00:23,556 --> 00:00:26,556
+00:00:20,785 --> 00:00:23,785
 92 tmux commands. Native Windows. No WSL required.
 
 
