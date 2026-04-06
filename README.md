@@ -203,6 +203,14 @@ See [docs/power-pack-tools.md](docs/power-pack-tools.md) for the full tool stack
 > - **Remote tmux control mode** — `attach-remote`, `new-session-remote`, `list-sessions-remote` connect to remote Linux tmux sessions over SSH using `-CC` control mode
 > - **DCS passthrough** — `set -g allow-passthrough on` forwards DCS sequences to the host terminal
 >
+> **Neovim / TUI App Support:**
+> - **Focus event passthrough** — VT parser tracks DECSET `?1004h`, server injects `\x1b[I`/`\x1b[O` on pane switch for neovim `:checktime`/autoread
+> - **Cursor style tracking** — DECSCUSR (CSI Ps SP q) tracked per-pane, cursor shape (block/bar/underline) restored on pane switch for neovim mode indicators
+> - **Encoding-aware mouse** — SGR format for apps requesting `?1006h`, X10 normal for legacy apps, with coordinate clamping
+> - **Pane title bars** — `set -g pane-border-status top|bottom` with `pane-border-format` for per-pane title display
+> - **Status desaturation** — Auto-dims status bar on window unfocus, configurable via `status-unfocused-style`
+> - **Bracketed paste** — VT parser tracks `?2004h`, passthrough preserved across pane switches
+>
 > **Agent Compatibility:**
 > - **Claude Code `TeammateTool`** — Auto-detected via `$TMUX`. Tested with 5-8 concurrent agents
 > - **Warm pool lifecycle** — Version-stamped warm panes, orphan cleanup on session exit
@@ -233,6 +241,10 @@ Critical fixes for production use with Claude Code and agent swarms:
 | **Async snapshot saves** | `save_snapshot()` did synchronous disk I/O on the event loop (50ms antivirus retry) | Background writer thread with 100ms debounce |
 | **Passthrough entry limit** | DCS passthrough queue entries had no size limit | 1MB per-entry cap, oversized entries dropped |
 | **Env var echo fix** | `SetEnvironment` wrote PowerShell commands to warm pane PTY, echoing visibly | Kill+respawn warm pane with process-level env vars |
+| **ConPTY error 87 retry** | ConPTY spawn with passthrough mode fails on some Windows builds | Auto-retry without `PSEUDOCONSOLE_PASSTHROUGH_MODE` flag |
+| **Env shim always-active** | Agent teams env vars (`CLAUDE_PANE_BACKEND_SOCKET`) not propagating when native `env.exe` exists | Shim installs unconditionally; handles POSIX escapes from shell-quote |
+| **bg=default color** | `bg=default` in styles rendered as black instead of terminal default | `parse_tmux_color("default")` returns `Color::Reset` |
+| **manual_rename flag** | `new-window -n NAME` auto-rename overwrites explicit name | Sets `manual_rename = true` when `-n` flag is used |
 
 These fixes compound: the DCS buffer growth caused memory pressure, which slowed child processes, which filled ConPTY input buffers, which blocked the event loop, which buffered all keybindings for minutes.
 
