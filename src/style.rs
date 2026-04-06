@@ -82,12 +82,15 @@ pub fn map_color(name: &str) -> Color {
 
 /// Parse a tmux color name to an `Option<Color>`.
 ///
-/// Returns `None` for "default" or empty strings (meaning "inherit").
+/// Returns `Some(Color::Reset)` for "default" (meaning "terminal default").
+/// Returns `None` for empty strings (meaning "not specified / inherit").
 /// This is the variant used by the remote client where `None` means "keep
-/// the existing color".
+/// the existing color" and `Some(Color::Reset)` means "explicitly reset to
+/// terminal default".
 pub fn parse_tmux_color(s: &str) -> Option<Color> {
     match s.trim().to_lowercase().as_str() {
-        "default" | "" => None,
+        "" => None,
+        "default" | "terminal" => Some(Color::Reset),
         _ => {
             let c = map_color(s);
             if c == Color::Reset {
@@ -467,4 +470,41 @@ pub fn desaturate_style(style: Style) -> Style {
     }
     result = result.add_modifier(Modifier::DIM);
     result
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Issue #182: bg=default should map to Color::Reset (terminal default),
+    /// not None (which causes fallback to hardcoded green).
+    #[test]
+    fn parse_tmux_color_default_returns_reset() {
+        let c = parse_tmux_color("default");
+        assert_eq!(c, Some(Color::Reset),
+            "parse_tmux_color(\"default\") should return Some(Color::Reset), got {:?}", c);
+    }
+
+    /// Issue #182: parse_tmux_style_components should propagate bg=default as Some(Color::Reset)
+    #[test]
+    fn parse_tmux_style_components_bg_default() {
+        let (fg, bg, bold) = parse_tmux_style_components("fg=white,bg=default");
+        assert_eq!(fg, Some(Color::White));
+        assert_eq!(bg, Some(Color::Reset),
+            "bg=default should yield Some(Color::Reset), got {:?}", bg);
+        assert!(!bold);
+    }
+
+    /// Issue #182: map_color("default") should return Color::Reset
+    #[test]
+    fn map_color_default_is_reset() {
+        assert_eq!(map_color("default"), Color::Reset);
+        assert_eq!(map_color("terminal"), Color::Reset);
+    }
+
+    /// Empty color string should remain None (not specified)
+    #[test]
+    fn parse_tmux_color_empty_returns_none() {
+        assert_eq!(parse_tmux_color(""), None);
+    }
 }

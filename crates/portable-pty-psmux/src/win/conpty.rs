@@ -147,8 +147,55 @@ impl MasterPty for ConPtyMasterPty {
 
 impl SlavePty for ConPtySlavePty {
     fn spawn_command(&self, cmd: CommandBuilder) -> anyhow::Result<Box<dyn Child + Send + Sync>> {
-        let inner = self.inner.lock().unwrap();
-        let child = inner.con.spawn_command(cmd)?;
-        Ok(Box::new(child))
+        let mut inner = self.inner.lock().unwrap();
+        match inner.con.spawn_command(cmd.clone()) {
+            Ok(child) => Ok(Box::new(child)),
+            Err(e) if inner.con.used_passthrough && is_invalid_parameter(&e) => {
+                // CreateProcessW rejected the ConPTY handle that was created
+                // with PSEUDOCONSOLE_PASSTHROUGH_MODE.  Some Windows 11 builds
+                // (notably Insider/Canary builds like 26200) accept the flag
+                // during CreatePseudoConsole but later fail in CreateProcessW
+                // with ERROR_INVALID_PARAMETER (87).
+                //
+                // Recovery: recreate the ConPTY without passthrough mode and
+                // create fresh pipe pairs for the new pseudo-console.
+                log::warn!(
+                    "CreateProcessW failed with ERROR_INVALID_PARAMETER while using \
+                     ConPTY passthrough mode; retrying without passthrough"
+                );
+                const PIPE_BUF: u32 = 64 * 1024;
+                let (stdin_read, stdin_write) = create_pipe_with_buffer(PIPE_BUF)?;
+                let (stdout_read, stdout_write) = create_pipe_with_buffer(PIPE_BUF)?;
+
+                let new_con = PsuedoCon::new_without_passthrough(
+                    COORD {
+                        X: inner.size.cols as i16,
+                        Y: inner.size.rows as i16,
+                    },
+                    stdin_read,
+                    stdout_write,
+                )?;
+
+                // Replace the ConPTY and pipe endpoints inside Inner.
+                // At this point nobody has cloned the reader or taken the
+                // writer yet (pane.rs acquires them after spawn_command),
+                // so the old FileDescriptors are dropped cleanly.
+                inner.con = new_con;
+                inner.readable = stdout_read;
+                inner.writable = Some(stdin_write);
+
+                let child = inner.con.spawn_command(cmd)?;
+                Ok(Box::new(child))
+            }
+            Err(e) => Err(e),
+        }
     }
+}
+
+/// Check if an error chain contains Windows ERROR_INVALID_PARAMETER (87).
+/// The OS error number is locale-independent; the textual message varies
+/// (e.g. "Falscher Parameter" in German).
+fn is_invalid_parameter(e: &anyhow::Error) -> bool {
+    let msg = format!("{}", e);
+    msg.contains("os error 87")
 }

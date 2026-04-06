@@ -174,6 +174,68 @@ Upstream added server-side control mode (2,594 lines). ohboy-builds has CustomPa
   - Blocked by: b9be26a inline styles port
   - Risk: Low
 
+### Tier 3: High-Impact Fixes (sync-2026-04-06-lynx)
+
+_All Tier 1 and critical Tier 3 items from this sync are done._
+
+### Tier 4: Interactive-Only Bug Fixes (sync-2026-04-06-lynx) — LOW PRIORITY
+
+These are quality-of-life fixes for interactive tmux-compatible usage. They don't affect agent teams, swarm backend, or the primary ohboy-builds use cases. Port when convenient or when shipping psmux as a general-purpose multiplexer.
+
+- [ ] **Port window-name targeting from `07bab22`** `TODO` `LOW`
+  - Resolve window by name in `-t session:window_name`
+  - Files: app.rs, cli.rs, server/connection.rs, server/mod.rs, types.rs
+  - Risk: Medium — multiple diverged files
+  - Impact: Agent teams use `-t %N` pane IDs, not window names
+
+- [ ] **Port if-shell -F format expansion from `c4b2526`** `TODO` `LOW`
+  - Format variables not expanded in if-shell -F conditions
+  - 3 code paths: config.rs (parse_if_shell), main.rs (CLI), server/connection.rs (TCP)
+  - Risk: Medium
+  - Impact: Only matters if .psmux.conf uses format conditionals
+
+- [ ] **Port run-shell double-wrapping fix from `eb8e468`** `TODO` `LOW`
+  - run-shell adds extra shell wrapper when command already starts with shell binary
+  - Fix: detect shell binary prefix, skip wrapping
+  - Files: commands.rs, config.rs, main.rs, server/connection.rs
+  - Risk: Medium
+  - Impact: Edge case — env shim handles agent spawn path
+
+- [ ] **Port run-shell async from `a510f7c`** `TODO` `LOW`
+  - Make run-shell async to prevent UI freeze
+  - Design: mpsc channel on AppState, spawn thread, drain in event loops
+  - Files: app.rs, commands.rs, server/mod.rs, types.rs
+  - Risk: Medium — adds RunShellOutput type
+  - Impact: Agent teams use send-keys not run-shell
+
+- [ ] **Port bind-key command mode fix from `9629068`** `TODO` `LOW`
+  - bind-key/unbind-key/set-option from command mode silently dropped
+  - Files: MANY — app.rs, commands.rs, config.rs, main.rs, server/connection.rs, server/mod.rs, types.rs
+  - Risk: High — largest changeset, touches command dispatch pipeline
+  - Impact: Only affects interactive `:bind-key` at runtime
+
+- [ ] **Port resize-pane/split-window/layout fixes from `37ae071`** `TODO` `LOW`
+  - resize-pane -x/-y, split-window -l, select-layout tiled
+  - Design: (1) resize_all_panes after absolute/percent resize, (2) SplitWindow (u16,bool) for cells vs percent, (3) resize_all_panes after layout selection
+  - Files: main.rs, server/connection.rs, server/mod.rs, tree.rs, types.rs
+  - Risk: Medium — type changes + layout calculations
+  - Impact: Swarm auto-layouts, rarely manually resized
+
+### Tier 5: Layout Directives Feature (sync-2026-04-06-lynx)
+
+- [ ] **Port #[align], #[fill], #[list], #[range] directives from `e584cbe`** `TODO`
+  - Layout directives for status-format[] — flexible status bar layouts
+  - Files: style.rs (+452), client.rs (+38/-22), format.rs (+16/-), new test (280 lines)
+  - Risk: High — large feature, style.rs heavily diverged
+  - Blocked by: bg=default fix (65f6611) should go first
+
+- [ ] **Port pane title in border format from `0703b2b`** `TODO`
+  - title_locked, meta_dirty, #{pane_title} in pane-border-format, client JSON fields
+  - Files: app.rs, client.rs, layout.rs, pane.rs, popup.rs, rendering.rs, server/mod.rs, types.rs
+  - Risk: High — touches rendering.rs (diverged for pane-border-status)
+  - REGRESSION RISK: Pane Focus Visibility, Three-State Pane Focus Borders
+  - Note: High value for ohboy-builds since pane-border-format is already implemented
+
 ### Tier 4 Upstream Fixes (sync-2026-03-29-raven)
 
 - [ ] **Port layout serialization from `6538a6e`** `TODO`
@@ -203,6 +265,13 @@ Upstream added server-side control mode (2,594 lines). ohboy-builds has CustomPa
 | --version fix (`87b6c28`) | 2026-03-29 | Skipped — ohboy-builds has better impl |
 | run-shell tilde/XDG (`93ecdce`) | Earlier | Already ported in `b2874c5` |
 | Strikethrough SGR (`c14a32e`) | Earlier | Already ported in `ecd37ad` |
+| Env shim always-active (`467b32f`) | 2026-04-06 | Manual port — pane.rs + util.rs |
+| ConPTY auto-retry error 87 (`1861eb7`) | 2026-04-06 | Cherry-pick clean |
+| bg=default terminal color (`65f6611`) | 2026-04-06 | Manual port — style.rs |
+| manual_rename on new-window -n (`7bcbecc`) | 2026-04-06 | Manual port — server/mod.rs |
+| run-shell popup output (`d895d4a`) | 2026-04-06 | Pre-existing in working tree |
+| bind-key new-window -c (`64ad68a`) | 2026-04-06 | Already fixed in ohboy-builds |
+| Clippy fixes (perform.rs, term.rs, window_ops.rs) | 2026-04-06 | Direct fix |
 
 ## Won't Do
 

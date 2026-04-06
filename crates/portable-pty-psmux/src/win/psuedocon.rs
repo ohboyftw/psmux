@@ -61,6 +61,10 @@ lazy_static! {
 
 pub struct PsuedoCon {
     con: HPCON,
+    /// Whether this ConPTY was created with PSEUDOCONSOLE_PASSTHROUGH_MODE.
+    /// Used by the retry logic in ConPtySlavePty::spawn_command to decide
+    /// whether a fallback without passthrough is worth attempting.
+    pub used_passthrough: bool,
 }
 
 unsafe impl Send for PsuedoCon {}
@@ -76,7 +80,18 @@ impl Drop for PsuedoCon {
 /// PSEUDOCONSOLE_PASSTHROUGH_MODE requires Windows 11 22H2 (build 22621+).
 /// On older Windows versions, the flag may be silently accepted but produce
 /// broken ConPTY output (no Win32 Console API translation).
+///
+/// Respects `PSMUX_NO_PASSTHROUGH=1` environment variable to let users
+/// force-disable passthrough mode on builds where it causes CreateProcessW
+/// to fail with ERROR_INVALID_PARAMETER (87).
 fn supports_passthrough_mode() -> bool {
+    if std::env::var("PSMUX_NO_PASSTHROUGH")
+        .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+        .unwrap_or(false)
+    {
+        log::info!("ConPTY passthrough mode disabled via PSMUX_NO_PASSTHROUGH");
+        return false;
+    }
     let ver = unsafe {
         let mut info: winapi::um::winnt::OSVERSIONINFOW = mem::zeroed();
         info.dwOSVersionInfoSize = mem::size_of::<winapi::um::winnt::OSVERSIONINFOW>() as u32;
@@ -133,7 +148,7 @@ impl PsuedoCon {
             };
 
             if result == S_OK {
-                return Ok(Self { con });
+                return Ok(Self { con, used_passthrough: true });
             }
             // If the API call failed despite being on a supported build,
             // fall through to the standard path.
@@ -154,7 +169,33 @@ impl PsuedoCon {
             "failed to create psuedo console: HRESULT {}",
             result
         );
-        Ok(Self { con })
+        Ok(Self { con, used_passthrough: false })
+    }
+
+    /// Create a ConPTY explicitly without passthrough mode, regardless of
+    /// Windows build version.  Used by the retry logic when CreateProcessW
+    /// rejects the passthrough ConPTY handle.
+    pub fn new_without_passthrough(size: COORD, input: FileDescriptor, output: FileDescriptor) -> Result<Self, Error> {
+        let mut con: HPCON = INVALID_HANDLE_VALUE;
+        let base_flags = PSUEDOCONSOLE_INHERIT_CURSOR
+            | PSEUDOCONSOLE_RESIZE_QUIRK
+            | PSEUDOCONSOLE_WIN32_INPUT_MODE;
+
+        let result = unsafe {
+            (CONPTY.CreatePseudoConsole)(
+                size,
+                input.as_raw_handle() as _,
+                output.as_raw_handle() as _,
+                base_flags,
+                &mut con,
+            )
+        };
+        ensure!(
+            result == S_OK,
+            "failed to create psuedo console (no passthrough): HRESULT {}",
+            result
+        );
+        Ok(Self { con, used_passthrough: false })
     }
 
     pub fn resize(&self, size: COORD) -> Result<(), Error> {

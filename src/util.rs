@@ -518,6 +518,30 @@ mod tests {
         let args = parse_command_line(&cmd);
         assert_eq!(args, vec!["claim-session", "s1", "C:\\R&D\\project"]);
     }
+
+    /// Verify that send-keys with Claude Code agent spawn commands preserves
+    /// Windows paths and POSIX-escaped characters (psmux#172, #173, #180).
+    /// The CLI wraps the key in double-quotes without escaping backslashes,
+    /// and parse_command_line keeps lone backslashes literal (Windows paths).
+    #[test]
+    fn test_send_keys_claude_code_agent_command_preserves_backslashes() {
+        // Simulate the control-protocol line built by the CLI send-keys handler:
+        // send-keys "cd 'C:\path with spaces' && env CLAUDECODE=1 'C:\...\claude.exe' --agent-id ..." Enter
+        let agent_cmd = "cd 'C:\\cctest\\a long dir name' && env CLAUDECODE=1 'C:\\Users\\foo\\.local\\bin\\claude.exe' --agent-id researcher\\@my-team";
+        let line = format!("send-keys \"{}\" Enter", agent_cmd);
+        let args = parse_command_line(&line);
+        assert_eq!(args[0], "send-keys");
+        assert_eq!(args[1], agent_cmd);
+        assert_eq!(args[2], "Enter");
+    }
+
+    #[test]
+    fn test_send_keys_single_quoted_windows_path() {
+        // Single-quoted paths from shell-quote: 'C:\Users\foo'
+        let line = "send-keys \"cd 'C:\\Users\\foo\\project'\" Enter";
+        let args = parse_command_line(line);
+        assert_eq!(args[1], "cd 'C:\\Users\\foo\\project'");
+    }
 }
 
 pub fn color_to_name(c: vt100::Color) -> std::borrow::Cow<'static, str> {

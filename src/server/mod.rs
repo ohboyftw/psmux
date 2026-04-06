@@ -1087,6 +1087,7 @@ pub fn run_server(
                             if let Some(n) = name {
                                 if let Some(w) = app.windows.last_mut() {
                                     w.name = n;
+                                    w.manual_rename = true;
                                 }
                             }
                             if detached {
@@ -1161,6 +1162,7 @@ pub fn run_server(
                             if let Some(n) = name {
                                 if let Some(w) = app.windows.last_mut() {
                                     w.name = n;
+                                    w.manual_rename = true;
                                 }
                             }
                             // Use full format engine for -P output (tmux compatible)
@@ -5402,6 +5404,27 @@ pub fn run_server(
                 // will restore when it processes as a non-temp-focus req).
             }
         }
+        // Drain async run-shell results (non-blocking).
+        if let Some(rx) = app.run_shell_rx.as_ref() {
+            while let Ok((title, text)) = rx.try_recv() {
+                if !text.is_empty() {
+                    let lines: Vec<&str> = text.lines().collect();
+                    let width = lines.iter().map(|l| l.len()).max().unwrap_or(40).max(20) as u16 + 4;
+                    let height = (lines.len() as u16 + 2).max(5);
+                    app.mode = Mode::PopupMode {
+                        command: title,
+                        output: text,
+                        process: None,
+                        width: width.min(120),
+                        height,
+                        close_on_exit: false,
+                        popup_pane: None,
+                        scroll_offset: 0,
+                    };
+                    state_dirty = true;
+                }
+            }
+        }
         // ── Server-push: proactively send frames to attached clients ──
         // Instead of waiting for clients to poll dump-state, serialize
         // and push whenever state changed (PTY output, new window, key
@@ -5667,3 +5690,7 @@ mod tests {
         assert!(!super::is_warm_server(&app));
     }
 }
+
+#[cfg(test)]
+#[path = "../../tests-rs/test_issue169_manual_rename.rs"]
+mod test_issue169;

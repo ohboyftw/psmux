@@ -494,12 +494,12 @@ impl BufWrite for BracketedPaste {
 
 #[derive(Default, Debug)]
 #[must_use = "this struct does nothing unless you call write_buf"]
-pub(crate) struct FocusEvents {
+pub struct FocusEvents {
     on: bool,
 }
 
 impl FocusEvents {
-    pub(crate) fn new(on: bool) -> Self {
+    pub fn new(on: bool) -> Self {
         Self { on }
     }
 }

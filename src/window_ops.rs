@@ -341,8 +341,8 @@ fn write_mouse_to_pty(pane: &mut Pane, col: i16, row: i16, vt_button: u8, press:
                 return; // X10 has no release encoding
             }
             let cb = vt_button + 32;
-            let cx = ((col + 1).max(1).min(223) as u8) + 32;
-            let cy = ((row + 1).max(1).min(223) as u8) + 32;
+            let cx = ((col + 1).clamp(1, 223) as u8) + 32;
+            let cy = ((row + 1).clamp(1, 223) as u8) + 32;
             buf[0] = 0x1b;
             buf[1] = b'[';
             buf[2] = b'M';
