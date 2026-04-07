@@ -137,16 +137,16 @@ fn test_dispatch_kill_all() {
 }
 
 #[test]
-fn test_dispatch_spawn_agent_empty_command() {
+fn test_dispatch_spawn_agent_empty_command_spawns_shell() {
     let tx = make_mock_server();
-    let input = r#"{"id":"1","method":"spawn_agent","params":{"command":[]}}"#;
+    // Empty command spawns a default shell pane (no error)
+    let input = r#"{"id":"1","method":"spawn_agent","params":{"command":[],"wait_ready":false}}"#;
 
     let response = psmux::backend::dispatcher::dispatch_rpc(input, &tx);
     assert!(response.is_some());
 
     let parsed: serde_json::Value = serde_json::from_str(&response.unwrap()).unwrap();
-    assert!(parsed["error"].is_object());
-    assert_eq!(parsed["error"]["code"], -32602);
+    assert!(parsed["result"]["context_id"].is_string(), "expected success, got: {parsed}");
 }
 
 #[test]

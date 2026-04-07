@@ -4902,7 +4902,9 @@ pub fn run_server(
                         } => {
                             // Build command string: join argv into a single
                             // shell command for split_active_with_command.
+                            // Empty command spawns a default shell pane (warm pane path).
                             let cmd_str = command.join(" ");
+                            let cmd_str = if cmd_str.is_empty() { None } else { Some(cmd_str) };
                             let start_dir = cwd
                                 .map(|d| expand_format(&d, &app))
                                 .filter(|d| !d.is_empty());
@@ -4932,7 +4934,7 @@ pub fn run_server(
                             let split_result = split_active_with_command(
                                 &mut app,
                                 split_direction.unwrap_or(LayoutKind::Vertical),
-                                Some(&cmd_str),
+                                cmd_str.as_deref(),
                                 Some(&*pty_system),
                                 start_dir.as_deref(),
                                 shell.as_deref(),

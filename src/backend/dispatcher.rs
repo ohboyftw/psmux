@@ -109,10 +109,6 @@ fn handle_spawn_agent(
     let p: SpawnAgentParams = serde_json::from_value(params.clone())
         .map_err(|e| RpcErr::from((-32602, format!("Invalid params: {e}"))))?;
 
-    if p.command.is_empty() {
-        return Err(RpcErr::from((-32602, "command must not be empty".into())));
-    }
-
     let metadata = p.metadata;
     let split_direction = match p.split_direction.as_deref() {
         Some("horizontal") => Some(crate::types::LayoutKind::Horizontal),
@@ -646,11 +642,27 @@ mod tests {
     }
 
     #[test]
-    fn dispatch_spawn_agent_rejects_empty_command() {
-        let tx = make_tx();
-        let input = r#"{"id":"1","method":"spawn_agent","params":{"command":[]}}"#;
-        let resp = dispatch_rpc(input, &tx).unwrap();
+    fn dispatch_spawn_agent_empty_command_spawns_shell() {
+        // Empty command is allowed — spawns a default shell pane
+        let (tx, rx) = std::sync::mpsc::channel();
+        let input = r#"{"id":"1","method":"spawn_agent","params":{"command":[],"wait_ready":false}}"#;
+        // dispatch_rpc sends BackendSpawnAgent to tx; it will block waiting
+        // for the server response. We just verify it doesn't return an error
+        // synchronously (the -32602 rejection is gone).
+        let handle = std::thread::spawn(move || dispatch_rpc(input, &tx));
+        // Read the CtrlReq from the channel to confirm it was sent
+        match rx.recv_timeout(std::time::Duration::from_secs(2)) {
+            Ok(crate::types::CtrlReq::BackendSpawnAgent { command, resp, .. }) => {
+                assert!(command.is_empty(), "command should be empty vec");
+                // Send back a fake pane ID so the dispatcher unblocks
+                let _ = resp.send("%99".to_string());
+            }
+            Ok(_) => panic!("Expected BackendSpawnAgent, got different CtrlReq"),
+            Err(e) => panic!("Channel recv failed: {e}"),
+        }
+        let resp = handle.join().unwrap().unwrap();
         let v: serde_json::Value = serde_json::from_str(&resp).unwrap();
-        assert_eq!(v["error"]["code"], -32602);
+        assert!(v["error"].is_null(), "should not be an error: {v}");
+        assert_eq!(v["result"]["context_id"], "%99");
     }
 }
