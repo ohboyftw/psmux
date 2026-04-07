@@ -174,9 +174,40 @@ Upstream added server-side control mode (2,594 lines). ohboy-builds has CustomPa
   - Blocked by: b9be26a inline styles port
   - Risk: Low
 
-### Tier 3: High-Impact Fixes (sync-2026-04-06-lynx)
+### Tier 3: High-Impact Fixes (sync-2026-04-07-mantis)
 
-_All Tier 1 and critical Tier 3 items from this sync are done._
+- [x] **Port zoom meta_dirty fix from `acb51b2`** `DONE`
+  - Status bar doesn't update `window_zoomed_flag` after zoom toggle
+  - 1-line fix: add `meta_dirty = true` to ZoomPane handler in server/mod.rs
+
+- [x] **Port run-shell absolute paths from `b9a6d88`** `DONE`
+  - `resolve_run_shell()` returns full paths via which::which() + SystemRoot/COMSPEC fallback
+
+- [x] **Port if-shell quote-aware parser from `b705280`** `N/A`
+  - ohboy-builds forwards if-shell to server via control port; no local execution path to fix
+
+### Tier 4: Fixes (sync-2026-04-07-mantis)
+
+- [ ] **Port resize direction fix from `a8e3852`** `TODO`
+  - Resize-pane moves border wrong direction when active pane is on bottom/right edge
+  - Swap resize logic for fallback path in `resize_pane_vertical`/`resize_pane_horizontal`
+  - Files: src/window_ops.rs (+18/-8), src/server/mod.rs (+1)
+  - Risk: Medium — resize logic sensitive
+  - Test: tests-rs/test_issue81_resize_direction.rs (NEW, 127 lines)
+
+- [ ] **Port split-window MRU pollution fix from `d8c4d01`** `TODO`
+  - `split-window -t` touches target pane's MRU rank, causing kill-pane to pick wrong next pane
+  - Remove split-window from is_focus_cmd, add `focus_pane_by_id_no_mru()`, prev-by-index fallback
+  - Files: src/pane.rs (+24/-2), src/server/connection.rs (+2/-4), src/server/mod.rs (+5/-1), src/tree.rs (+13/-2)
+  - Risk: Medium — pane lifecycle changes, 4 diverged files
+  - Test: tests/test_pane_mru.ps1 (NEW, 150 lines)
+
+- [ ] **Port Shift+Enter 4 bugs from `cfb71bc`** `TODO`
+  - Phantom CONTROL modifier, WezTerm Release-only, VT vs native injection split, phantom Release dedup
+  - Large refactor: 194 insertions across 4 diverged files
+  - Files: src/app.rs (+32), src/client.rs (+53), src/input.rs (+101/-46), src/platform.rs (+22/-2)
+  - Risk: High — input handling is the most sensitive subsystem
+  - Test: tests-rs/test_input.rs (+32)
 
 ### Tier 4: Interactive-Only Bug Fixes (sync-2026-04-06-lynx) — LOW PRIORITY
 
@@ -272,9 +303,12 @@ These are quality-of-life fixes for interactive tmux-compatible usage. They don'
 | run-shell popup output (`d895d4a`) | 2026-04-06 | Pre-existing in working tree |
 | bind-key new-window -c (`64ad68a`) | 2026-04-06 | Already fixed in ohboy-builds |
 | Clippy fixes (perform.rs, term.rs, window_ops.rs) | 2026-04-06 | Direct fix |
+| Zoom meta_dirty (`acb51b2`) | 2026-04-07 | Manual port — server/mod.rs |
+| Run-shell absolute paths (`b9a6d88`) | 2026-04-07 | Manual port — commands.rs |
 
 ## Won't Do
 
 | Item | Reason |
 |------|--------|
 | Options catalog `option_catalog.rs` from `3ffc570` | ohboy-builds uses `src/server/options.rs` with its own approach; upstream file deleted in ohboy-builds |
+| if-shell quote parser `b705280` | ohboy-builds forwards if-shell to server via control port; no local execute_command_string path to fix |

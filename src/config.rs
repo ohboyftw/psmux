@@ -1479,24 +1479,11 @@ fn parse_run_shell(app: &mut AppState, line: &str) {
     // Set PSMUX_TARGET_SESSION so child scripts connect to the correct server
     // (especially important when using -L socket namespaces like in tppanel preview).
     let target_session = app.port_file_base();
-    #[cfg(windows)]
-    {
-        let mut cmd = std::process::Command::new("pwsh");
-        cmd.args(["-NoProfile", "-Command", &shell_cmd]);
-        if !target_session.is_empty() {
-            cmd.env("PSMUX_TARGET_SESSION", &target_session);
-        }
-        let _ = cmd.spawn();
+    let mut cmd = crate::commands::build_run_shell_command(&shell_cmd);
+    if !target_session.is_empty() {
+        cmd.env("PSMUX_TARGET_SESSION", &target_session);
     }
-    #[cfg(not(windows))]
-    {
-        let mut cmd = std::process::Command::new("sh");
-        cmd.args(["-c", &shell_cmd]);
-        if !target_session.is_empty() {
-            cmd.env("PSMUX_TARGET_SESSION", &target_session);
-        }
-        let _ = cmd.spawn();
-    }
+    let _ = cmd.spawn();
 }
 
 /// Parse a `.tmux` entry script (bash) and extract tmux commands from it.
@@ -1763,7 +1750,8 @@ fn parse_if_shell(app: &mut AppState, line: &str) {
     let false_cmd = positional.get(2);
 
     let success = if format_mode {
-        !condition.is_empty() && condition != "0"
+        let expanded = crate::format::expand_format(condition, app);
+        !expanded.is_empty() && expanded != "0"
     } else if condition == "true" || condition == "1" {
         true
     } else if condition == "false" || condition == "0" {

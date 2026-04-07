@@ -2143,14 +2143,12 @@ pub(crate) fn handle_connection(
                 let shell_cmd = crate::util::expand_run_shell_path(&shell_cmd);
                 if !shell_cmd.is_empty() {
                     if background {
-                        let _ = std::process::Command::new("pwsh")
-                            .args(["-NoProfile", "-Command", &shell_cmd])
-                            .spawn();
+                        let mut c = crate::commands::build_run_shell_command(&shell_cmd);
+                        let _ = c.spawn();
                     } else {
-                        let output = std::process::Command::new("pwsh")
-                            .args(["-NoProfile", "-Command", &shell_cmd])
-                            .output();
-                        if let Ok(out) = output {
+                        let mut c = crate::commands::build_run_shell_command(&shell_cmd);
+                        let result = c.output();
+                        if let Ok(out) = result {
                             let text = String::from_utf8_lossy(&out.stdout);
                             if !text.is_empty() {
                                 let _ = write!(write_stream, "{}", text);
@@ -2175,7 +2173,10 @@ pub(crate) fn handle_connection(
                     let true_cmd = positional[1];
                     let false_cmd = positional.get(2).copied();
                     let success = if format_mode {
-                        !condition.is_empty() && condition != "0"
+                        let (rtx, rrx) = std::sync::mpsc::channel::<String>();
+                        let _ = tx.send(CtrlReq::DisplayMessage(rtx, condition.to_string(), None, false));
+                        let expanded = rrx.recv().unwrap_or_default();
+                        !expanded.is_empty() && expanded != "0"
                     } else if condition == "true" || condition == "1" {
                         true
                     } else if condition == "false" || condition == "0" {

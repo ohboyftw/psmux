@@ -1557,6 +1557,29 @@ pub fn run(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> io::Result<
             }
         }
 
+        // Drain async run-shell results (non-blocking).
+        // Commands spawned by execute_command_string send output here
+        // when they finish, so the UI is never blocked.
+        if let Some(rx) = app.run_shell_rx.as_ref() {
+            while let Ok((title, text)) = rx.try_recv() {
+                if !text.is_empty() {
+                    let lines: Vec<&str> = text.lines().collect();
+                    let width = lines.iter().map(|l| l.len()).max().unwrap_or(40).max(20) as u16 + 4;
+                    let height = (lines.len() as u16 + 2).max(5);
+                    app.mode = Mode::PopupMode {
+                        command: title,
+                        output: text,
+                        process: None,
+                        width: width.min(120),
+                        height,
+                        close_on_exit: false,
+                        popup_pane: None,
+                        scroll_offset: 0,
+                    };
+                }
+            }
+        }
+
         // Throttle reap_children to ~500ms to avoid O(N_panes) try_wait()
         // syscalls on every 20ms frame. With hundreds of panes this saves
         // significant CPU and reduces event-loop latency for command processing.

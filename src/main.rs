@@ -2261,24 +2261,16 @@ fn run_main() -> io::Result<()> {
                 i += 1;
             }
             let shell_cmd = crate::util::expand_run_shell_path(&cmd_to_run.join(" "));
-            // Run the command using the system shell
+            // Run the command using the resolved shell
             if background {
-                #[cfg(windows)]
-                {
-                    let _ = std::process::Command::new("pwsh")
-                        .args(["-NoProfile", "-Command", &shell_cmd])
-                        .spawn();
-                }
+                let mut c = crate::commands::build_run_shell_command(&shell_cmd);
+                let _ = c.spawn();
             } else {
-                #[cfg(windows)]
-                {
-                    let output = std::process::Command::new("pwsh")
-                        .args(["-NoProfile", "-Command", &shell_cmd])
-                        .output()?;
-                    io::stdout().write_all(&output.stdout)?;
-                    io::stderr().write_all(&output.stderr)?;
-                    std::process::exit(output.status.code().unwrap_or(0));
-                }
+                let mut c = crate::commands::build_run_shell_command(&shell_cmd);
+                let output = c.output()?;
+                io::stdout().write_all(&output.stdout)?;
+                io::stderr().write_all(&output.stderr)?;
+                std::process::exit(output.status.code().unwrap_or(0));
             }
             return Ok(());
         }
@@ -2619,8 +2611,11 @@ fn run_main() -> io::Result<()> {
                 }
 
                 let success = if format_mode {
-                    // Treat condition as format string - non-empty and non-zero is true
-                    !cond.is_empty() && cond != "0"
+                    // Expand format string via server before evaluating
+                    let fmt_cmd = format!("display-message -p {}\n", crate::util::quote_arg(&cond));
+                    let expanded = send_control_with_response(fmt_cmd).unwrap_or_default();
+                    let expanded = expanded.trim_end_matches('\n');
+                    !expanded.is_empty() && expanded != "0"
                 } else if cond == "true" || cond == "1" {
                     true
                 } else if cond == "false" || cond == "0" {

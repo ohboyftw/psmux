@@ -2110,3 +2110,162 @@ fn respawn_pane_without_port_does_not_crash() {
     execute_command_string(&mut app, "respawn-pane").unwrap();
     execute_command_string(&mut app, "respawnp").unwrap();
 }
+
+// ════════════════════════════════════════════════════════════════════════════
+//  Issue #170: run-shell output display
+// ════════════════════════════════════════════════════════════════════════════
+
+#[test]
+fn run_shell_captures_and_displays_output() {
+    let mut app = mock_app();
+    // Use a simple echo command that produces stdout
+    #[cfg(windows)]
+    let cmd = r#"run-shell "Write-Output 'hello-from-run-shell'""#;
+    #[cfg(not(windows))]
+    let cmd = r#"run-shell "echo hello-from-run-shell""#;
+
+    let _ = execute_command_string(&mut app, cmd);
+
+    // run-shell is now async: the command runs in a background thread
+    // and sends output via run_shell_rx. We need to recv the result.
+    let rx = app.run_shell_rx.as_ref().expect("run_shell_rx should be created");
+    let (title, text) = rx.recv_timeout(std::time::Duration::from_secs(10))
+        .expect("should receive run-shell output within 10s");
+    assert_eq!(title, "run-shell");
+    assert!(
+        text.contains("hello-from-run-shell"),
+        "run-shell output should contain the echoed text, got: {}",
+        text
+    );
+}
+
+#[test]
+fn run_shell_background_does_not_show_popup() {
+    let mut app = mock_app();
+    // With -b flag: should NOT enter PopupMode
+    #[cfg(windows)]
+    let cmd = r#"run-shell -b "Write-Output 'background-test'""#;
+    #[cfg(not(windows))]
+    let cmd = r#"run-shell -b "echo background-test""#;
+
+    let _ = execute_command_string(&mut app, cmd);
+
+    assert!(
+        !matches!(app.mode, Mode::PopupMode { .. }),
+        "run-shell -b should NOT produce a popup, mode = {:?}",
+        std::mem::discriminant(&app.mode)
+    );
+}
+
+#[test]
+fn run_shell_alias_captures_output() {
+    let mut app = mock_app();
+    // "run" is the short alias for "run-shell"
+    #[cfg(windows)]
+    let cmd = r#"run "Write-Output 'alias-test'""#;
+    #[cfg(not(windows))]
+    let cmd = r#"run "echo alias-test""#;
+
+    let _ = execute_command_string(&mut app, cmd);
+
+    let rx = app.run_shell_rx.as_ref().expect("run_shell_rx should be created");
+    let (_title, text) = rx.recv_timeout(std::time::Duration::from_secs(10))
+        .expect("should receive run alias output within 10s");
+    assert!(
+        text.contains("alias-test"),
+        "run alias should also capture output, got: {}",
+        text
+    );
+}
+
+#[test]
+fn run_shell_stderr_is_captured() {
+    let mut app = mock_app();
+    // Use a command that writes to stderr
+    #[cfg(windows)]
+    let cmd = r#"run-shell "Write-Error 'error-output' 2>&1""#;
+    #[cfg(not(windows))]
+    let cmd = r#"run-shell "echo error-output >&2""#;
+
+    let _ = execute_command_string(&mut app, cmd);
+
+    let rx = app.run_shell_rx.as_ref().expect("run_shell_rx should be created");
+    let (_title, text) = rx.recv_timeout(std::time::Duration::from_secs(10))
+        .expect("should receive run-shell stderr output within 10s");
+    assert!(
+        text.contains("error-output") || text.contains("error"),
+        "run-shell should capture stderr, got: {}",
+        text
+    );
+}
+
+#[test]
+fn run_shell_empty_output_no_popup() {
+    let mut app = mock_app();
+    // A command that produces no output should not show a popup
+    #[cfg(windows)]
+    let cmd = r#"run-shell "Write-Output ''""#;
+    #[cfg(not(windows))]
+    let cmd = r#"run-shell "true""#;
+
+    let _ = execute_command_string(&mut app, cmd);
+
+    // run-shell is now async: mode is not changed synchronously.
+    // The result arrives via run_shell_rx channel.
+    let rx = app.run_shell_rx.as_ref().expect("run_shell_rx should be created");
+    let (_title, text) = rx.recv_timeout(std::time::Duration::from_secs(10))
+        .expect("should receive run-shell output within 10s");
+    // On Unix, `true` produces no output; on Windows, Write-Output '' produces a newline.
+    // The app.rs/server drain code skips empty text, so no popup would be created.
+    #[cfg(not(windows))]
+    assert!(
+        text.is_empty(),
+        "run-shell with no output should produce empty text, got: {}",
+        text
+    );
+}
+
+// ── Issue #111 follow-up: new-window -c must preserve -c flag in bind-key ──
+
+#[test]
+fn new_window_bare_returns_action_new_window() {
+    // Bare new-window with no args should still return the simple Action::NewWindow
+    assert!(matches!(parse_command_to_action("new-window"), Some(Action::NewWindow)));
+    assert!(matches!(parse_command_to_action("neww"), Some(Action::NewWindow)));
+}
+
+#[test]
+fn new_window_with_c_flag_returns_command_preserving_args() {
+    // new-window -c <dir> must NOT be reduced to Action::NewWindow — the -c flag
+    // must be preserved so the server can expand #{pane_current_path}. (Issue #111)
+    match parse_command_to_action("new-window -c #{pane_current_path}") {
+        Some(Action::Command(cmd)) => {
+            assert!(cmd.contains("-c"), "expected -c in command, got: {}", cmd);
+            assert!(cmd.contains("#{pane_current_path}"), "expected format var in command, got: {}", cmd);
+        }
+        _ => panic!("expected Action::Command preserving -c"),
+    }
+}
+
+#[test]
+fn new_window_with_name_flag_returns_command() {
+    // new-window -n myname should also be preserved as Command
+    match parse_command_to_action("new-window -n myname") {
+        Some(Action::Command(cmd)) => {
+            assert!(cmd.contains("-n"), "expected -n in command, got: {}", cmd);
+            assert!(cmd.contains("myname"), "expected window name in command, got: {}", cmd);
+        }
+        _ => panic!("expected Action::Command"),
+    }
+}
+
+#[test]
+fn new_window_with_shell_command_returns_command() {
+    // new-window -- python3 should also be preserved
+    match parse_command_to_action("new-window -- python3") {
+        Some(Action::Command(cmd)) => {
+            assert!(cmd.contains("python3"), "expected shell command in command, got: {}", cmd);
+        }
+        _ => panic!("expected Action::Command"),
+    }
+}

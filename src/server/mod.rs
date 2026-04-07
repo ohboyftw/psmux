@@ -1948,6 +1948,7 @@ pub fn run_server(
                         }
                         CtrlReq::ZoomPane => {
                             toggle_zoom(&mut app);
+                            meta_dirty = true;
                             hook_event = Some("after-resize-pane");
                         }
                         CtrlReq::PrefixBegin => {

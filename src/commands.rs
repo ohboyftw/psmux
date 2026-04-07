@@ -24,6 +24,104 @@ pub(crate) fn parse_popup_dim_local(spec: &str, term_dim: u16, default: u16) -> 
     }
 }
 
+/// Resolve the default shell binary and its arguments for run-shell invocations.
+///
+/// Returns `(program, args)` where `args` is typically `["-NoProfile", "-Command"]`
+/// on Windows (pwsh/powershell) or `["-c"]` on Unix (sh).
+pub fn resolve_run_shell() -> (String, Vec<String>) {
+    #[cfg(windows)]
+    {
+        use std::path::PathBuf;
+        if let Ok(path) = which::which("pwsh") {
+            return (path.to_string_lossy().into_owned(), vec!["-NoProfile".to_string(), "-Command".to_string()]);
+        }
+        if let Ok(path) = which::which("powershell") {
+            return (path.to_string_lossy().into_owned(), vec!["-NoProfile".to_string(), "-Command".to_string()]);
+        }
+        if let Ok(system_root) = std::env::var("SystemRoot").or_else(|_| std::env::var("SYSTEMROOT")) {
+            let powershell = PathBuf::from(&system_root)
+                .join("System32")
+                .join("WindowsPowerShell")
+                .join("v1.0")
+                .join("powershell.exe");
+            if powershell.is_file() {
+                return (powershell.to_string_lossy().into_owned(), vec!["-NoProfile".to_string(), "-Command".to_string()]);
+            }
+            let cmd = PathBuf::from(&system_root).join("System32").join("cmd.exe");
+            if cmd.is_file() {
+                return (cmd.to_string_lossy().into_owned(), vec!["/c".to_string()]);
+            }
+        }
+        if let Ok(comspec) = std::env::var("ComSpec").or_else(|_| std::env::var("COMSPEC")) {
+            let trimmed = comspec.trim();
+            if !trimmed.is_empty() {
+                return (trimmed.to_string(), vec!["/c".to_string()]);
+            }
+        }
+        ("cmd".to_string(), vec!["/c".to_string()])
+    }
+    #[cfg(not(windows))]
+    {
+        ("sh".to_string(), vec!["-c".to_string()])
+    }
+}
+
+/// Build a `std::process::Command` for a run-shell invocation.
+///
+/// Avoids double-wrapping when the command already starts with a shell binary
+/// (e.g., `pwsh -NoProfile -File script.ps1`). Also detects bare `.ps1` file
+/// paths and uses `-File` instead of `-Command` for reliable path handling.
+pub fn build_run_shell_command(shell_cmd: &str) -> std::process::Command {
+    #[cfg(windows)]
+    {
+        let lower = shell_cmd.trim_start().to_lowercase();
+
+        // Case 1: Command already starts with a shell binary (pwsh, powershell, cmd).
+        // Run it directly to avoid nesting `pwsh -Command "pwsh -File ..."`.
+        if lower.starts_with("pwsh ") || lower.starts_with("pwsh.exe ")
+            || lower.starts_with("powershell ") || lower.starts_with("powershell.exe ")
+            || lower.starts_with("cmd ") || lower.starts_with("cmd.exe ")
+        {
+            let parts = parse_command_line(shell_cmd);
+            if parts.len() >= 2 {
+                let mut c = std::process::Command::new(&parts[0]);
+                for p in &parts[1..] { c.arg(p); }
+                return c;
+            }
+        }
+
+        // Case 2: Bare .ps1 file path (possibly with arguments after the path).
+        // Use `-File` which handles paths with spaces correctly.
+        let trimmed = shell_cmd.trim();
+        let first_token = trimmed.split_whitespace().next().unwrap_or("");
+        let first_unquoted = first_token.trim_matches('"').trim_matches('\'');
+        if first_unquoted.ends_with(".ps1") && std::path::Path::new(first_unquoted).exists() {
+            let shell = if which::which("pwsh").is_ok() { "pwsh" } else { "powershell" };
+            let mut c = std::process::Command::new(shell);
+            c.args(["-NoProfile", "-ExecutionPolicy", "Bypass", "-File"]);
+            // Split remaining args so the .ps1 path and its arguments are separate args
+            let parts = parse_command_line(trimmed);
+            for p in &parts { c.arg(p); }
+            return c;
+        }
+
+        // Case 3: Regular command string. Wrap in shell.
+        let (shell_prog, shell_args) = resolve_run_shell();
+        let mut c = std::process::Command::new(&shell_prog);
+        for a in &shell_args { c.arg(a); }
+        c.arg(shell_cmd);
+        c
+    }
+    #[cfg(not(windows))]
+    {
+        let (shell_prog, shell_args) = resolve_run_shell();
+        let mut c = std::process::Command::new(&shell_prog);
+        for a in &shell_args { c.arg(a); }
+        c.arg(shell_cmd);
+        c
+    }
+}
+
 /// Show text output in a popup overlay (used by list-* commands inside a session).
 fn show_output_popup(app: &mut AppState, title: &str, output: String) {
     let lines: Vec<&str> = output.lines().collect();
@@ -148,7 +246,16 @@ pub fn parse_command_to_action(cmd: &str) -> Option<Action> {
 
     match parts[0] {
         "display-panes" | "displayp" => Some(Action::DisplayPanes),
-        "new-window" | "neww" => Some(Action::NewWindow),
+        "new-window" | "neww" => {
+            // If extra flags like -c, -d, -n, -F, -e or a shell command are present,
+            // store as Command to preserve the full argument string (esp. -c for start dir).
+            let has_extra = parts.len() > 1;
+            if has_extra {
+                Some(Action::Command(cmd.to_string()))
+            } else {
+                Some(Action::NewWindow)
+            }
+        }
         "split-window" | "splitw" => {
             // If extra flags like -c, -d, -p, -F, or a shell command are present,
             // store as Command to preserve the full argument string.
@@ -1302,11 +1409,10 @@ pub fn execute_command_string(app: &mut AppState, cmd: &str) -> io::Result<()> {
             // Parse with quote-aware parser to handle nested quotes properly
             let args = parse_command_line(cmd);
             let mut cmd_parts: Vec<&str> = Vec::new();
+            let mut background = false;
             for arg in &args[1..] {
-                if arg == "-b" { /* always spawn non-blocking */
-                } else {
-                    cmd_parts.push(arg);
-                }
+                if arg == "-b" { background = true; }
+                else { cmd_parts.push(arg); }
             }
             let shell_cmd = cmd_parts.join(" ");
             if !shell_cmd.is_empty() {
@@ -1314,23 +1420,58 @@ pub fn execute_command_string(app: &mut AppState, cmd: &str) -> io::Result<()> {
                 let shell_cmd = crate::util::expand_run_shell_path(&shell_cmd);
                 // Set PSMUX_TARGET_SESSION so child scripts connect to the correct server
                 let target_session = app.port_file_base();
-                #[cfg(windows)]
-                {
-                    let mut c = std::process::Command::new("pwsh");
-                    c.args(["-NoProfile", "-Command", &shell_cmd]);
+
+                if background {
+                    // -b flag: fire and forget, no output capture
+                    let mut c = build_run_shell_command(&shell_cmd);
                     if !target_session.is_empty() {
                         c.env("PSMUX_TARGET_SESSION", &target_session);
                     }
                     let _ = c.spawn();
-                }
-                #[cfg(not(windows))]
-                {
-                    let mut c = std::process::Command::new("sh");
-                    c.args(["-c", &shell_cmd]);
-                    if !target_session.is_empty() {
-                        c.env("PSMUX_TARGET_SESSION", &target_session);
+                } else {
+                    // No -b: spawn async to avoid blocking the UI thread.
+                    // Interactive commands (htop, vim, etc.) would freeze psmux
+                    // if we used synchronous .output() on the main thread.
+                    // Lazily create the channel pair on first use.
+                    if app.run_shell_tx.is_none() {
+                        let (tx, rx) = std::sync::mpsc::channel();
+                        app.run_shell_tx = Some(tx);
+                        app.run_shell_rx = Some(rx);
                     }
-                    let _ = c.spawn();
+                    let tx = app.run_shell_tx.as_ref().unwrap().clone();
+                    let shell_cmd = shell_cmd.clone();
+                    let shell_cmd_display = shell_cmd.clone();
+                    let target_session = target_session.clone();
+                    std::thread::spawn(move || {
+                        let mut c = build_run_shell_command(&shell_cmd);
+                        if !target_session.is_empty() {
+                            c.env("PSMUX_TARGET_SESSION", &target_session);
+                        }
+                        // Detach stdin so interactive programs exit immediately
+                        c.stdin(std::process::Stdio::null());
+                        match c.output() {
+                            Ok(output) => {
+                                let mut text = String::from_utf8_lossy(&output.stdout).into_owned();
+                                let stderr = String::from_utf8_lossy(&output.stderr);
+                                if !stderr.is_empty() {
+                                    if !text.is_empty() && !text.ends_with('\n') {
+                                        text.push('\n');
+                                    }
+                                    text.push_str(&stderr);
+                                }
+                                // Send result back; empty output is also sent so
+                                // the status message "running..." can be cleared.
+                                let _ = tx.send(("run-shell".to_string(), text));
+                            }
+                            Err(e) => {
+                                let _ = tx.send(("run-shell".to_string(), format!("run-shell: {}", e)));
+                            }
+                        }
+                    });
+                    app.status_message = Some((
+                        format!("running: {}", shell_cmd_display),
+                        Instant::now(),
+                    ));
                 }
             }
         }
