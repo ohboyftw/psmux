@@ -121,6 +121,12 @@ pub struct KillParams {
 }
 
 #[derive(Debug, Deserialize)]
+pub struct SetMetadataParams {
+    pub context_id: String,
+    pub metadata: AgentMetadata,
+}
+
+#[derive(Debug, Deserialize)]
 pub struct KillAllParams {
     pub role: Option<String>,
 }

@@ -5169,6 +5169,31 @@ pub fn run_server(
                             }
                             let _ = resp.send(killed_ids);
                         }
+                        CtrlReq::BackendSetMetadata {
+                            pane_id,
+                            metadata,
+                            resp,
+                        } => {
+                            let id = pane_id
+                                .strip_prefix('%')
+                                .and_then(|s| s.parse::<usize>().ok());
+                            let mut found = false;
+                            if let Some(pid) = id {
+                                for win in &mut app.windows {
+                                    if let Some(path) = crate::tree::find_path_by_id(&win.root, pid) {
+                                        if let Some(p) = crate::tree::active_pane_mut(&mut win.root, &path) {
+                                            metadata.apply_to(&mut p.metadata);
+                                            found = true;
+                                        }
+                                        break;
+                                    }
+                                }
+                                if found {
+                                    meta_dirty = true;
+                                }
+                            }
+                            let _ = resp.send(found);
+                        }
                         CtrlReq::BackendSendText {
                             pane_id,
                             text,

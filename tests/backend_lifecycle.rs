@@ -150,6 +150,19 @@ fn test_dispatch_spawn_agent_empty_command_spawns_shell() {
 }
 
 #[test]
+fn test_dispatch_set_metadata() {
+    let tx = make_mock_server();
+    let input = r#"{"id":"10","method":"set_metadata","params":{"context_id":"%1","metadata":{"name":"coder","color":"blue","role":"agent"}}}"#;
+
+    let response = psmux::backend::dispatcher::dispatch_rpc(input, &tx);
+    assert!(response.is_some());
+
+    let parsed: serde_json::Value = serde_json::from_str(&response.unwrap()).unwrap();
+    assert_eq!(parsed["id"], "10");
+    assert!(parsed["result"].is_object(), "expected success, got: {parsed}");
+}
+
+#[test]
 fn test_dispatch_preserves_request_id() {
     let tx = make_mock_server();
 

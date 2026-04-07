@@ -1235,6 +1235,12 @@ pub enum CtrlReq {
         text: String,
         resp: Option<mpsc::Sender<bool>>,
     },
+    /// Backend `set_metadata` — update metadata on an existing pane.
+    BackendSetMetadata {
+        pane_id: String,
+        metadata: crate::backend::protocol::AgentMetadata,
+        resp: mpsc::Sender<bool>,
+    },
     /// Backend `run_shell` — resolve pane cwd for server-side command execution.
     /// Returns the pane's spawn-time cwd (or None if no context_id / pane not found).
     BackendRunShell {

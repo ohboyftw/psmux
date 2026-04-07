@@ -28,6 +28,9 @@ pub fn make_mock_server() -> mpsc::Sender<psmux::types::CtrlReq> {
                 psmux::types::CtrlReq::BackendKillAll { resp, .. } => {
                     let _ = resp.send(vec!["%1".to_string(), "%2".to_string()]);
                 }
+                psmux::types::CtrlReq::BackendSetMetadata { resp, .. } => {
+                    let _ = resp.send(true);
+                }
                 psmux::types::CtrlReq::BackendSendText { resp, .. } => {
                     if let Some(tx) = resp {
                         let _ = tx.send(true);

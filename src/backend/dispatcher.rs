@@ -57,6 +57,7 @@ pub fn dispatch_rpc(line: &str, tx: &mpsc::Sender<CtrlReq>) -> Option<String> {
         "capture" => handle_capture(&req.params, tx),
         "kill" => handle_kill(&req.params, tx),
         "kill_all" => handle_kill_all(&req.params, tx),
+        "set_metadata" => handle_set_metadata(&req.params, tx),
         "list" => handle_list(&req.params, tx),
         "run_shell" => handle_run_shell(&req.params, tx),
         _ => Err(RpcErr::from((
@@ -458,6 +459,33 @@ fn handle_kill_all(
 
     let result = KillAllResult { killed };
     serde_json::to_value(result).map_err(|e| RpcErr::from((-32603, format!("Internal error: {e}"))))
+}
+
+/// Handle `set_metadata` — update metadata on an existing pane.
+fn handle_set_metadata(
+    params: &serde_json::Value,
+    tx: &mpsc::Sender<CtrlReq>,
+) -> Result<serde_json::Value, RpcErr> {
+    let p: SetMetadataParams = serde_json::from_value(params.clone())
+        .map_err(|e| RpcErr::from((-32602, format!("Invalid params: {e}"))))?;
+
+    let (resp_tx, resp_rx) = mpsc::channel();
+    tx.send(CtrlReq::BackendSetMetadata {
+        pane_id: p.context_id.clone(),
+        metadata: p.metadata,
+        resp: resp_tx,
+    })
+    .map_err(|_| RpcErr::from((-32603, "Server channel closed".to_string())))?;
+
+    let found = resp_rx
+        .recv_timeout(std::time::Duration::from_secs(5))
+        .map_err(|_| RpcErr::from((-32603, "Server response timeout".to_string())))?;
+
+    if !found {
+        return Err(RpcErr::from((PANE_NOT_FOUND, format!("Pane {} not found", p.context_id))));
+    }
+
+    Ok(serde_json::json!({}))
 }
 
 /// Handle `list` — return all active contexts.
