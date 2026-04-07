@@ -3692,7 +3692,8 @@ fn run_main() -> io::Result<()> {
         EnterAlternateScreen,
         EnableBlinking,
         EnableMouseCapture,
-        EnableBracketedPaste
+        EnableBracketedPaste,
+        crossterm::event::EnableFocusChange
     )?;
     apply_cursor_style(&mut stdout)?;
     let backend = CrosstermBackend::new(stdout);
@@ -3749,6 +3750,7 @@ fn run_main() -> io::Result<()> {
         DisableBlinking,
         DisableMouseCapture,
         DisableBracketedPaste,
+        crossterm::event::DisableFocusChange,
         LeaveAlternateScreen
     );
     let _ = terminal.show_cursor();

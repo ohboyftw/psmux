@@ -38,6 +38,14 @@ path = "tests-rs/test_boundary_contracts.rs"
 name = "test_feature_contracts"
 path = "tests-rs/test_feature_contracts.rs"
 
+[[test]]
+name = "memory_leak_detector"
+path = "tests-rs/memory_leak_detector.rs"
+
+[[test]]
+name = "cpu_runoff_detector"
+path = "tests-rs/cpu_runoff_detector.rs"
+
 # Windows only
 [target.'cfg(not(windows))'.dependencies]
 [target.'cfg(windows)'.dependencies]

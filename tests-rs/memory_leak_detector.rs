@@ -44,8 +44,16 @@ fn psmux_output(args: &[&str]) -> String {
 }
 
 fn cleanup() {
-    let _ = psmux(&["kill-server"]);
-    std::thread::sleep(Duration::from_secs(1));
+    // Kill only test sessions, NOT the server — avoids destroying user's real sessions
+    for prefix in &["baseline", "leak-sess-", "pane-leak", "flood-leak", "lifecycle-anchor", "life-", "renamed-", "copy-flood"] {
+        let output = psmux_output(&["list-sessions", "-F", "#{session_name}"]);
+        for line in output.lines() {
+            if line.starts_with(prefix) {
+                let _ = psmux(&["kill-session", "-t", line]);
+            }
+        }
+    }
+    std::thread::sleep(Duration::from_millis(500));
 }
 
 /// Get RSS of the psmux server process in KB.
@@ -307,4 +315,98 @@ fn leak_test_full_lifecycle_stress() {
     result.report();
     cleanup();
     assert!(result.passed, "Lifecycle leak: {delta}KB after {cycles} full cycles");
+}
+
+/// Reproduces reported 11GB memory leak: flood output into a pane, then enter
+/// copy mode and scroll up/down repeatedly while output continues flowing.
+/// The reader thread keeps feeding the parser while copy mode serializes the
+/// scrollback — this is the exact scenario that triggers the leak.
+#[test]
+fn leak_test_copy_mode_scroll_during_flood() {
+    cleanup();
+
+    psmux(&["new-session", "-d", "-s", "copy-flood"]);
+    std::thread::sleep(Duration::from_secs(2));
+
+    // Fill the scrollback buffer with output
+    #[cfg(windows)]
+    psmux(&["send-keys", "-t", "copy-flood",
+        "cmd /c \"for /L %i in (1,1,999999) do @echo LINE_%i_########################################\"",
+        "Enter"]);
+    #[cfg(not(windows))]
+    psmux(&["send-keys", "-t", "copy-flood", "yes 'LINE_########################################'", "Enter"]);
+
+    // Let output accumulate for 10 seconds
+    std::thread::sleep(Duration::from_secs(10));
+
+    let baseline = get_server_rss_kb().unwrap_or(0);
+    eprintln!("[INFO] copy_mode_scroll_flood: baseline RSS = {baseline}KB (after 10s flood)");
+
+    // Enter copy mode (Ctrl-b [)
+    psmux(&["send-keys", "-t", "copy-flood", "C-b", "["]);
+    std::thread::sleep(Duration::from_millis(500));
+
+    // Repeatedly scroll up and down for 30 seconds while output keeps flowing
+    let scroll_start = Instant::now();
+    let mut scroll_cycles = 0u32;
+    let mut rss_samples: Vec<(u64, u64)> = Vec::new();
+
+    while scroll_start.elapsed() < Duration::from_secs(30) {
+        // Page up 5 times
+        for _ in 0..5 {
+            psmux(&["send-keys", "-t", "copy-flood", "C-u", ""]);
+        }
+        std::thread::sleep(Duration::from_millis(200));
+
+        // Page down 3 times
+        for _ in 0..3 {
+            psmux(&["send-keys", "-t", "copy-flood", "C-d", ""]);
+        }
+        std::thread::sleep(Duration::from_millis(200));
+
+        scroll_cycles += 1;
+
+        // Sample RSS every cycle
+        if let Some(rss) = get_server_rss_kb() {
+            rss_samples.push((scroll_start.elapsed().as_millis() as u64, rss));
+        }
+    }
+
+    // Exit copy mode
+    psmux(&["send-keys", "-t", "copy-flood", "q", ""]);
+    std::thread::sleep(Duration::from_millis(500));
+
+    // Stop the flood
+    psmux(&["send-keys", "-t", "copy-flood", "C-c", ""]);
+    std::thread::sleep(Duration::from_secs(POST_STRESS_COOLDOWN_S));
+
+    let final_rss = get_server_rss_kb().unwrap_or(0);
+    let delta = final_rss as i64 - baseline as i64;
+    let rate = rss_growth_rate(&rss_samples);
+    let rate_kb_per_sec = rate * 1000.0;
+
+    eprintln!(
+        "[{}] copy_mode_scroll_flood: baseline={baseline}KB final={final_rss}KB \
+         delta={delta:+}KB rate={rate_kb_per_sec:.2}KB/s scroll_cycles={scroll_cycles}",
+        if delta < (LEAK_THRESHOLD_KB as i64 * 10) { "PASS" } else { "FAIL" },
+    );
+
+    // Print RSS timeline
+    eprintln!("  RSS timeline:");
+    for s in rss_samples.iter().take(5) {
+        eprintln!("    t={:6}ms rss={}KB", s.0, s.1);
+    }
+    if rss_samples.len() > 10 {
+        eprintln!("    ...");
+        for s in rss_samples.iter().rev().take(5).rev() {
+            eprintln!("    t={:6}ms rss={}KB", s.0, s.1);
+        }
+    }
+
+    cleanup();
+    // Allow 50MB growth (10x normal threshold) since we're flooding + scrolling simultaneously
+    assert!(
+        delta < (LEAK_THRESHOLD_KB as i64 * 10),
+        "Copy mode scroll leak: {delta}KB growth over {scroll_cycles} scroll cycles ({rate_kb_per_sec:.1}KB/s)"
+    );
 }

@@ -396,6 +396,10 @@ pub fn run_remote(
     let mut status_fg: Color = Color::Black;
     let mut status_bg: Color = Color::Green;
     let mut status_bold: bool = false;
+    let mut unfocused_status_fg: Option<Color> = None;
+    let mut unfocused_status_bg: Option<Color> = None;
+    let mut unfocused_status_bold: bool = false;
+    let mut window_focused: bool = true;
     let mut custom_status_left: Option<String> = None;
     let mut custom_status_right: Option<String> = None;
     let mut pane_border_fg: Color = Color::DarkGray;
@@ -623,6 +627,9 @@ pub fn run_remote(
         /// Whether a pane is currently zoomed (borders should be hidden)
         #[serde(default)]
         zoomed: bool,
+        /// status-unfocused-style: applied when terminal window loses OS focus
+        #[serde(default)]
+        status_unfocused_style: Option<String>,
         /// Whether synchronize-panes is active (input broadcast to all panes)
         #[serde(default)]
         sync_input: bool,
@@ -2597,9 +2604,11 @@ pub fn run_remote(
                         }
                     }
                     Event::FocusGained => {
+                        window_focused = true;
                         cmd_batch.push("focus-in\n".into());
                     }
                     Event::FocusLost => {
+                        window_focused = false;
                         cmd_batch.push("focus-out\n".into());
                     }
                     _ => {}
@@ -2913,6 +2922,15 @@ pub fn run_remote(
                 status_fg = fg.unwrap_or(Color::Black);
                 status_bg = bg.unwrap_or(Color::Green);
                 status_bold = bold;
+            }
+        }
+        // Update status-unfocused-style
+        if let Some(ref sus) = state.status_unfocused_style {
+            if !sus.is_empty() {
+                let (fg, bg, bold) = parse_tmux_style_components(sus);
+                unfocused_status_fg = fg;
+                unfocused_status_bg = bg;
+                unfocused_status_bold = bold;
             }
         }
 
@@ -3593,9 +3611,16 @@ pub fn run_remote(
                     }
                 }
             }
-            let sb_fg = status_fg;
-            let sb_bg = status_bg;
-            let sb_base = if status_bold {
+            let (sb_fg, sb_bg, sb_bold) = if !window_focused && (unfocused_status_fg.is_some() || unfocused_status_bg.is_some()) {
+                (
+                    unfocused_status_fg.unwrap_or(status_fg),
+                    unfocused_status_bg.unwrap_or(status_bg),
+                    unfocused_status_bold,
+                )
+            } else {
+                (status_fg, status_bg, status_bold)
+            };
+            let sb_base = if sb_bold {
                 Style::default().fg(sb_fg).bg(sb_bg).add_modifier(Modifier::BOLD)
             } else {
                 Style::default().fg(sb_fg).bg(sb_bg)
