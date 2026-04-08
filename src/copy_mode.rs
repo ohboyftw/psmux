@@ -42,12 +42,41 @@ pub fn enter_copy_mode(app: &mut AppState) {
     app.copy_count = None;
     // Mark the active pane as being in copy mode (pane-local state).
     save_copy_state_to_pane(app);
+
+    if crate::debug_log::memory_log_enabled() {
+        let mem = crate::debug_log::process_memory_bytes();
+        let (receivers, frames, bytes) = crate::types::frame_push_stats();
+        crate::debug_log::memory_log(
+            "copy",
+            &format!(
+                "ENTER copy_mode: process_mem={} frame_receivers={} total_frames={} total_frame_bytes={}",
+                crate::debug_log::format_bytes(mem),
+                receivers, frames,
+                crate::debug_log::format_bytes(bytes),
+            ),
+        );
+    }
 }
 
 /// Exit copy mode: reset all copy state and scroll the active pane back to
 /// live output.  Every copy-mode exit path should call this to avoid leaving
 /// a pane scrolled while no longer in copy mode (fixes #43).
 pub fn exit_copy_mode(app: &mut AppState) {
+    if crate::debug_log::memory_log_enabled() {
+        let mem = crate::debug_log::process_memory_bytes();
+        let (receivers, frames, bytes) = crate::types::frame_push_stats();
+        crate::debug_log::memory_log(
+            "copy",
+            &format!(
+                "EXIT copy_mode: scroll_offset={} process_mem={} frame_receivers={} total_frames={} total_frame_bytes={}",
+                app.copy_scroll_offset,
+                crate::debug_log::format_bytes(mem),
+                receivers, frames,
+                crate::debug_log::format_bytes(bytes),
+            ),
+        );
+    }
+
     app.mode = Mode::Passthrough;
     app.copy_anchor = None;
     app.copy_pos = None;
@@ -535,6 +564,50 @@ pub fn move_word_end(app: &mut AppState) {
     }
 }
 
+/// Scroll event counter for rate-of-scroll diagnostics.
+static SCROLL_EVENT_COUNT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+/// Timestamp of last scroll rate log (epoch millis, atomic for lock-free check).
+static SCROLL_LAST_RATE_LOG: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+/// Scroll events at the time of the last rate log.
+static SCROLL_LAST_RATE_COUNT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+/// Log scroll rate every ~2 seconds (called from scroll_copy_up/down).
+fn log_scroll_rate(direction: &str, offset: usize) {
+    if !crate::debug_log::memory_log_enabled() {
+        return;
+    }
+    let count = SCROLL_EVENT_COUNT.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
+    let now_ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as u64;
+    let last_ms = SCROLL_LAST_RATE_LOG.load(std::sync::atomic::Ordering::Relaxed);
+    let elapsed = now_ms.saturating_sub(last_ms);
+    if elapsed >= 2000 {
+        // CAS to avoid duplicate logs from concurrent calls
+        if SCROLL_LAST_RATE_LOG
+            .compare_exchange(last_ms, now_ms, std::sync::atomic::Ordering::AcqRel, std::sync::atomic::Ordering::Relaxed)
+            .is_ok()
+        {
+            let last_count = SCROLL_LAST_RATE_COUNT.swap(count, std::sync::atomic::Ordering::Relaxed);
+            let delta = count.saturating_sub(last_count);
+            let rate = if elapsed > 0 { delta * 1000 / elapsed } else { 0 };
+            let mem = crate::debug_log::process_memory_bytes();
+            let (receivers, frames, bytes) = crate::types::frame_push_stats();
+            crate::debug_log::memory_log(
+                "scroll",
+                &format!(
+                    "{}: offset={} rate={}/s total_scrolls={} process_mem={} frame_receivers={} pushed_frames={} pushed_bytes={}",
+                    direction, offset, rate, count,
+                    crate::debug_log::format_bytes(mem),
+                    receivers, frames,
+                    crate::debug_log::format_bytes(bytes),
+                ),
+            );
+        }
+    }
+}
+
 pub fn scroll_copy_up(app: &mut AppState, lines: usize) {
     let win = &mut app.windows[app.active_idx];
     let p = match active_pane_mut(&mut win.root, &win.active_path) {
@@ -549,6 +622,7 @@ pub fn scroll_copy_up(app: &mut AppState, lines: usize) {
     let new_offset = current.saturating_add(lines);
     parser.screen_mut().set_scrollback(new_offset);
     app.copy_scroll_offset = parser.screen().scrollback();
+    log_scroll_rate("UP", app.copy_scroll_offset);
 }
 
 pub fn scroll_copy_down(app: &mut AppState, lines: usize) {
@@ -565,6 +639,7 @@ pub fn scroll_copy_down(app: &mut AppState, lines: usize) {
     let new_offset = current.saturating_sub(lines);
     parser.screen_mut().set_scrollback(new_offset);
     app.copy_scroll_offset = parser.screen().scrollback();
+    log_scroll_rate("DOWN", app.copy_scroll_offset);
 }
 
 pub fn scroll_to_top(app: &mut AppState) {

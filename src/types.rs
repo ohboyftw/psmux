@@ -1302,39 +1302,95 @@ pub fn shutdown_persistent_streams() {
     }
 }
 
-/// Server-push frame senders for persistent (attached) clients.
-/// Instead of clients polling dump-state, the server proactively pushes
-/// serialized frames through these channels whenever state changes.
-/// Each sender feeds a `Receiver<String>` into the persistent connection's
-/// existing writer-thread pipeline (which expects oneshot receivers).
-static FRAME_PUSH_SENDERS: std::sync::Mutex<
-    Vec<std::sync::mpsc::Sender<std::sync::mpsc::Receiver<String>>>,
-> = std::sync::Mutex::new(Vec::new());
+/// Server-push frame slots for persistent (attached) clients.
+/// Each slot holds at most ONE pending frame — `push_frame()` overwrites
+/// any unconsumed frame, so memory is bounded to O(clients), not O(frames).
+/// The writer thread in connection.rs polls the slot via `recv_timeout`.
+pub type FrameSlot = std::sync::Arc<(std::sync::Mutex<Option<String>>, std::sync::Condvar)>;
 
-/// Register a persistent connection's resp_tx clone for server-pushed frames.
-pub fn register_frame_sender(tx: std::sync::mpsc::Sender<std::sync::mpsc::Receiver<String>>) {
-    if let Ok(mut v) = FRAME_PUSH_SENDERS.lock() {
-        v.push(tx);
+static FRAME_PUSH_SLOTS: std::sync::Mutex<Vec<FrameSlot>> = std::sync::Mutex::new(Vec::new());
+
+/// Cumulative bytes pushed through frame channels (diagnostic).
+static FRAME_PUSH_TOTAL_BYTES: std::sync::atomic::AtomicU64 =
+    std::sync::atomic::AtomicU64::new(0);
+/// Cumulative frame count pushed (diagnostic).
+static FRAME_PUSH_TOTAL_COUNT: std::sync::atomic::AtomicU64 =
+    std::sync::atomic::AtomicU64::new(0);
+
+/// Register a frame slot for a persistent connection's writer thread.
+/// Returns the slot Arc for the writer thread to consume from.
+pub fn register_frame_slot() -> FrameSlot {
+    let slot: FrameSlot =
+        std::sync::Arc::new((std::sync::Mutex::new(None), std::sync::Condvar::new()));
+    if let Ok(mut v) = FRAME_PUSH_SLOTS.lock() {
+        v.push(slot.clone());
+        if crate::debug_log::memory_log_enabled() {
+            crate::debug_log::memory_log(
+                "frame",
+                &format!("register_frame_slot: now {} receivers", v.len()),
+            );
+        }
     }
+    slot
 }
 
-/// Push a serialized frame to all persistent clients.  Dead senders are pruned.
+/// Push a serialized frame to all persistent clients.
+/// Overwrites any unconsumed frame — only the latest frame matters.
+/// Dead slots (writer thread exited) are pruned automatically.
 pub fn push_frame(frame: &str) {
-    if let Ok(mut senders) = FRAME_PUSH_SENDERS.lock() {
-        senders.retain(|tx| {
-            let (rtx, rrx) = std::sync::mpsc::channel();
-            // Send the frame through a oneshot so it fits the existing writer thread protocol
-            if rtx.send(frame.to_string()).is_err() {
+    if let Ok(mut slots) = FRAME_PUSH_SLOTS.lock() {
+        let before = slots.len();
+        slots.retain(|slot| {
+            // If only FRAME_PUSH_SLOTS holds the Arc, the writer thread is gone
+            if std::sync::Arc::strong_count(slot) <= 1 {
                 return false;
             }
-            tx.send(rrx).is_ok()
+            let (lock, cvar) = &**slot;
+            if let Ok(mut pending) = lock.lock() {
+                *pending = Some(frame.to_string());
+                cvar.notify_one();
+            }
+            true
         });
+        let after = slots.len();
+        let pruned = before - after;
+
+        // Track cumulative stats
+        let frame_bytes = frame.len() as u64 * after as u64;
+        FRAME_PUSH_TOTAL_BYTES.fetch_add(frame_bytes, std::sync::atomic::Ordering::Relaxed);
+        let count = FRAME_PUSH_TOTAL_COUNT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+
+        if crate::debug_log::memory_log_enabled() {
+            if pruned > 0 || count % 100 == 0 {
+                let total_bytes =
+                    FRAME_PUSH_TOTAL_BYTES.load(std::sync::atomic::Ordering::Relaxed);
+                crate::debug_log::memory_log(
+                    "frame",
+                    &format!(
+                        "push_frame #{}: size={} receivers={} pruned={} cumulative_bytes={}",
+                        count,
+                        crate::debug_log::format_bytes(frame.len() as u64),
+                        after,
+                        pruned,
+                        crate::debug_log::format_bytes(total_bytes),
+                    ),
+                );
+            }
+        }
     }
 }
 
 /// Check if any persistent clients are registered for push.
 pub fn has_frame_receivers() -> bool {
-    FRAME_PUSH_SENDERS.lock().is_ok_and(|v| !v.is_empty())
+    FRAME_PUSH_SLOTS.lock().is_ok_and(|v| !v.is_empty())
+}
+
+/// Return current frame push diagnostics: (receiver_count, total_frames, total_bytes).
+pub fn frame_push_stats() -> (usize, u64, u64) {
+    let receivers = FRAME_PUSH_SLOTS.lock().map(|v| v.len()).unwrap_or(0);
+    let count = FRAME_PUSH_TOTAL_COUNT.load(std::sync::atomic::Ordering::Relaxed);
+    let bytes = FRAME_PUSH_TOTAL_BYTES.load(std::sync::atomic::Ordering::Relaxed);
+    (receivers, count, bytes)
 }
 
 /// Wait-for operation types

@@ -12,6 +12,7 @@
 //! | `PSMUX_STYLE_DEBUG=1`  | `~/.psmux/style_debug.log`        | Style/theme parsing, inline styles   |/// | `PSMUX_INPUT_DEBUG=1`  | `~/.psmux/input_debug.log`        | Every crossterm event + console mode |//! | `PSMUX_MOUSE_DEBUG=1`  | `~/.psmux/mouse_debug.log`        | Mouse injection (existing)           |
 //! | `PSMUX_SSH_DEBUG=1`    | `~/.psmux/ssh_input.log`          | SSH input handling (existing)        |
 //! | `PSMUX_LATENCY_LOG=1`  | `~/.psmux/latency.log`            | Keypress-to-render latency (existing)|
+//! | `PSMUX_MEMORY_DEBUG=1` | `~/.psmux/memory_debug.log`       | Frame push, copy mode, scroll, memory|
 //!
 //! All loggers are:
 //! - **Off by default** — zero overhead when disabled (one atomic load per call)
@@ -256,4 +257,114 @@ pub fn server_log(component: &str, msg: &str) {
 /// Returns `true` if server debug logging is active.
 pub fn server_log_enabled() -> bool {
     SERVER_LOG.lock().ok().is_some_and(|g| g.is_some())
+}
+
+// ─── Memory debug log ──────────────────────────────────────────────────────
+
+/// Memory diagnostic log, gated by `PSMUX_MEMORY_DEBUG=1`.
+/// Traces: frame push sizes, receiver counts, copy mode transitions,
+/// scroll event rates, periodic process memory snapshots.
+static MEMORY_LOG: LazyLock<Mutex<Option<std::fs::File>>> = LazyLock::new(|| {
+    if !env_enabled("PSMUX_MEMORY_DEBUG") {
+        return Mutex::new(None);
+    }
+    Mutex::new(open_log("memory_debug.log"))
+});
+
+static MEMORY_LOG_COUNT: AtomicU32 = AtomicU32::new(0);
+/// Higher cap — memory issues can take minutes to manifest.
+const MEMORY_LOG_CAP: u32 = 50_000;
+
+/// Log a memory debug message. No-op unless `PSMUX_MEMORY_DEBUG=1`.
+pub fn memory_log(component: &str, msg: &str) {
+    let n = MEMORY_LOG_COUNT.fetch_add(1, Ordering::Relaxed);
+    if n >= MEMORY_LOG_CAP {
+        if n == MEMORY_LOG_CAP {
+            if let Ok(mut guard) = MEMORY_LOG.lock() {
+                if let Some(ref mut f) = *guard {
+                    let _ = writeln!(
+                        f,
+                        "[{}][log] --- log cap reached ({}) ---",
+                        chrono::Local::now().format("%H:%M:%S%.3f"),
+                        MEMORY_LOG_CAP
+                    );
+                    let _ = f.flush();
+                }
+            }
+        }
+        return;
+    }
+    if let Ok(mut guard) = MEMORY_LOG.lock() {
+        if let Some(ref mut f) = *guard {
+            let _ = writeln!(
+                f,
+                "[{}][{}] {}",
+                chrono::Local::now().format("%H:%M:%S%.3f"),
+                component,
+                msg
+            );
+            let _ = f.flush();
+        }
+    }
+}
+
+/// Returns `true` if memory debug logging is active.
+pub fn memory_log_enabled() -> bool {
+    MEMORY_LOG.lock().ok().is_some_and(|g| g.is_some())
+}
+
+/// Query the current process's working set size (bytes) via Win32 API.
+/// Returns 0 on failure.
+pub fn process_memory_bytes() -> u64 {
+    #[cfg(windows)]
+    {
+        use std::mem::MaybeUninit;
+        // PROCESS_MEMORY_COUNTERS_EX — we only need WorkingSetSize and
+        // PrivateUsage, but must pass the full struct.
+        #[repr(C)]
+        #[allow(non_snake_case)]
+        struct PROCESS_MEMORY_COUNTERS {
+            cb: u32,
+            PageFaultCount: u32,
+            PeakWorkingSetSize: usize,
+            WorkingSetSize: usize,
+            QuotaPeakPagedPoolUsage: usize,
+            QuotaPagedPoolUsage: usize,
+            QuotaPeakNonPagedPoolUsage: usize,
+            QuotaNonPagedPoolUsage: usize,
+            PagefileUsage: usize,
+            PeakPagefileUsage: usize,
+        }
+        extern "system" {
+            fn K32GetProcessMemoryInfo(
+                process: isize,
+                ppsmemcounters: *mut PROCESS_MEMORY_COUNTERS,
+                cb: u32,
+            ) -> i32;
+            fn GetCurrentProcess() -> isize;
+        }
+        unsafe {
+            let mut pmc = MaybeUninit::<PROCESS_MEMORY_COUNTERS>::zeroed().assume_init();
+            pmc.cb = std::mem::size_of::<PROCESS_MEMORY_COUNTERS>() as u32;
+            if K32GetProcessMemoryInfo(GetCurrentProcess(), &mut pmc, pmc.cb) != 0 {
+                return pmc.WorkingSetSize as u64;
+            }
+        }
+        0
+    }
+    #[cfg(not(windows))]
+    {
+        0
+    }
+}
+
+/// Format bytes as a human-readable string (KB/MB/GB).
+pub fn format_bytes(bytes: u64) -> String {
+    if bytes >= 1_073_741_824 {
+        format!("{:.2} GB", bytes as f64 / 1_073_741_824.0)
+    } else if bytes >= 1_048_576 {
+        format!("{:.1} MB", bytes as f64 / 1_048_576.0)
+    } else {
+        format!("{} KB", bytes / 1024)
+    }
 }

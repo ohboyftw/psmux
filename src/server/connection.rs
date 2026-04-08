@@ -144,17 +144,44 @@ pub(crate) fn handle_connection(
         let mut ws_bg = write_stream.try_clone().unwrap();
         let (resp_tx, resp_rx) = mpsc::channel::<mpsc::Receiver<String>>();
 
-        // Register a clone for server-pushed frames (event-driven rendering).
-        // The server auto-pushes serialized frames when PTY output arrives,
-        // eliminating the need for the client to poll dump-state.
-        crate::types::register_frame_sender(resp_tx.clone());
+        // Register a frame slot for server-pushed frames (event-driven rendering).
+        // The slot holds at most ONE pending frame — push_frame() overwrites any
+        // unconsumed frame, bounding memory to O(1) per client instead of O(frames).
+        let frame_slot = crate::types::register_frame_slot();
 
         std::thread::spawn(move || {
-            while let Ok(rrx) = resp_rx.recv() {
-                if let Ok(text) = rrx.recv() {
-                    // Break on write errors so the thread exits when the
-                    // TCP connection drops.  This lets push_frame() prune
-                    // dead senders via retain() on the next call.
+            let (frame_lock, _frame_cvar) = &*frame_slot;
+            loop {
+                // 1. Drain all pending command responses (non-blocking after first)
+                match resp_rx.recv_timeout(Duration::from_millis(5)) {
+                    Ok(rrx) => {
+                        if let Ok(text) = rrx.recv() {
+                            if writeln!(ws_bg, "{}", text).is_err() {
+                                break;
+                            }
+                            if ws_bg.flush().is_err() {
+                                break;
+                            }
+                        }
+                        // Drain any additional queued command responses
+                        while let Ok(rrx) = resp_rx.try_recv() {
+                            if let Ok(text) = rrx.recv() {
+                                if writeln!(ws_bg, "{}", text).is_err() {
+                                    return;
+                                }
+                                if ws_bg.flush().is_err() {
+                                    return;
+                                }
+                            }
+                        }
+                        continue;
+                    }
+                    Err(mpsc::RecvTimeoutError::Disconnected) => break,
+                    Err(mpsc::RecvTimeoutError::Timeout) => {}
+                }
+                // 2. Check the frame slot — take the latest pushed frame
+                let frame = frame_lock.lock().ok().and_then(|mut slot| slot.take());
+                if let Some(text) = frame {
                     if writeln!(ws_bg, "{}", text).is_err() {
                         break;
                     }

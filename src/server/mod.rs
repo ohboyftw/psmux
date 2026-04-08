@@ -1929,6 +1929,21 @@ pub fn run_server(
                             // Without this, the DumpState handler clears state_dirty,
                             // and the bottom-of-loop push section never fires for frames
                             // already served to the requesting client.
+                            if crate::debug_log::memory_log_enabled() {
+                                let in_copy = matches!(app.mode, Mode::CopyMode | Mode::CopySearch { .. });
+                                if in_copy {
+                                    crate::debug_log::memory_log(
+                                        "dumpstate",
+                                        &format!(
+                                            "DumpState frame in COPY MODE: combined_buf={} cached_dump_state={} (cap: combined={} cached={})",
+                                            crate::debug_log::format_bytes(combined_buf.len() as u64),
+                                            crate::debug_log::format_bytes(cached_dump_state.len() as u64),
+                                            crate::debug_log::format_bytes(combined_buf.capacity() as u64),
+                                            crate::debug_log::format_bytes(cached_dump_state.capacity() as u64),
+                                        ),
+                                    );
+                                }
+                            }
                             crate::types::push_frame(&cached_dump_state);
                             let _ = resp.send(combined_buf.clone());
                         }
@@ -2106,6 +2121,18 @@ pub fn run_server(
                         }
                         CtrlReq::ScrollUp(_, x, y) => {
                             if app.mouse_enabled {
+                                // Track scroll-while-dirty: if state was already dirty
+                                // from a previous scroll, we're queuing frames faster
+                                // than they can be pushed.
+                                if crate::debug_log::memory_log_enabled() && state_dirty {
+                                    let in_copy = matches!(app.mode, Mode::CopyMode | Mode::CopySearch { .. });
+                                    if in_copy {
+                                        crate::debug_log::memory_log(
+                                            "scroll-burst",
+                                            "ScrollUp arrived while state_dirty=true in copy mode (frame backlog building)",
+                                        );
+                                    }
+                                }
                                 remote_scroll_up(&mut app, x, y);
                                 state_dirty = true;
                                 echo_pending_until = Some(Instant::now());
@@ -2113,6 +2140,15 @@ pub fn run_server(
                         }
                         CtrlReq::ScrollDown(_, x, y) => {
                             if app.mouse_enabled {
+                                if crate::debug_log::memory_log_enabled() && state_dirty {
+                                    let in_copy = matches!(app.mode, Mode::CopyMode | Mode::CopySearch { .. });
+                                    if in_copy {
+                                        crate::debug_log::memory_log(
+                                            "scroll-burst",
+                                            "ScrollDown arrived while state_dirty=true in copy mode (frame backlog building)",
+                                        );
+                                    }
+                                }
                                 remote_scroll_down(&mut app, x, y);
                                 state_dirty = true;
                                 echo_pending_until = Some(Instant::now());
@@ -5541,6 +5577,19 @@ pub fn run_server(
             cached_dump_state.push_str(&combined_buf);
             cached_data_version = combined_data_version(&app);
             state_dirty = false;
+            if crate::debug_log::memory_log_enabled() {
+                let in_copy = matches!(app.mode, Mode::CopyMode | Mode::CopySearch { .. });
+                if in_copy {
+                    crate::debug_log::memory_log(
+                        "serverpush",
+                        &format!(
+                            "server-push frame in COPY MODE: size={} (cap={})",
+                            crate::debug_log::format_bytes(combined_buf.len() as u64),
+                            crate::debug_log::format_bytes(combined_buf.capacity() as u64),
+                        ),
+                    );
+                }
+            }
             crate::types::push_frame(&combined_buf);
         }
         // ── Status-interval timer: fire hooks periodically ──
@@ -5563,6 +5612,55 @@ pub fn run_server(
                         &format!(
                             "active_idx changed {} -> {} by status-interval hook",
                             _pre_status_idx, app.active_idx
+                        ),
+                    );
+                }
+            }
+        }
+        // ── Memory diagnostics (every 5s when enabled) ──
+        {
+            static LAST_MEM_LOG: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+            if crate::debug_log::memory_log_enabled() {
+                let now_ms = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_millis() as u64;
+                let last = LAST_MEM_LOG.load(std::sync::atomic::Ordering::Relaxed);
+                if now_ms.saturating_sub(last) >= 5000 {
+                    LAST_MEM_LOG.store(now_ms, std::sync::atomic::Ordering::Relaxed);
+                    let mem = crate::debug_log::process_memory_bytes();
+                    let (receivers, frames, bytes) = crate::types::frame_push_stats();
+                    let mode_str = match &app.mode {
+                        Mode::CopyMode => "CopyMode",
+                        Mode::CopySearch { .. } => "CopySearch",
+                        Mode::Passthrough => "Passthrough",
+                        _ => "Other",
+                    };
+                    let pane_count: usize = app.windows.iter().map(|w| {
+                        fn count_panes(n: &crate::types::Node) -> usize {
+                            match n {
+                                crate::types::Node::Leaf(_) => 1,
+                                crate::types::Node::Split { children, .. } => {
+                                    children.iter().map(count_panes).sum()
+                                }
+                            }
+                        }
+                        count_panes(&w.root)
+                    }).sum();
+                    let shell_cache_size = app.shell_cmd_cache.lock()
+                        .map(|c| c.len()).unwrap_or(0);
+                    crate::debug_log::memory_log(
+                        "heartbeat",
+                        &format!(
+                            "mode={} windows={} panes={} scroll_offset={} process_mem={} frame_receivers={} pushed_frames={} pushed_bytes={} shell_cache={}",
+                            mode_str,
+                            app.windows.len(),
+                            pane_count,
+                            app.copy_scroll_offset,
+                            crate::debug_log::format_bytes(mem),
+                            receivers, frames,
+                            crate::debug_log::format_bytes(bytes),
+                            shell_cache_size,
                         ),
                     );
                 }
