@@ -3255,7 +3255,7 @@ pub fn run_server(
                             hook_event = Some("window-closed");
                         }
                         CtrlReq::KillSession => {
-                            // Remove port/key/version files FIRST so clients see the
+                            // Remove port/key/version/pipe files FIRST so clients see the
                             // session as gone immediately, then kill processes.
                             let home = env::var("USERPROFILE")
                                 .or_else(|_| env::var("HOME"))
@@ -3265,9 +3265,12 @@ pub fn run_server(
                             let keypath = format!("{}\\.psmux\\{}.key", home, app.port_file_base());
                             let verpath =
                                 format!("{}\\.psmux\\{}.version", home, app.port_file_base());
+                            let pipepath =
+                                format!("{}\\.psmux\\{}.pipe", home, app.port_file_base());
                             let _ = std::fs::remove_file(&regpath);
                             let _ = std::fs::remove_file(&keypath);
                             let _ = std::fs::remove_file(&verpath);
+                            let _ = std::fs::remove_file(&pipepath);
                             crate::types::shutdown_persistent_streams();
                             // Kill all child processes using a single process snapshot
                             tree::kill_all_children_batch(&mut app.windows);
@@ -4513,7 +4516,7 @@ pub fn run_server(
                             app.hooks.remove(&hook);
                         }
                         CtrlReq::KillServer => {
-                            // Remove port/key/version files FIRST so clients see the
+                            // Remove port/key/version/pipe files FIRST so clients see the
                             // session as gone immediately, then kill processes.
                             let home = env::var("USERPROFILE")
                                 .or_else(|_| env::var("HOME"))
@@ -4523,9 +4526,12 @@ pub fn run_server(
                             let keypath = format!("{}\\.psmux\\{}.key", home, app.port_file_base());
                             let verpath =
                                 format!("{}\\.psmux\\{}.version", home, app.port_file_base());
+                            let pipepath =
+                                format!("{}\\.psmux\\{}.pipe", home, app.port_file_base());
                             let _ = std::fs::remove_file(&regpath);
                             let _ = std::fs::remove_file(&keypath);
                             let _ = std::fs::remove_file(&verpath);
+                            let _ = std::fs::remove_file(&pipepath);
                             crate::types::shutdown_persistent_streams();
                             // Kill all child processes using a single process snapshot
                             tree::kill_all_children_batch(&mut app.windows);

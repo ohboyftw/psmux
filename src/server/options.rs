@@ -600,6 +600,8 @@ pub(crate) fn apply_set_option(app: &mut AppState, option: &str, value: &str, _q
                 let _ = std::fs::remove_file(&warm_port_path);
                 let warm_key_path = format!("{}\\.psmux\\{}.key", home, warm_base);
                 let _ = std::fs::remove_file(&warm_key_path);
+                let warm_pipe_path = format!("{}\\.psmux\\{}.pipe", home, warm_base);
+                let _ = std::fs::remove_file(&warm_pipe_path);
             }
         }
         "claude-code-fix-tty" => {

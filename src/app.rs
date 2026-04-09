@@ -1545,8 +1545,10 @@ pub fn run(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> io::Result<
                         .unwrap_or_default();
                     let regpath = format!("{}/.psmux/{}.port", home, app.port_file_base());
                     let keypath = format!("{}/.psmux/{}.key", home, app.port_file_base());
+                    let pipepath = format!("{}/.psmux/{}.pipe", home, app.port_file_base());
                     let _ = std::fs::remove_file(&regpath);
                     let _ = std::fs::remove_file(&keypath);
+                    let _ = std::fs::remove_file(&pipepath);
                     std::process::exit(0);
                 }
                 CtrlReq::SourceFile(path) => {
