@@ -490,7 +490,10 @@ pub fn mouse_lines() -> Vec<String> {
 /// `user_bindings` — `Vec<(repeat, table, key, command)>` from the
 /// synced binding list.  Defaults that have been overridden by a user
 /// binding in the prefix table are automatically excluded.
-pub fn build_overlay_lines(user_bindings: &[(bool, String, String, String)]) -> Vec<String> {
+pub fn build_overlay_lines(
+    user_bindings: &[(bool, String, String, String)],
+    defaults_suppressed: bool,
+) -> Vec<String> {
     let mut lines: Vec<String> = Vec::new();
 
     // Collect user-overridden keys for prefix table
@@ -502,9 +505,11 @@ pub fn build_overlay_lines(user_bindings: &[(bool, String, String, String)]) -> 
 
     // ── 1. Prefix defaults (excluding overridden) ──
     lines.push("── prefix table (C-b + key) ───────────────────────────────".into());
-    for (k, cmd) in PREFIX_DEFAULTS {
-        if !overridden.contains(k) {
-            lines.push(format!("bind-key -T prefix {} {}", k, cmd));
+    if !defaults_suppressed {
+        for (k, cmd) in PREFIX_DEFAULTS {
+            if !overridden.contains(k) {
+                lines.push(format!("bind-key -T prefix {} {}", k, cmd));
+            }
         }
     }
 
@@ -536,6 +541,7 @@ pub fn build_overlay_lines(user_bindings: &[(bool, String, String, String)]) -> 
 /// `user_tables` — iterator of `(table_name, key_str, action_str, repeat)`.
 pub fn build_list_keys_output<'a>(
     user_tables: impl Iterator<Item = (&'a str, String, String, bool)>,
+    defaults_suppressed: bool,
 ) -> String {
     let mut output = String::new();
     let mut overridden: std::collections::HashSet<String> = std::collections::HashSet::new();
@@ -549,9 +555,11 @@ pub fn build_list_keys_output<'a>(
     }
 
     // Defaults
-    for (k, cmd) in PREFIX_DEFAULTS {
-        if !overridden.contains(*k) {
-            output.push_str(&format!("bind-key -T prefix {} {}\n", k, cmd));
+    if !defaults_suppressed {
+        for (k, cmd) in PREFIX_DEFAULTS {
+            if !overridden.contains(*k) {
+                output.push_str(&format!("bind-key -T prefix {} {}\n", k, cmd));
+            }
         }
     }
 

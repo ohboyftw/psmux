@@ -414,6 +414,7 @@ pub fn run_remote(
     let mut status_justify_str: String = "left".to_string();
     // Synced bindings from server (updated each frame from DumpState)
     let mut synced_bindings: Vec<BindingEntry> = Vec::new();
+    let mut defaults_suppressed: bool = false;
 
     // ── Windows paste detection state ──────────────────────────────────
     // On Windows, Ctrl+V paste injects individual Key events BEFORE the
@@ -589,6 +590,9 @@ pub fn run_remote(
         /// Dynamic key bindings from server
         #[serde(default)]
         bindings: Vec<BindingEntry>,
+        /// Whether hardcoded default keybindings are suppressed (unbind-key -a)
+        #[serde(default)]
+        defaults_suppressed: bool,
         /// status-left-length (max display width for left status)
         #[serde(default = "default_status_left_length")]
         status_left_length: usize,
@@ -1325,7 +1329,10 @@ pub fn run_remote(
                                 if entry.c == "detach-client" || entry.c == "detach" {
                                     quit = true;
                                 } else {
-                                    cmd_batch.push(format!("{}\n", entry.c));
+                                    let sub_cmds = crate::config::split_chained_commands_pub(&entry.c);
+                                    for sub in &sub_cmds {
+                                        cmd_batch.push(format!("{}\n", sub));
+                                    }
                                 }
                             }
                         } else if prefix_armed {
@@ -1346,10 +1353,13 @@ pub fn run_remote(
                                 {
                                     confirm_cmd = Some(entry.c.clone());
                                 } else {
-                                    cmd_batch.push(format!("{}\n", entry.c));
+                                    let sub_cmds = crate::config::split_chained_commands_pub(&entry.c);
+                                    for sub in &sub_cmds {
+                                        cmd_batch.push(format!("{}\n", sub));
+                                    }
                                 }
-                            } else {
-                                // Default hardcoded bindings (only reached if no user override)
+                            } else if !defaults_suppressed {
+                                // Default hardcoded bindings (only reached if no user override and defaults not suppressed)
                                 match key.code {
                                     KeyCode::Char('c') => {
                                         cmd_batch.push("new-window\n".into());
@@ -1478,7 +1488,7 @@ pub fn run_remote(
                                                     (b.r, b.t.clone(), b.k.clone(), b.c.clone())
                                                 })
                                                 .collect();
-                                        keys_viewer_lines = help::build_overlay_lines(&user_binds);
+                                        keys_viewer_lines = help::build_overlay_lines(&user_binds, defaults_suppressed);
                                         keys_viewer = true;
                                     }
                                     KeyCode::Char('t') => {
@@ -2062,7 +2072,10 @@ pub fn run_remote(
                                     if !trimmed.is_empty() {
                                         command_history.push(trimmed.clone());
                                         command_history_idx = command_history.len();
-                                        cmd_batch.push(format!("{}\n", trimmed));
+                                        let sub_cmds = crate::config::split_chained_commands_pub(&trimmed);
+                                        for sub in &sub_cmds {
+                                            cmd_batch.push(format!("{}\n", sub));
+                                        }
                                     }
                                     command_input = false;
                                     command_cursor = 0;
@@ -2938,6 +2951,7 @@ pub fn run_remote(
         if !state.bindings.is_empty() || !synced_bindings.is_empty() {
             synced_bindings = state.bindings;
         }
+        defaults_suppressed = state.defaults_suppressed;
         // Sync repeat-time from server
         repeat_time_ms = state.repeat_time;
         // Update status-left / status-right from server (already format-expanded).

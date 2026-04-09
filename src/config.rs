@@ -111,6 +111,10 @@ pub fn load_config(app: &mut AppState) {
 }
 
 pub fn parse_config_content(app: &mut AppState, content: &str) {
+    // Strip UTF-8 BOM if present (common on Windows when files are saved
+    // with Notepad or other editors that prepend EF BB BF).
+    let content = content.strip_prefix('\u{FEFF}').unwrap_or(content);
+
     // Process %if / %elif / %else / %endif conditional blocks.
     // These are tmux config-level directives that control which lines are parsed.
     //
@@ -1083,6 +1087,7 @@ pub fn parse_unbind_key(app: &mut AppState, line: &str) {
 
     let mut i = 1;
     let mut unbind_all = false;
+    let mut table_name: Option<&str> = None;
 
     while i < parts.len() {
         let p = parts[i];
@@ -1090,8 +1095,14 @@ pub fn parse_unbind_key(app: &mut AppState, line: &str) {
             if p.contains('a') {
                 unbind_all = true;
             }
+            if p.contains('n') {
+                table_name = Some("root");
+            }
             if p.contains('T') {
                 i += 1;
+                if i < parts.len() {
+                    table_name = Some(parts[i]);
+                }
             }
             i += 1;
         } else {
@@ -1100,7 +1111,13 @@ pub fn parse_unbind_key(app: &mut AppState, line: &str) {
     }
 
     if unbind_all {
-        app.key_tables.clear();
+        // Like tmux: default to "prefix" table when no -T specified
+        let target = table_name.unwrap_or("prefix");
+        app.key_tables.remove(target);
+        // Suppress hardcoded defaults when the prefix table is cleared
+        if target == "prefix" {
+            app.defaults_suppressed = true;
+        }
         return;
     }
 
@@ -1885,3 +1902,7 @@ mod tests_issue137_env_leak;
 #[cfg(test)]
 #[path = "../tests-rs/test_issue157_bind_key_case.rs"]
 mod tests_issue157_bind_key_case;
+
+#[cfg(test)]
+#[path = "../tests-rs/test_issue145_source_file.rs"]
+mod tests_issue145_source_file;

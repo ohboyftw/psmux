@@ -745,6 +745,18 @@ pub fn execute_command_prompt(app: &mut AppState) -> io::Result<()> {
 
 /// Execute a command string (used by menus, hooks, confirm dialogs, etc.)
 pub fn execute_command_string(app: &mut AppState, cmd: &str) -> io::Result<()> {
+    // Split on \; or ; to support command chaining (issue #192)
+    let sub_commands = crate::config::split_chained_commands_pub(cmd);
+    if sub_commands.len() > 1 {
+        for sub in &sub_commands {
+            execute_command_string_single(app, sub)?;
+        }
+        return Ok(());
+    }
+    execute_command_string_single(app, cmd)
+}
+
+fn execute_command_string_single(app: &mut AppState, cmd: &str) -> io::Result<()> {
     let parts: Vec<&str> = cmd.split_whitespace().collect();
     if parts.is_empty() {
         return Ok(());
@@ -1100,6 +1112,8 @@ pub fn execute_command_string(app: &mut AppState, cmd: &str) -> io::Result<()> {
             app.sync_input = !app.sync_input;
         }
         "set-option" | "set" | "set-window-option" | "setw" => {
+            // Apply locally so chained commands see immediate effect
+            crate::config::parse_config_line(app, cmd);
             // Forward to server for option handling
             if let Some(port) = app.control_port {
                 let _ = send_control_to_port(port, &format!("{}\n", cmd), &app.session_key);
@@ -1116,6 +1130,11 @@ pub fn execute_command_string(app: &mut AppState, cmd: &str) -> io::Result<()> {
             }
         }
         "source-file" | "source" => {
+            // Always apply locally first for immediate visual feedback,
+            // then forward to server for authoritative state update.
+            if let Some(path) = parts.get(1) {
+                crate::config::source_file(app, path);
+            }
             if let Some(port) = app.control_port {
                 let _ = send_control_to_port(port, &format!("{}\n", cmd), &app.session_key);
             }
@@ -1500,3 +1519,7 @@ mod tests;
 #[cfg(test)]
 #[path = "../tests-rs/test_commands_new.rs"]
 mod tests_new_commands;
+
+#[cfg(test)]
+#[path = "../tests-rs/test_issue192_command_chaining.rs"]
+mod tests_issue192_command_chaining;

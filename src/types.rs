@@ -504,6 +504,8 @@ pub struct AppState {
     pub display_map: Vec<(usize, Vec<usize>)>,
     /// Key tables: "prefix" (default), "root", "copy-mode-vi", "copy-mode-emacs", etc.
     pub key_tables: std::collections::HashMap<String, Vec<Bind>>,
+    /// When true, hardcoded default keybindings are suppressed (set by unbind-key -a)
+    pub defaults_suppressed: bool,
     /// Current key table for switch-client -T (None = normal mode)
     pub current_key_table: Option<String>,
     pub control_rx: Option<mpsc::Receiver<CtrlReq>>,
@@ -781,6 +783,7 @@ impl AppState {
             named_registers: std::collections::HashMap::new(),
             display_map: Vec::new(),
             key_tables: std::collections::HashMap::new(),
+            defaults_suppressed: false,
             current_key_table: None,
             control_rx: None,
             control_tx: None,
@@ -1100,6 +1103,7 @@ pub enum CtrlReq {
     RespawnPane,
     BindKey(String, String, String, bool), // table, key, command, repeat
     UnbindKey(String),
+    UnbindAllInTable(String), // table name to clear with -a
     ListKeys(mpsc::Sender<String>),
     SetOption(String, String),
     SetOptionQuiet(String, String, bool), // set-option with quiet flag
