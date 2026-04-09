@@ -3365,6 +3365,14 @@ pub fn run_server(
                                     let _ = std::fs::remove_file(&old_keypath);
                                     let _ = std::fs::write(&new_keypath, key);
                                 }
+                                // Rename .pipe discovery file so backend socket remains discoverable
+                                let old_pipepath =
+                                    format!("{}\\.psmux\\{}.pipe", home, app.port_file_base());
+                                let new_pipepath =
+                                    format!("{}\\.psmux\\{}.pipe", home, new_base);
+                                if std::path::Path::new(&old_pipepath).exists() {
+                                    let _ = std::fs::rename(&old_pipepath, &new_pipepath);
+                                }
                             }
                             app.session_name = name;
                             // Update env so run-shell/hooks from this server target the new name
@@ -3404,6 +3412,14 @@ pub fn run_server(
                                     &new_verpath,
                                     crate::types::build_version_stamp(),
                                 );
+                                // Rename .pipe discovery file so backend socket remains discoverable
+                                let old_pipepath =
+                                    format!("{}\\.psmux\\{}.pipe", home, app.port_file_base());
+                                let new_pipepath =
+                                    format!("{}\\.psmux\\{}.pipe", home, new_base);
+                                if std::path::Path::new(&old_pipepath).exists() {
+                                    let _ = std::fs::rename(&old_pipepath, &new_pipepath);
+                                }
                             }
                             app.session_name = name;
                             // Update env so run-shell/hooks from this server target the new name
@@ -5752,6 +5768,8 @@ pub fn run_server(
                 let _ = std::fs::remove_file(&regpath);
                 let _ = std::fs::remove_file(&keypath);
                 let _ = std::fs::remove_file(&verpath);
+                let pipepath = format!("{}\\.psmux\\{}.pipe", home, app.port_file_base());
+                let _ = std::fs::remove_file(&pipepath);
                 crate::types::shutdown_persistent_streams();
                 // Kill warm pane's child (process::exit skips Drop)
                 if let Some(mut wp) = app.warm_pane.take() {
