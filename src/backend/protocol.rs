@@ -35,6 +35,11 @@ pub struct SpawnAgentParams {
     pub env: Option<HashMap<String, String>>,
     pub metadata: Option<AgentMetadata>,
     pub split_direction: Option<String>,
+    /// Spawn mode: "split" (pane split), "window" (new window), "auto" (split
+    /// with fallback to window on pane-too-small).  Default is "auto".
+    pub mode: Option<String>,
+    /// Name for the new window (only used when mode is "window" or auto-fallback).
+    pub window_name: Option<String>,
     #[serde(default = "default_true")]
     pub wait_ready: bool,
     pub ready_timeout_ms: Option<u32>,
@@ -172,6 +177,8 @@ pub struct SpawnAgentResult {
     pub ready: bool,
     pub elapsed_ms: u64,
     pub data_version: u64,
+    /// How the pane was created: "split" or "window".
+    pub created_via: String,
 }
 
 #[derive(Debug, Serialize)]

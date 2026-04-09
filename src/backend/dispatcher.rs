@@ -142,14 +142,36 @@ fn handle_spawn_agent(
         Some(map)
     };
 
+    // Validate mode parameter
+    let mode = match p.mode.as_deref() {
+        Some("split") | Some("window") | Some("auto") | None => p.mode.clone(),
+        Some(other) => {
+            return Err(RpcErr::from((
+                -32602,
+                format!("mode must be \"split\", \"window\", or \"auto\", got \"{other}\""),
+            )))
+        }
+    };
+    let window_name = p.window_name.clone();
+    let cwd = p.cwd;
+    let shell = p.shell;
+
+    // Determine effective mode for the first attempt
+    let first_mode = match mode.as_deref() {
+        Some("window") => Some("window".to_string()),
+        _ => None, // "split", "auto", or None → try split first
+    };
+
     let (resp_tx, resp_rx) = mpsc::channel();
     tx.send(CtrlReq::BackendSpawnAgent {
-        command,
-        cwd: p.cwd,
-        env,
-        metadata,
+        command: command.clone(),
+        cwd: cwd.clone(),
+        env: env.clone(),
+        metadata: metadata.clone(),
         split_direction,
-        shell: p.shell,
+        shell: shell.clone(),
+        mode: first_mode,
+        window_name: window_name.clone(),
         resp: resp_tx,
     })
     .map_err(|_| RpcErr::from((-32603, "Server channel closed".to_string())))?;
@@ -158,14 +180,51 @@ fn handle_spawn_agent(
         .recv_timeout(std::time::Duration::from_secs(10))
         .map_err(|_| RpcErr::from((-32603, "Server response timeout".to_string())))?;
 
-    if let Some(err_msg) = context_id.strip_prefix("ERROR:") {
-        let code = if err_msg.contains("too small") {
-            PANE_TOO_SMALL
+    // Track how the pane was created for the result
+    let mut created_via = if mode.as_deref() == Some("window") {
+        "window"
+    } else {
+        "split"
+    };
+
+    let context_id = if let Some(err_msg) = context_id.strip_prefix("ERROR:") {
+        // Auto-fallback: on pane-too-small, retry as new window
+        let is_auto = !matches!(mode.as_deref(), Some("split") | Some("window"));
+        if err_msg.contains("too small") && is_auto {
+            let (retry_tx, retry_rx) = mpsc::channel();
+            tx.send(CtrlReq::BackendSpawnAgent {
+                command,
+                cwd,
+                env,
+                metadata: metadata.clone(),
+                split_direction,
+                shell,
+                mode: Some("window".to_string()),
+                window_name,
+                resp: retry_tx,
+            })
+            .map_err(|_| RpcErr::from((-32603, "Server channel closed".to_string())))?;
+
+            let retry_id = retry_rx
+                .recv_timeout(std::time::Duration::from_secs(10))
+                .map_err(|_| RpcErr::from((-32603, "Server response timeout (retry)".to_string())))?;
+
+            if let Some(retry_err) = retry_id.strip_prefix("ERROR:") {
+                return Err(RpcErr::from((SPAWN_FAILED, retry_err.to_string())));
+            }
+            created_via = "window";
+            retry_id
         } else {
-            SPAWN_FAILED
-        };
-        return Err(RpcErr::from((code, err_msg.to_string())));
-    }
+            let code = if err_msg.contains("too small") {
+                PANE_TOO_SMALL
+            } else {
+                SPAWN_FAILED
+            };
+            return Err(RpcErr::from((code, err_msg.to_string())));
+        }
+    } else {
+        context_id
+    };
 
     // --- Readiness polling (runs in dispatcher thread, NOT server loop) ---
     let ready;
@@ -237,6 +296,7 @@ fn handle_spawn_agent(
         ready,
         elapsed_ms,
         data_version,
+        created_via: created_via.to_string(),
     };
     serde_json::to_value(result).map_err(|e| RpcErr::from((-32603, format!("Internal error: {e}"))))
 }

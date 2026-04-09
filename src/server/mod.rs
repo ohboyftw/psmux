@@ -4956,6 +4956,8 @@ pub fn run_server(
                             metadata,
                             split_direction,
                             shell,
+                            mode,
+                            window_name,
                             resp,
                         } => {
                             // Build command string: join argv into a single
@@ -4989,14 +4991,40 @@ pub fn run_server(
                                     crate::util::set_env(k, v);
                                 }
                             }
-                            let split_result = split_active_with_command(
-                                &mut app,
-                                split_direction.unwrap_or(LayoutKind::Vertical),
-                                cmd_str.as_deref(),
-                                Some(&*pty_system),
-                                start_dir.as_deref(),
-                                shell.as_deref(),
-                            );
+                            let use_window = mode.as_deref() == Some("window");
+                            let spawn_result = if use_window {
+                                // Window mode: create a new window (always detached)
+                                let prev_idx = app.active_idx;
+                                let r = create_window(
+                                    &*pty_system,
+                                    &mut app,
+                                    cmd_str.as_deref(),
+                                    start_dir.as_deref(),
+                                    shell.as_deref(),
+                                );
+                                // Set window name if provided
+                                if r.is_ok() {
+                                    if let Some(n) = window_name {
+                                        if let Some(w) = app.windows.last_mut() {
+                                            w.name = n;
+                                            w.manual_rename = true;
+                                        }
+                                    }
+                                    // Always detached: restore focus to previous window
+                                    app.active_idx = prev_idx;
+                                }
+                                r
+                            } else {
+                                // Split mode (default): split the active pane
+                                split_active_with_command(
+                                    &mut app,
+                                    split_direction.unwrap_or(LayoutKind::Vertical),
+                                    cmd_str.as_deref(),
+                                    Some(&*pty_system),
+                                    start_dir.as_deref(),
+                                    shell.as_deref(),
+                                )
+                            };
                             // Restore stashed env vars
                             for (k, prev) in saved_envs {
                                 if let Some(v) = prev {
@@ -5008,16 +5036,29 @@ pub fn run_server(
                             if let Some(wp) = stashed_warm {
                                 app.warm_pane = Some(wp);
                             }
-                            match split_result {
+                            match spawn_result {
                                 Ok(()) => {
-                                    let new_pane_id = get_active_pane_id(
-                                        &app.windows[app.active_idx].root,
-                                        &app.windows[app.active_idx].active_path,
-                                    )
-                                    .unwrap_or(0);
+                                    let new_pane_id = if use_window {
+                                        // New window: pane is the root of the last window
+                                        app.windows.last().and_then(|w| {
+                                            crate::tree::active_pane(&w.root, &w.active_path)
+                                                .map(|p| p.id)
+                                        }).unwrap_or(0)
+                                    } else {
+                                        get_active_pane_id(
+                                            &app.windows[app.active_idx].root,
+                                            &app.windows[app.active_idx].active_path,
+                                        )
+                                        .unwrap_or(0)
+                                    };
                                     // Apply metadata to the new pane
                                     if let Some(meta) = metadata {
-                                        let win = &mut app.windows[app.active_idx];
+                                        let target_idx = if use_window {
+                                            app.windows.len().saturating_sub(1)
+                                        } else {
+                                            app.active_idx
+                                        };
+                                        let win = &mut app.windows[target_idx];
                                         if let Some(p) =
                                             active_pane_mut(&mut win.root, &win.active_path)
                                         {
@@ -5026,6 +5067,10 @@ pub fn run_server(
                                     }
                                     resize_all_panes(&mut app);
                                     meta_dirty = true;
+                                    if use_window {
+                                        hook_event = Some("after-new-window");
+                                        crate::resurrection::save_snapshot(&app);
+                                    }
                                     // Replenish warm pane
                                     if app.warm_pane.is_none() {
                                         if let Ok(wp) = spawn_warm_pane(&*pty_system, &mut app) {

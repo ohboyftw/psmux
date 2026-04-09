@@ -1203,6 +1203,10 @@ pub enum CtrlReq {
         split_direction: Option<LayoutKind>,
         /// Shell override from `SpawnAgentParams::shell` (--shell flag).
         shell: Option<String>,
+        /// Spawn mode: "window" to create a new window instead of splitting.
+        mode: Option<String>,
+        /// Name for the new window (mode="window" or auto-fallback).
+        window_name: Option<String>,
         resp: mpsc::Sender<String>,
     },
     /// Backend `capture` — capture pane content by context ID.
