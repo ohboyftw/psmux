@@ -1368,8 +1368,9 @@ pub fn push_frame(frame: &str) {
         FRAME_PUSH_TOTAL_BYTES.fetch_add(frame_bytes, std::sync::atomic::Ordering::Relaxed);
         let count = FRAME_PUSH_TOTAL_COUNT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
 
-        if crate::debug_log::memory_log_enabled() {
-            if pruned > 0 || count % 100 == 0 {
+        if crate::debug_log::memory_log_enabled()
+            && (pruned > 0 || count.is_multiple_of(100))
+        {
                 let total_bytes =
                     FRAME_PUSH_TOTAL_BYTES.load(std::sync::atomic::Ordering::Relaxed);
                 crate::debug_log::memory_log(
@@ -1383,7 +1384,6 @@ pub fn push_frame(frame: &str) {
                         crate::debug_log::format_bytes(total_bytes),
                     ),
                 );
-            }
         }
     }
 }
