@@ -388,7 +388,7 @@ fn decode_utf16_unit(unit: u16, high_surrogate: &mut Option<u16>) -> Option<char
 // events.  Handles SGR mouse, X10 mouse, CSI keyboard sequences, SS3 function
 // keys, bracketed paste, Alt+key, plain characters, and control codes.
 
-#[derive(Clone, Copy, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 enum PS {
     Ground,
     Escape,   // received \x1b
@@ -421,6 +421,10 @@ struct VtParser {
     x10_buf: [u8; 3],
     /// Bracketed-paste text accumulator.
     paste: String,
+    /// Timestamp when the parser entered Paste state.  Used to detect a
+    /// missing close sequence (`\x1b[201~`) and force-flush after a timeout
+    /// so the terminal does not hang forever (issue #197).
+    paste_start: Option<std::time::Instant>,
     /// OSC sequence accumulator (e.g. for OSC 52 clipboard responses).
     osc: String,
     /// Pending high surrogate for UTF-16 decoding.
@@ -439,6 +443,7 @@ impl VtParser {
             x10_n: 0,
             x10_buf: [0; 3],
             paste: String::new(),
+            paste_start: None,
             osc: String::new(),
             hi_sur: None,
         }
@@ -451,6 +456,54 @@ impl VtParser {
         self.cur = 0;
         self.has_digit = false;
         self.priv_ch = 0;
+    }
+
+    /// True when the parser is inside a bracketed-paste sequence.
+    #[inline(always)]
+    fn is_in_paste(&self) -> bool {
+        matches!(
+            self.state,
+            PS::Paste | PS::PasteEsc | PS::PasteBrk | PS::PasteNum
+        )
+    }
+
+    /// Maximum paste buffer size (1 MB).
+    const PASTE_MAX_BYTES: usize = 1_048_576;
+
+    /// Maximum time (in seconds) to stay in Paste state before force-flushing.
+    const PASTE_TIMEOUT_SECS: u64 = 2;
+
+    /// Force-flush a stale paste if we have been in Paste state for too long
+    /// or the buffer has exceeded the size limit (issue #197).
+    fn flush_stale_paste<F: FnMut(Event)>(&mut self, emit: &mut F) {
+        if !self.is_in_paste() {
+            return;
+        }
+
+        let should_flush = if let Some(start) = self.paste_start {
+            start.elapsed().as_secs() >= Self::PASTE_TIMEOUT_SECS
+                || self.paste.len() >= Self::PASTE_MAX_BYTES
+        } else {
+            false
+        };
+
+        if should_flush {
+            ssh_debug_log(&format!(
+                "flush_stale_paste: forcing flush after {}ms, {} chars (state={:?})",
+                self.paste_start
+                    .map(|s| s.elapsed().as_millis())
+                    .unwrap_or(0),
+                self.paste.len(),
+                self.state,
+            ));
+            let text = std::mem::take(&mut self.paste);
+            if !text.is_empty() {
+                emit(Event::Paste(text));
+            }
+            self.paste_start = None;
+            self.cur = 0;
+            self.state = PS::Ground;
+        }
     }
 
     /// Feed one Unicode character into the parser, emitting events via `emit`.
@@ -666,6 +719,7 @@ impl VtParser {
         // Bracketed paste start: \x1b[200~
         if ch == '~' && self.pidx >= 1 && self.params[0] == 200 {
             self.paste.clear();
+            self.paste_start = Some(std::time::Instant::now());
             self.state = PS::Paste;
             return;
         }
@@ -889,7 +943,7 @@ impl VtParser {
     fn on_paste<F: FnMut(Event)>(&mut self, ch: char, _emit: &mut F) {
         if ch == '\x1b' {
             self.state = PS::PasteEsc;
-        } else {
+        } else if self.paste.len() < Self::PASTE_MAX_BYTES {
             self.paste.push(ch);
         }
     }
@@ -925,6 +979,7 @@ impl VtParser {
         } else if ch == '~' && self.cur == 201 {
             // \x1b[201~ — paste end.
             let text = std::mem::take(&mut self.paste);
+            self.paste_start = None;
             emit(Event::Paste(text));
             self.state = PS::Ground;
         } else {
@@ -1409,8 +1464,15 @@ fn start_ssh_reader() -> io::Result<std::sync::mpsc::Receiver<Event>> {
 
             loop {
                 loop_count += 1;
-                // Dynamic timeout: short when the parser has a pending Esc.
-                let wait_ms = if parser.has_pending_escape() { ESC_TIMEOUT_MS } else { 500 };
+                // Dynamic timeout: short when the parser has a pending Esc
+                // or is inside a paste (need to detect stale paste quickly).
+                let wait_ms = if parser.has_pending_escape() {
+                    ESC_TIMEOUT_MS
+                } else if parser.is_in_paste() {
+                    200 // check paste timeout frequently
+                } else {
+                    500
+                };
                 let wait = unsafe { WaitForSingleObject(handle, wait_ms) };
 
                 if wait == WAIT_TIMEOUT {
@@ -1542,6 +1604,11 @@ fn start_ssh_reader() -> io::Result<std::sync::mpsc::Receiver<Event>> {
                     // If WAIT_OBJECT_0 → more input arriving, continue loop
                     // and the escape will be resolved with the next batch.
                 }
+                // Flush stale paste if the close sequence never arrived
+                // (issue #197: prevents terminal from hanging forever).
+                parser.flush_stale_paste(&mut |evt| {
+                    if tx.send(evt).is_err() { alive = false; }
+                });
 
                 if !alive { break; }
             }
