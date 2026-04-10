@@ -46,6 +46,10 @@ path = "tests-rs/memory_leak_detector.rs"
 name = "cpu_runoff_detector"
 path = "tests-rs/cpu_runoff_detector.rs"
 
+[[test]]
+name = "test_pi_integration_contracts"
+path = "tests-rs/test_pi_integration_contracts.rs"
+
 # Windows only
 [target.'cfg(not(windows))'.dependencies]
 [target.'cfg(windows)'.dependencies]
