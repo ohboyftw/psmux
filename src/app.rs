@@ -1566,7 +1566,8 @@ pub fn run(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> io::Result<
             while let Ok((title, text)) = rx.try_recv() {
                 if !text.is_empty() {
                     let lines: Vec<&str> = text.lines().collect();
-                    let width = lines.iter().map(|l| l.len()).max().unwrap_or(40).max(20) as u16 + 4;
+                    let width =
+                        lines.iter().map(|l| l.len()).max().unwrap_or(40).max(20) as u16 + 4;
                     let height = (lines.len() as u16 + 2).max(5);
                     app.mode = Mode::PopupMode {
                         command: title,

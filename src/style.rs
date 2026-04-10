@@ -481,8 +481,12 @@ mod tests {
     #[test]
     fn parse_tmux_color_default_returns_reset() {
         let c = parse_tmux_color("default");
-        assert_eq!(c, Some(Color::Reset),
-            "parse_tmux_color(\"default\") should return Some(Color::Reset), got {:?}", c);
+        assert_eq!(
+            c,
+            Some(Color::Reset),
+            "parse_tmux_color(\"default\") should return Some(Color::Reset), got {:?}",
+            c
+        );
     }
 
     /// Issue #182: parse_tmux_style_components should propagate bg=default as Some(Color::Reset)
@@ -490,8 +494,12 @@ mod tests {
     fn parse_tmux_style_components_bg_default() {
         let (fg, bg, bold) = parse_tmux_style_components("fg=white,bg=default");
         assert_eq!(fg, Some(Color::White));
-        assert_eq!(bg, Some(Color::Reset),
-            "bg=default should yield Some(Color::Reset), got {:?}", bg);
+        assert_eq!(
+            bg,
+            Some(Color::Reset),
+            "bg=default should yield Some(Color::Reset), got {:?}",
+            bg
+        );
         assert!(!bold);
     }
 

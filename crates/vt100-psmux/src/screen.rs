@@ -428,8 +428,7 @@ impl Screen {
         crate::term::ApplicationKeypad::new(self.mode(MODE_APPLICATION_KEYPAD)).write_buf(contents);
         crate::term::ApplicationCursor::new(self.mode(MODE_APPLICATION_CURSOR)).write_buf(contents);
         crate::term::BracketedPaste::new(self.mode(MODE_BRACKETED_PASTE)).write_buf(contents);
-        crate::term::FocusEvents::new(self.mode(MODE_FOCUS_EVENTS))
-            .write_buf(contents);
+        crate::term::FocusEvents::new(self.mode(MODE_FOCUS_EVENTS)).write_buf(contents);
         crate::term::MouseProtocolMode::new(self.mouse_protocol_mode, MouseProtocolMode::None)
             .write_buf(contents);
         crate::term::MouseProtocolEncoding::new(
@@ -465,8 +464,7 @@ impl Screen {
             crate::term::BracketedPaste::new(self.mode(MODE_BRACKETED_PASTE)).write_buf(contents);
         }
         if self.mode(MODE_FOCUS_EVENTS) != prev.mode(MODE_FOCUS_EVENTS) {
-            crate::term::FocusEvents::new(self.mode(MODE_FOCUS_EVENTS))
-                .write_buf(contents);
+            crate::term::FocusEvents::new(self.mode(MODE_FOCUS_EVENTS)).write_buf(contents);
         }
         crate::term::MouseProtocolMode::new(self.mouse_protocol_mode, prev.mouse_protocol_mode)
             .write_buf(contents);
@@ -476,8 +474,7 @@ impl Screen {
         )
         .write_buf(contents);
         if self.cursor_style != prev.cursor_style {
-            contents
-                .extend(format!("\x1b[{} q", self.cursor_style).as_bytes());
+            contents.extend(format!("\x1b[{} q", self.cursor_style).as_bytes());
         }
     }
 

@@ -202,7 +202,7 @@ mod mouse_coordinate_translation {
         let area_x: u16 = 10;
         let abs_x: u16 = 3;
         let col = abs_x as i16 - area_x as i16; // -7
-        let vt_col = (col + 1).max(1) as u16;   // (-6).max(1) = 1
+        let vt_col = (col + 1).max(1) as u16; // (-6).max(1) = 1
         assert!(col < 0);
         assert_eq!(vt_col, 1); // Clamped to minimum VT coordinate
     }
@@ -220,50 +220,74 @@ mod vt_mouse_mode_state_machine {
     #[test]
     fn initial_state_is_none_default() {
         let parser = vt100::Parser::new(24, 80, 0);
-        assert_eq!(parser.screen().mouse_protocol_mode(), vt100::MouseProtocolMode::None);
-        assert_eq!(parser.screen().mouse_protocol_encoding(), vt100::MouseProtocolEncoding::Default);
+        assert_eq!(
+            parser.screen().mouse_protocol_mode(),
+            vt100::MouseProtocolMode::None
+        );
+        assert_eq!(
+            parser.screen().mouse_protocol_encoding(),
+            vt100::MouseProtocolEncoding::Default
+        );
     }
 
     #[test]
     fn decset_9_enables_x10_press_mode() {
         let mut parser = vt100::Parser::new(24, 80, 0);
         parser.process(b"\x1b[?9h");
-        assert_eq!(parser.screen().mouse_protocol_mode(), vt100::MouseProtocolMode::Press);
+        assert_eq!(
+            parser.screen().mouse_protocol_mode(),
+            vt100::MouseProtocolMode::Press
+        );
     }
 
     #[test]
     fn decset_1000_enables_press_release() {
         let mut parser = vt100::Parser::new(24, 80, 0);
         parser.process(b"\x1b[?1000h");
-        assert_eq!(parser.screen().mouse_protocol_mode(), vt100::MouseProtocolMode::PressRelease);
+        assert_eq!(
+            parser.screen().mouse_protocol_mode(),
+            vt100::MouseProtocolMode::PressRelease
+        );
     }
 
     #[test]
     fn decset_1002_enables_button_motion() {
         let mut parser = vt100::Parser::new(24, 80, 0);
         parser.process(b"\x1b[?1002h");
-        assert_eq!(parser.screen().mouse_protocol_mode(), vt100::MouseProtocolMode::ButtonMotion);
+        assert_eq!(
+            parser.screen().mouse_protocol_mode(),
+            vt100::MouseProtocolMode::ButtonMotion
+        );
     }
 
     #[test]
     fn decset_1003_enables_any_motion() {
         let mut parser = vt100::Parser::new(24, 80, 0);
         parser.process(b"\x1b[?1003h");
-        assert_eq!(parser.screen().mouse_protocol_mode(), vt100::MouseProtocolMode::AnyMotion);
+        assert_eq!(
+            parser.screen().mouse_protocol_mode(),
+            vt100::MouseProtocolMode::AnyMotion
+        );
     }
 
     #[test]
     fn decset_1006_enables_sgr_encoding() {
         let mut parser = vt100::Parser::new(24, 80, 0);
         parser.process(b"\x1b[?1006h");
-        assert_eq!(parser.screen().mouse_protocol_encoding(), vt100::MouseProtocolEncoding::Sgr);
+        assert_eq!(
+            parser.screen().mouse_protocol_encoding(),
+            vt100::MouseProtocolEncoding::Sgr
+        );
     }
 
     #[test]
     fn decset_1005_enables_utf8_encoding() {
         let mut parser = vt100::Parser::new(24, 80, 0);
         parser.process(b"\x1b[?1005h");
-        assert_eq!(parser.screen().mouse_protocol_encoding(), vt100::MouseProtocolEncoding::Utf8);
+        assert_eq!(
+            parser.screen().mouse_protocol_encoding(),
+            vt100::MouseProtocolEncoding::Utf8
+        );
     }
 
     #[test]
@@ -271,11 +295,20 @@ mod vt_mouse_mode_state_machine {
         // neovim sends 1000h then 1002h then 1003h — each overrides
         let mut parser = vt100::Parser::new(24, 80, 0);
         parser.process(b"\x1b[?1000h");
-        assert_eq!(parser.screen().mouse_protocol_mode(), vt100::MouseProtocolMode::PressRelease);
+        assert_eq!(
+            parser.screen().mouse_protocol_mode(),
+            vt100::MouseProtocolMode::PressRelease
+        );
         parser.process(b"\x1b[?1002h");
-        assert_eq!(parser.screen().mouse_protocol_mode(), vt100::MouseProtocolMode::ButtonMotion);
+        assert_eq!(
+            parser.screen().mouse_protocol_mode(),
+            vt100::MouseProtocolMode::ButtonMotion
+        );
         parser.process(b"\x1b[?1003h");
-        assert_eq!(parser.screen().mouse_protocol_mode(), vt100::MouseProtocolMode::AnyMotion);
+        assert_eq!(
+            parser.screen().mouse_protocol_mode(),
+            vt100::MouseProtocolMode::AnyMotion
+        );
     }
 
     #[test]
@@ -283,9 +316,15 @@ mod vt_mouse_mode_state_machine {
         // DECRST 1000 doesn't clear mode if current mode is 1003
         let mut parser = vt100::Parser::new(24, 80, 0);
         parser.process(b"\x1b[?1003h");
-        assert_eq!(parser.screen().mouse_protocol_mode(), vt100::MouseProtocolMode::AnyMotion);
+        assert_eq!(
+            parser.screen().mouse_protocol_mode(),
+            vt100::MouseProtocolMode::AnyMotion
+        );
         parser.process(b"\x1b[?1000l"); // clear PressRelease, but current is AnyMotion
-        assert_eq!(parser.screen().mouse_protocol_mode(), vt100::MouseProtocolMode::AnyMotion);
+        assert_eq!(
+            parser.screen().mouse_protocol_mode(),
+            vt100::MouseProtocolMode::AnyMotion
+        );
     }
 
     #[test]
@@ -293,7 +332,10 @@ mod vt_mouse_mode_state_machine {
         let mut parser = vt100::Parser::new(24, 80, 0);
         parser.process(b"\x1b[?1003h");
         parser.process(b"\x1b[?1003l");
-        assert_eq!(parser.screen().mouse_protocol_mode(), vt100::MouseProtocolMode::None);
+        assert_eq!(
+            parser.screen().mouse_protocol_mode(),
+            vt100::MouseProtocolMode::None
+        );
     }
 
     #[test]
@@ -304,13 +346,25 @@ mod vt_mouse_mode_state_machine {
 
         // Enable
         parser.process(b"\x1b[?1000h\x1b[?1002h\x1b[?1003h\x1b[?1006h");
-        assert_eq!(parser.screen().mouse_protocol_mode(), vt100::MouseProtocolMode::AnyMotion);
-        assert_eq!(parser.screen().mouse_protocol_encoding(), vt100::MouseProtocolEncoding::Sgr);
+        assert_eq!(
+            parser.screen().mouse_protocol_mode(),
+            vt100::MouseProtocolMode::AnyMotion
+        );
+        assert_eq!(
+            parser.screen().mouse_protocol_encoding(),
+            vt100::MouseProtocolEncoding::Sgr
+        );
 
         // Disable (reverse order)
         parser.process(b"\x1b[?1006l\x1b[?1003l\x1b[?1002l\x1b[?1000l");
-        assert_eq!(parser.screen().mouse_protocol_mode(), vt100::MouseProtocolMode::None);
-        assert_eq!(parser.screen().mouse_protocol_encoding(), vt100::MouseProtocolEncoding::Default);
+        assert_eq!(
+            parser.screen().mouse_protocol_mode(),
+            vt100::MouseProtocolMode::None
+        );
+        assert_eq!(
+            parser.screen().mouse_protocol_encoding(),
+            vt100::MouseProtocolEncoding::Default
+        );
     }
 
     #[test]
@@ -319,11 +373,23 @@ mod vt_mouse_mode_state_machine {
         let mut parser = vt100::Parser::new(24, 80, 0);
         for _ in 0..100 {
             parser.process(b"\x1b[?1003h\x1b[?1006h");
-            assert_eq!(parser.screen().mouse_protocol_mode(), vt100::MouseProtocolMode::AnyMotion);
-            assert_eq!(parser.screen().mouse_protocol_encoding(), vt100::MouseProtocolEncoding::Sgr);
+            assert_eq!(
+                parser.screen().mouse_protocol_mode(),
+                vt100::MouseProtocolMode::AnyMotion
+            );
+            assert_eq!(
+                parser.screen().mouse_protocol_encoding(),
+                vt100::MouseProtocolEncoding::Sgr
+            );
             parser.process(b"\x1b[?1006l\x1b[?1003l");
-            assert_eq!(parser.screen().mouse_protocol_mode(), vt100::MouseProtocolMode::None);
-            assert_eq!(parser.screen().mouse_protocol_encoding(), vt100::MouseProtocolEncoding::Default);
+            assert_eq!(
+                parser.screen().mouse_protocol_mode(),
+                vt100::MouseProtocolMode::None
+            );
+            assert_eq!(
+                parser.screen().mouse_protocol_encoding(),
+                vt100::MouseProtocolEncoding::Default
+            );
         }
     }
 }
@@ -433,7 +499,10 @@ mod bracketed_paste_contracts {
     fn paste_boundary_sequence_format() {
         let paste_start = "\x1b[200~";
         let paste_end = "\x1b[201~";
-        assert_eq!(paste_start.as_bytes(), &[0x1b, b'[', b'2', b'0', b'0', b'~']);
+        assert_eq!(
+            paste_start.as_bytes(),
+            &[0x1b, b'[', b'2', b'0', b'0', b'~']
+        );
         assert_eq!(paste_end.as_bytes(), &[0x1b, b'[', b'2', b'0', b'1', b'~']);
     }
 
@@ -485,10 +554,10 @@ mod cursor_restore_contracts {
         //               insert mode → \x1b[6 q (steady bar)
         //               back to normal → \x1b[2 q
         let mut parser = vt100::Parser::new(24, 80, 0);
-        parser.process(b"\x1b[2 q");  // steady block (normal mode)
-        parser.process(b"\x1b[6 q");  // steady bar (insert mode)
-        parser.process(b"\x1b[2 q");  // back to block (normal mode)
-        // Parser must not crash or corrupt state
+        parser.process(b"\x1b[2 q"); // steady block (normal mode)
+        parser.process(b"\x1b[6 q"); // steady bar (insert mode)
+        parser.process(b"\x1b[2 q"); // back to block (normal mode)
+                                     // Parser must not crash or corrupt state
         parser.process(b"test");
         assert_eq!(parser.screen().contents_between(0, 0, 0, 4), "test");
     }
@@ -570,17 +639,35 @@ mod vt_parser_to_pane_wants_mouse_handshake {
     fn any_mouse_mode_enables_forwarding() {
         let modes = [
             (b"\x1b[?9h".as_slice(), vt100::MouseProtocolMode::Press),
-            (b"\x1b[?1000h".as_slice(), vt100::MouseProtocolMode::PressRelease),
-            (b"\x1b[?1002h".as_slice(), vt100::MouseProtocolMode::ButtonMotion),
-            (b"\x1b[?1003h".as_slice(), vt100::MouseProtocolMode::AnyMotion),
+            (
+                b"\x1b[?1000h".as_slice(),
+                vt100::MouseProtocolMode::PressRelease,
+            ),
+            (
+                b"\x1b[?1002h".as_slice(),
+                vt100::MouseProtocolMode::ButtonMotion,
+            ),
+            (
+                b"\x1b[?1003h".as_slice(),
+                vt100::MouseProtocolMode::AnyMotion,
+            ),
         ];
         for (seq, expected_mode) in &modes {
             let mut parser = vt100::Parser::new(24, 80, 0);
             parser.process(seq);
             let mode = parser.screen().mouse_protocol_mode();
-            assert_eq!(mode, *expected_mode, "Mode mismatch for {:?}", std::str::from_utf8(seq));
+            assert_eq!(
+                mode,
+                *expected_mode,
+                "Mode mismatch for {:?}",
+                std::str::from_utf8(seq)
+            );
             let wants = mode != vt100::MouseProtocolMode::None;
-            assert!(wants, "pane_wants_mouse should be true for {:?}", expected_mode);
+            assert!(
+                wants,
+                "pane_wants_mouse should be true for {:?}",
+                expected_mode
+            );
         }
     }
 
@@ -606,7 +693,10 @@ mod alternate_screen_mouse_fallback {
         parser.process(b"\x1b[?1049h");
         assert!(parser.screen().alternate_screen());
         // Mouse mode is still None
-        assert_eq!(parser.screen().mouse_protocol_mode(), vt100::MouseProtocolMode::None);
+        assert_eq!(
+            parser.screen().mouse_protocol_mode(),
+            vt100::MouseProtocolMode::None
+        );
         // But alternate_screen() is true — callers may use this as fallback
     }
 
@@ -642,8 +732,14 @@ mod screen_state_diff_contracts {
         // The diff from B → A should include DECSET 1003 and 1006
         let diff = parser_a.screen().state_diff(parser_b.screen());
         let diff_str = String::from_utf8_lossy(&diff);
-        assert!(diff_str.contains("\x1b[?1003h"), "Diff should enable AnyMotion mode");
-        assert!(diff_str.contains("\x1b[?1006h"), "Diff should enable SGR encoding");
+        assert!(
+            diff_str.contains("\x1b[?1003h"),
+            "Diff should enable AnyMotion mode"
+        );
+        assert!(
+            diff_str.contains("\x1b[?1006h"),
+            "Diff should enable SGR encoding"
+        );
     }
 
     #[test]
@@ -653,9 +749,14 @@ mod screen_state_diff_contracts {
 
         parser_with_paste.process(b"\x1b[?2004h");
 
-        let diff = parser_with_paste.screen().state_diff(parser_without_paste.screen());
+        let diff = parser_with_paste
+            .screen()
+            .state_diff(parser_without_paste.screen());
         let diff_str = String::from_utf8_lossy(&diff);
-        assert!(diff_str.contains("\x1b[?2004h"), "Diff should enable bracketed paste");
+        assert!(
+            diff_str.contains("\x1b[?2004h"),
+            "Diff should enable bracketed paste"
+        );
     }
 
     #[test]
@@ -669,12 +770,21 @@ mod screen_state_diff_contracts {
         // Diff from with → without should disable everything
         let diff = parser_without.screen().state_diff(parser_with.screen());
         let diff_str = String::from_utf8_lossy(&diff);
-        assert!(diff_str.contains("\x1b[?1003l") || diff_str.contains("\x1b[?1000l"),
-            "Diff should disable mouse mode, got: {:?}", diff_str);
-        assert!(diff_str.contains("\x1b[?1006l"),
-            "Diff should disable SGR encoding, got: {:?}", diff_str);
-        assert!(diff_str.contains("\x1b[?2004l"),
-            "Diff should disable bracketed paste, got: {:?}", diff_str);
+        assert!(
+            diff_str.contains("\x1b[?1003l") || diff_str.contains("\x1b[?1000l"),
+            "Diff should disable mouse mode, got: {:?}",
+            diff_str
+        );
+        assert!(
+            diff_str.contains("\x1b[?1006l"),
+            "Diff should disable SGR encoding, got: {:?}",
+            diff_str
+        );
+        assert!(
+            diff_str.contains("\x1b[?2004l"),
+            "Diff should disable bracketed paste, got: {:?}",
+            diff_str
+        );
     }
 }
 
@@ -690,8 +800,14 @@ mod boundary_edge_cases {
         parser.process(b"\x1b[?1003h\x1b[?1006h");
         parser.process(b"Hello, world!\r\n");
         parser.process(b"\x1b[31mred text\x1b[0m");
-        assert_eq!(parser.screen().mouse_protocol_mode(), vt100::MouseProtocolMode::AnyMotion);
-        assert_eq!(parser.screen().mouse_protocol_encoding(), vt100::MouseProtocolEncoding::Sgr);
+        assert_eq!(
+            parser.screen().mouse_protocol_mode(),
+            vt100::MouseProtocolMode::AnyMotion
+        );
+        assert_eq!(
+            parser.screen().mouse_protocol_encoding(),
+            vt100::MouseProtocolEncoding::Sgr
+        );
     }
 
     #[test]
@@ -700,7 +816,10 @@ mod boundary_edge_cases {
         let mut parser = vt100::Parser::new(24, 80, 0);
         parser.process(b"\x1b[?1003h");
         parser.process(b"\x1b]0;my-title\x07");
-        assert_eq!(parser.screen().mouse_protocol_mode(), vt100::MouseProtocolMode::AnyMotion);
+        assert_eq!(
+            parser.screen().mouse_protocol_mode(),
+            vt100::MouseProtocolMode::AnyMotion
+        );
         assert_eq!(parser.screen().title(), "my-title");
     }
 
@@ -708,7 +827,10 @@ mod boundary_edge_cases {
     fn bracketed_paste_with_mouse_mode_coexist() {
         let mut parser = vt100::Parser::new(24, 80, 0);
         parser.process(b"\x1b[?1003h\x1b[?1006h\x1b[?2004h");
-        assert_eq!(parser.screen().mouse_protocol_mode(), vt100::MouseProtocolMode::AnyMotion);
+        assert_eq!(
+            parser.screen().mouse_protocol_mode(),
+            vt100::MouseProtocolMode::AnyMotion
+        );
         assert!(parser.screen().bracketed_paste());
     }
 
@@ -716,23 +838,31 @@ mod boundary_edge_cases {
     fn all_button_types_valid_sgr_range() {
         // All valid SGR button codes should produce parseable sequences
         let valid_buttons: &[u8] = &[
-            0,   // left
-            1,   // middle
-            2,   // right
-            32,  // left+motion
-            33,  // middle+motion
-            34,  // right+motion
-            35,  // bare motion
-            64,  // scroll up
-            65,  // scroll down
+            0,  // left
+            1,  // middle
+            2,  // right
+            32, // left+motion
+            33, // middle+motion
+            34, // right+motion
+            35, // bare motion
+            64, // scroll up
+            65, // scroll down
         ];
         for &btn in valid_buttons {
             let vt_col = 10u16;
             let vt_row = 5u16;
             let seq = format!("\x1b[<{};{};{}M", btn, vt_col, vt_row);
             // Verify it's valid UTF-8 and starts with ESC[<
-            assert!(seq.starts_with("\x1b[<"), "Button {} produced bad prefix", btn);
-            assert!(seq.ends_with('M'), "Button {} missing press terminator", btn);
+            assert!(
+                seq.starts_with("\x1b[<"),
+                "Button {} produced bad prefix",
+                btn
+            );
+            assert!(
+                seq.ends_with('M'),
+                "Button {} missing press terminator",
+                btn
+            );
         }
     }
 

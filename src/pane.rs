@@ -198,9 +198,19 @@ pub fn create_window(
         crate::format::expand_format(&app.default_shell, app)
     };
     let mut shell_cmd = if command.is_some() {
-        build_command(command, app.env_shim, app.allow_predictions, &app.session_name)
+        build_command(
+            command,
+            app.env_shim,
+            app.allow_predictions,
+            &app.session_name,
+        )
     } else if !expanded_shell.is_empty() {
-        build_default_shell(&expanded_shell, app.env_shim, app.allow_predictions, &app.session_name)
+        build_default_shell(
+            &expanded_shell,
+            app.env_shim,
+            app.allow_predictions,
+            &app.session_name,
+        )
     } else {
         build_command(None, app.env_shim, app.allow_predictions, &app.session_name)
     };
@@ -373,7 +383,12 @@ pub fn spawn_warm_pane(
     // Expand format variables like #{pane_current_path} at spawn time (#111).
     let expanded_shell = crate::format::expand_format(&app.default_shell, app);
     let mut shell_cmd = if !expanded_shell.is_empty() {
-        build_default_shell(&expanded_shell, app.env_shim, app.allow_predictions, &app.session_name)
+        build_default_shell(
+            &expanded_shell,
+            app.env_shim,
+            app.allow_predictions,
+            &app.session_name,
+        )
     } else {
         build_command(None, app.env_shim, app.allow_predictions, &app.session_name)
     };
@@ -761,9 +776,19 @@ pub fn split_active_with_command(
         crate::format::expand_format(&app.default_shell, app)
     };
     let mut shell_cmd = if command.is_some() {
-        build_command(command, app.env_shim, app.allow_predictions, &app.session_name)
+        build_command(
+            command,
+            app.env_shim,
+            app.allow_predictions,
+            &app.session_name,
+        )
     } else if !expanded_shell.is_empty() {
-        build_default_shell(&expanded_shell, app.env_shim, app.allow_predictions, &app.session_name)
+        build_default_shell(
+            &expanded_shell,
+            app.env_shim,
+            app.allow_predictions,
+            &app.session_name,
+        )
     } else {
         build_command(None, app.env_shim, app.allow_predictions, &app.session_name)
     };

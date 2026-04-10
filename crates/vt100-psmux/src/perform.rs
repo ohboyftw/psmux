@@ -186,7 +186,8 @@ impl<CB: crate::callbacks::Callbacks> vte::Perform for WrappedScreen<CB> {
                     .and_then(|x| x.first().copied())
                     .unwrap_or(0);
                 let style = if style > 6 { 0 } else { style };
-                self.screen.set_cursor_style(u8::try_from(style).unwrap_or(0));
+                self.screen
+                    .set_cursor_style(u8::try_from(style).unwrap_or(0));
             }
             Some(i) => {
                 self.callbacks.unhandled_csi(

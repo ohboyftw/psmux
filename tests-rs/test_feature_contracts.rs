@@ -100,7 +100,9 @@ mod focus_reporting_input_mode_diff {
 
         parser_with.process(b"\x1b[?1004h");
 
-        let diff = parser_with.screen().input_mode_diff(parser_without.screen());
+        let diff = parser_with
+            .screen()
+            .input_mode_diff(parser_without.screen());
         let diff_str = String::from_utf8_lossy(&diff);
         assert!(
             diff_str.contains("\x1b[?1004h"),
@@ -116,7 +118,9 @@ mod focus_reporting_input_mode_diff {
 
         parser_with.process(b"\x1b[?1004h");
 
-        let diff = parser_without.screen().input_mode_diff(parser_with.screen());
+        let diff = parser_without
+            .screen()
+            .input_mode_diff(parser_with.screen());
         let diff_str = String::from_utf8_lossy(&diff);
         assert!(
             diff_str.contains("\x1b[?1004l"),
@@ -299,7 +303,7 @@ mod cursor_style_state_diff {
         let mut parser_bar = vt100::Parser::new(24, 80, 0);
 
         parser_block.process(b"\x1b[2 q"); // steady block
-        parser_bar.process(b"\x1b[6 q");   // steady bar
+        parser_bar.process(b"\x1b[6 q"); // steady bar
 
         // Switching from bar pane to block pane
         let diff = parser_block.screen().state_diff(parser_bar.screen());
@@ -405,7 +409,7 @@ mod cursor_style_neovim_workflow {
         // RIS should reset cursor style to default
         let mut parser = vt100::Parser::new(24, 80, 0);
         parser.process(b"\x1b[6 q"); // set bar
-        parser.process(b"\x1bc");     // RIS
+        parser.process(b"\x1bc"); // RIS
 
         let default_parser = vt100::Parser::new(24, 80, 0);
         let diff = parser.screen().state_diff(default_parser.screen());
@@ -434,14 +438,18 @@ mod mouse_encoding_selection {
     /// encoding is Default, and SGR format when encoding is Sgr.
 
     /// Helper: encode a mouse event using the same logic as write_mouse_event_remote.
-    fn encode_mouse_event(button: u8, col: u16, row: u16, press: bool, enc: vt100::MouseProtocolEncoding) -> Vec<u8> {
+    fn encode_mouse_event(
+        button: u8,
+        col: u16,
+        row: u16,
+        press: bool,
+        enc: vt100::MouseProtocolEncoding,
+    ) -> Vec<u8> {
         let mut buf = Vec::new();
         match enc {
             vt100::MouseProtocolEncoding::Sgr => {
                 let ch = if press { 'M' } else { 'm' };
-                buf.extend_from_slice(
-                    format!("\x1b[<{};{};{}{}", button, col, row, ch).as_bytes()
-                );
+                buf.extend_from_slice(format!("\x1b[<{};{};{}{}", button, col, row, ch).as_bytes());
             }
             _ => {
                 if press {
@@ -461,14 +469,21 @@ mod mouse_encoding_selection {
         let result = encode_mouse_event(0, 1, 1, true, vt100::MouseProtocolEncoding::Default);
         // X10 format: ESC [ M Cb Cx Cy
         assert_eq!(result.len(), 6, "X10 format should be exactly 6 bytes");
-        assert_eq!(&result[..3], b"\x1b[M", "X10 format should start with ESC[M");
+        assert_eq!(
+            &result[..3],
+            b"\x1b[M",
+            "X10 format should start with ESC[M"
+        );
     }
 
     #[test]
     fn sgr_encoding_produces_sgr_format() {
         let result = encode_mouse_event(0, 1, 1, true, vt100::MouseProtocolEncoding::Sgr);
         let result_str = String::from_utf8_lossy(&result);
-        assert!(result_str.starts_with("\x1b[<"), "SGR format should start with ESC[<");
+        assert!(
+            result_str.starts_with("\x1b[<"),
+            "SGR format should start with ESC[<"
+        );
         assert!(result_str.ends_with('M'), "SGR press should end with M");
     }
 
@@ -487,7 +502,10 @@ mod mouse_encoding_selection {
     fn sgr_encoding_release_produces_lowercase_m() {
         let result = encode_mouse_event(0, 1, 1, false, vt100::MouseProtocolEncoding::Sgr);
         let result_str = String::from_utf8_lossy(&result);
-        assert!(result_str.ends_with('m'), "SGR release should end with lowercase m");
+        assert!(
+            result_str.ends_with('m'),
+            "SGR release should end with lowercase m"
+        );
     }
 }
 
@@ -595,8 +613,16 @@ mod mouse_encoding_pane_state_contract {
         }
 
         // Default encoding -> X10 format (6 bytes, starts with ESC[M)
-        assert_eq!(buf.len(), 6, "Default encoding should produce X10 format (6 bytes)");
-        assert_eq!(&buf[..3], b"\x1b[M", "Default encoding should start with ESC[M");
+        assert_eq!(
+            buf.len(),
+            6,
+            "Default encoding should produce X10 format (6 bytes)"
+        );
+        assert_eq!(
+            &buf[..3],
+            b"\x1b[M",
+            "Default encoding should start with ESC[M"
+        );
     }
 }
 

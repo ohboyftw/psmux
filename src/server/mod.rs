@@ -1937,7 +1937,8 @@ pub fn run_server(
                             // and the bottom-of-loop push section never fires for frames
                             // already served to the requesting client.
                             if crate::debug_log::memory_log_enabled() {
-                                let in_copy = matches!(app.mode, Mode::CopyMode | Mode::CopySearch { .. });
+                                let in_copy =
+                                    matches!(app.mode, Mode::CopyMode | Mode::CopySearch { .. });
                                 if in_copy {
                                     crate::debug_log::memory_log(
                                         "dumpstate",
@@ -2132,7 +2133,10 @@ pub fn run_server(
                                 // from a previous scroll, we're queuing frames faster
                                 // than they can be pushed.
                                 if crate::debug_log::memory_log_enabled() && state_dirty {
-                                    let in_copy = matches!(app.mode, Mode::CopyMode | Mode::CopySearch { .. });
+                                    let in_copy = matches!(
+                                        app.mode,
+                                        Mode::CopyMode | Mode::CopySearch { .. }
+                                    );
                                     if in_copy {
                                         crate::debug_log::memory_log(
                                             "scroll-burst",
@@ -2148,7 +2152,10 @@ pub fn run_server(
                         CtrlReq::ScrollDown(_, x, y) => {
                             if app.mouse_enabled {
                                 if crate::debug_log::memory_log_enabled() && state_dirty {
-                                    let in_copy = matches!(app.mode, Mode::CopyMode | Mode::CopySearch { .. });
+                                    let in_copy = matches!(
+                                        app.mode,
+                                        Mode::CopyMode | Mode::CopySearch { .. }
+                                    );
                                     if in_copy {
                                         crate::debug_log::memory_log(
                                             "scroll-burst",
@@ -3378,8 +3385,7 @@ pub fn run_server(
                                 // Rename .pipe discovery file so backend socket remains discoverable
                                 let old_pipepath =
                                     format!("{}\\.psmux\\{}.pipe", home, app.port_file_base());
-                                let new_pipepath =
-                                    format!("{}\\.psmux\\{}.pipe", home, new_base);
+                                let new_pipepath = format!("{}\\.psmux\\{}.pipe", home, new_base);
                                 if std::path::Path::new(&old_pipepath).exists() {
                                     let _ = std::fs::rename(&old_pipepath, &new_pipepath);
                                 }
@@ -3425,8 +3431,7 @@ pub fn run_server(
                                 // Rename .pipe discovery file so backend socket remains discoverable
                                 let old_pipepath =
                                     format!("{}\\.psmux\\{}.pipe", home, app.port_file_base());
-                                let new_pipepath =
-                                    format!("{}\\.psmux\\{}.pipe", home, new_base);
+                                let new_pipepath = format!("{}\\.psmux\\{}.pipe", home, new_base);
                                 if std::path::Path::new(&old_pipepath).exists() {
                                     let _ = std::fs::rename(&old_pipepath, &new_pipepath);
                                 }
@@ -3774,7 +3779,8 @@ pub fn run_server(
                                         (table_name.as_str(), key_str, action_str, bind.repeat)
                                     })
                                 });
-                            let output = help::build_list_keys_output(user_iter, app.defaults_suppressed);
+                            let output =
+                                help::build_list_keys_output(user_iter, app.defaults_suppressed);
                             let _ = resp.send(output);
                         }
                         CtrlReq::SetOption(option, value) => {
@@ -4979,7 +4985,11 @@ pub fn run_server(
                             // shell command for split_active_with_command.
                             // Empty command spawns a default shell pane (warm pane path).
                             let cmd_str = command.join(" ");
-                            let cmd_str = if cmd_str.is_empty() { None } else { Some(cmd_str) };
+                            let cmd_str = if cmd_str.is_empty() {
+                                None
+                            } else {
+                                Some(cmd_str)
+                            };
                             let start_dir = cwd
                                 .map(|d| expand_format(&d, &app))
                                 .filter(|d| !d.is_empty());
@@ -5055,10 +5065,13 @@ pub fn run_server(
                                 Ok(()) => {
                                     let new_pane_id = if use_window {
                                         // New window: pane is the root of the last window
-                                        app.windows.last().and_then(|w| {
-                                            crate::tree::active_pane(&w.root, &w.active_path)
-                                                .map(|p| p.id)
-                                        }).unwrap_or(0)
+                                        app.windows
+                                            .last()
+                                            .and_then(|w| {
+                                                crate::tree::active_pane(&w.root, &w.active_path)
+                                                    .map(|p| p.id)
+                                            })
+                                            .unwrap_or(0)
                                     } else {
                                         get_active_pane_id(
                                             &app.windows[app.active_idx].root,
@@ -5178,8 +5191,15 @@ pub fn run_server(
                                             out.push(crate::backend::protocol::ContextInfo {
                                                 context_id: format!("%{}", p.id),
                                                 alive: !p.dead,
-                                                cwd: p.spawn_cwd.as_ref().map(|c| c.to_string_lossy().into_owned()),
-                                                title: if p.title.is_empty() { None } else { Some(p.title.clone()) },
+                                                cwd: p
+                                                    .spawn_cwd
+                                                    .as_ref()
+                                                    .map(|c| c.to_string_lossy().into_owned()),
+                                                title: if p.title.is_empty() {
+                                                    None
+                                                } else {
+                                                    Some(p.title.clone())
+                                                },
                                                 shell_name: p.shell_name.clone(),
                                                 metadata: meta,
                                             });
@@ -5302,8 +5322,11 @@ pub fn run_server(
                             let mut found = false;
                             if let Some(pid) = id {
                                 for win in &mut app.windows {
-                                    if let Some(path) = crate::tree::find_path_by_id(&win.root, pid) {
-                                        if let Some(p) = crate::tree::active_pane_mut(&mut win.root, &path) {
+                                    if let Some(path) = crate::tree::find_path_by_id(&win.root, pid)
+                                    {
+                                        if let Some(p) =
+                                            crate::tree::active_pane_mut(&mut win.root, &path)
+                                        {
                                             metadata.apply_to(&mut p.metadata);
                                             found = true;
                                         }
@@ -5559,7 +5582,8 @@ pub fn run_server(
             while let Ok((title, text)) = rx.try_recv() {
                 if !text.is_empty() {
                     let lines: Vec<&str> = text.lines().collect();
-                    let width = lines.iter().map(|l| l.len()).max().unwrap_or(40).max(20) as u16 + 4;
+                    let width =
+                        lines.iter().map(|l| l.len()).max().unwrap_or(40).max(20) as u16 + 4;
                     let height = (lines.len() as u16 + 2).max(5);
                     app.mode = Mode::PopupMode {
                         command: title,
@@ -5705,7 +5729,8 @@ pub fn run_server(
         }
         // ── Memory diagnostics (every 5s when enabled) ──
         {
-            static LAST_MEM_LOG: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+            static LAST_MEM_LOG: std::sync::atomic::AtomicU64 =
+                std::sync::atomic::AtomicU64::new(0);
             if crate::debug_log::memory_log_enabled() {
                 let now_ms = std::time::SystemTime::now()
                     .duration_since(std::time::UNIX_EPOCH)
@@ -5722,19 +5747,22 @@ pub fn run_server(
                         Mode::Passthrough => "Passthrough",
                         _ => "Other",
                     };
-                    let pane_count: usize = app.windows.iter().map(|w| {
-                        fn count_panes(n: &crate::types::Node) -> usize {
-                            match n {
-                                crate::types::Node::Leaf(_) => 1,
-                                crate::types::Node::Split { children, .. } => {
-                                    children.iter().map(count_panes).sum()
+                    let pane_count: usize = app
+                        .windows
+                        .iter()
+                        .map(|w| {
+                            fn count_panes(n: &crate::types::Node) -> usize {
+                                match n {
+                                    crate::types::Node::Leaf(_) => 1,
+                                    crate::types::Node::Split { children, .. } => {
+                                        children.iter().map(count_panes).sum()
+                                    }
                                 }
                             }
-                        }
-                        count_panes(&w.root)
-                    }).sum();
-                    let shell_cache_size = app.shell_cmd_cache.lock()
-                        .map(|c| c.len()).unwrap_or(0);
+                            count_panes(&w.root)
+                        })
+                        .sum();
+                    let shell_cache_size = app.shell_cmd_cache.lock().map(|c| c.len()).unwrap_or(0);
                     crate::debug_log::memory_log(
                         "heartbeat",
                         &format!(

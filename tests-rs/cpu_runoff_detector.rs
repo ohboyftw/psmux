@@ -7,15 +7,15 @@
 // Usage:
 //   cargo test --test cpu_runoff_detector -- --test-threads=1 --nocapture
 
-use std::process::{Command, Stdio, Child};
-use std::time::{Duration, Instant};
+use std::process::{Child, Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 // ─── Configuration ─────────────────────────────────────────────────────────
 
-const MAX_SINGLE_CORE_CPU_PCT: f64 = 90.0;   // one core = 100%
-const MAX_TOTAL_CPU_PCT: f64 = 400.0;          // 4-core system
+const MAX_SINGLE_CORE_CPU_PCT: f64 = 90.0; // one core = 100%
+const MAX_TOTAL_CPU_PCT: f64 = 400.0; // 4-core system
 const CPU_SAMPLE_INTERVAL_MS: u64 = 200;
 const STRESS_DURATION_SECS: u64 = 15;
 
@@ -45,9 +45,11 @@ fn cleanup() {
 #[cfg(windows)]
 fn get_server_cpu_pct() -> Option<f64> {
     let output = Command::new("powershell")
-        .args(["-Command",
+        .args([
+            "-Command",
             "(Get-Process psmux -ErrorAction SilentlyContinue | \
-             Select-Object -First 1).CPU"])
+             Select-Object -First 1).CPU",
+        ])
         .output()
         .ok()?;
     let text = String::from_utf8_lossy(&output.stdout);
@@ -57,7 +59,10 @@ fn get_server_cpu_pct() -> Option<f64> {
 #[cfg(not(windows))]
 fn get_server_cpu_pct() -> Option<f64> {
     let output = Command::new("sh")
-        .args(["-c", "ps -o %cpu= -p $(pgrep -f 'psmux' | head -1) 2>/dev/null"])
+        .args([
+            "-c",
+            "ps -o %cpu= -p $(pgrep -f 'psmux' | head -1) 2>/dev/null",
+        ])
         .output()
         .ok()?;
     let text = String::from_utf8_lossy(&output.stdout);
@@ -78,7 +83,9 @@ fn sample_cpu(duration: Duration) -> Vec<(u64, f64)> {
 }
 
 fn avg_cpu(samples: &[(u64, f64)]) -> f64 {
-    if samples.is_empty() { return 0.0; }
+    if samples.is_empty() {
+        return 0.0;
+    }
     samples.iter().map(|(_, c)| c).sum::<f64>() / samples.len() as f64
 }
 
@@ -133,7 +140,10 @@ fn cpu_test_idle_session_baseline() {
     };
     result.report();
     cleanup();
-    assert!(result.passed, "Idle session consuming too much CPU: {avg:.1}%");
+    assert!(
+        result.passed,
+        "Idle session consuming too much CPU: {avg:.1}%"
+    );
 }
 
 #[test]
@@ -161,7 +171,10 @@ fn cpu_test_rapid_window_creation() {
         psmux(&["new-window", "-t", "rapid-win"]);
     }
     let creation_time = start.elapsed();
-    eprintln!("  Created 20 windows in {:.2}s", creation_time.as_secs_f64());
+    eprintln!(
+        "  Created 20 windows in {:.2}s",
+        creation_time.as_secs_f64()
+    );
 
     // Let CPU settle
     std::thread::sleep(Duration::from_secs(3));
@@ -181,7 +194,10 @@ fn cpu_test_rapid_window_creation() {
     };
     result.report();
     cleanup();
-    assert!(result.passed, "CPU runoff during rapid window creation: max={max:.1}%");
+    assert!(
+        result.passed,
+        "CPU runoff during rapid window creation: max={max:.1}%"
+    );
 }
 
 #[test]
@@ -198,11 +214,21 @@ fn cpu_test_concurrent_output_flood() {
     // Start flooding all panes
     for i in 0..10 {
         #[cfg(windows)]
-        psmux(&["send-keys", "-t", &format!("flood-cpu:.{i}"),
-            "cmd /c \"for /L %x in (1,1,99999) do @echo FLOOD_LINE\"", "Enter"]);
+        psmux(&[
+            "send-keys",
+            "-t",
+            &format!("flood-cpu:.{i}"),
+            "cmd /c \"for /L %x in (1,1,99999) do @echo FLOOD_LINE\"",
+            "Enter",
+        ]);
         #[cfg(not(windows))]
-        psmux(&["send-keys", "-t", &format!("flood-cpu:.{i}"),
-            &format!("yes 'FLOOD_LINE_{i}'"), "Enter"]);
+        psmux(&[
+            "send-keys",
+            "-t",
+            &format!("flood-cpu:.{i}"),
+            &format!("yes 'FLOOD_LINE_{i}'"),
+            "Enter",
+        ]);
     }
 
     // Monitor CPU during flood
@@ -229,11 +255,17 @@ fn cpu_test_concurrent_output_flood() {
     let start = Instant::now();
     let responsive = psmux(&["list-sessions"]);
     let latency = start.elapsed();
-    eprintln!("  Responsiveness check: list-sessions in {:?} (success={})", latency, responsive);
+    eprintln!(
+        "  Responsiveness check: list-sessions in {:?} (success={})",
+        latency, responsive
+    );
 
     cleanup();
     assert!(result.passed, "CPU runoff during flood: avg={avg:.1}%");
-    assert!(latency < Duration::from_secs(2), "System unresponsive during flood");
+    assert!(
+        latency < Duration::from_secs(2),
+        "System unresponsive during flood"
+    );
 }
 
 #[test]
@@ -317,7 +349,10 @@ fn cpu_test_rapid_resize_events() {
     };
     result.report();
     cleanup();
-    assert!(result.passed, "Resize CPU runoff: avg={avg:.1}%, max={max:.1}%");
+    assert!(
+        result.passed,
+        "Resize CPU runoff: avg={avg:.1}%, max={max:.1}%"
+    );
 }
 
 #[test]

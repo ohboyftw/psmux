@@ -312,11 +312,7 @@ pub(crate) fn check_window_activity(app: &mut AppState) {
 ///
 /// If the old active pane has focus reporting enabled (?1004h), send FocusOut (\x1b[O).
 /// If the new active pane has focus reporting enabled, send FocusIn (\x1b[I).
-pub(crate) fn send_focus_events(
-    app: &mut AppState,
-    old_path: &[usize],
-    new_path: &[usize],
-) {
+pub(crate) fn send_focus_events(app: &mut AppState, old_path: &[usize], new_path: &[usize]) {
     use crate::tree::active_pane_mut;
     use std::io::Write;
 

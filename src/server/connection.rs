@@ -904,8 +904,7 @@ pub(crate) fn handle_connection(
                             !a.starts_with('-')
                                 && **a != "-t"
                                 && **a != "--wait-ready"
-                                && !(i > &0
-                                    && args.get(i - 1).is_some_and(|prev| *prev == "-N"))
+                                && !(i > &0 && args.get(i - 1).is_some_and(|prev| *prev == "-N"))
                         })
                         .map(|(_, a)| *a)
                         .collect();
@@ -1415,7 +1414,10 @@ pub(crate) fn handle_connection(
                 }
             }
             "unbind-key" | "unbind" => {
-                if args.iter().any(|a| *a == "-a" || (a.starts_with('-') && a.contains('a'))) {
+                if args
+                    .iter()
+                    .any(|a| *a == "-a" || (a.starts_with('-') && a.contains('a')))
+                {
                     let mut table = "prefix".to_string();
                     for (j, a) in args.iter().enumerate() {
                         if *a == "-T" {
@@ -2216,7 +2218,12 @@ pub(crate) fn handle_connection(
                     let false_cmd = positional.get(2).copied();
                     let success = if format_mode {
                         let (rtx, rrx) = std::sync::mpsc::channel::<String>();
-                        let _ = tx.send(CtrlReq::DisplayMessage(rtx, condition.to_string(), None, false));
+                        let _ = tx.send(CtrlReq::DisplayMessage(
+                            rtx,
+                            condition.to_string(),
+                            None,
+                            false,
+                        ));
                         let expanded = rrx.recv().unwrap_or_default();
                         !expanded.is_empty() && expanded != "0"
                     } else if condition == "true" || condition == "1" {

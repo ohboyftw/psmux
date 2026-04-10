@@ -586,12 +586,22 @@ fn log_scroll_rate(direction: &str, offset: usize) {
     if elapsed >= 2000 {
         // CAS to avoid duplicate logs from concurrent calls
         if SCROLL_LAST_RATE_LOG
-            .compare_exchange(last_ms, now_ms, std::sync::atomic::Ordering::AcqRel, std::sync::atomic::Ordering::Relaxed)
+            .compare_exchange(
+                last_ms,
+                now_ms,
+                std::sync::atomic::Ordering::AcqRel,
+                std::sync::atomic::Ordering::Relaxed,
+            )
             .is_ok()
         {
-            let last_count = SCROLL_LAST_RATE_COUNT.swap(count, std::sync::atomic::Ordering::Relaxed);
+            let last_count =
+                SCROLL_LAST_RATE_COUNT.swap(count, std::sync::atomic::Ordering::Relaxed);
             let delta = count.saturating_sub(last_count);
-            let rate = if elapsed > 0 { delta * 1000 / elapsed } else { 0 };
+            let rate = if elapsed > 0 {
+                delta * 1000 / elapsed
+            } else {
+                0
+            };
             let mem = crate::debug_log::process_memory_bytes();
             let (receivers, frames, bytes) = crate::types::frame_push_stats();
             crate::debug_log::memory_log(

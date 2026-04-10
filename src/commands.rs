@@ -33,19 +33,30 @@ pub fn resolve_run_shell() -> (String, Vec<String>) {
     {
         use std::path::PathBuf;
         if let Ok(path) = which::which("pwsh") {
-            return (path.to_string_lossy().into_owned(), vec!["-NoProfile".to_string(), "-Command".to_string()]);
+            return (
+                path.to_string_lossy().into_owned(),
+                vec!["-NoProfile".to_string(), "-Command".to_string()],
+            );
         }
         if let Ok(path) = which::which("powershell") {
-            return (path.to_string_lossy().into_owned(), vec!["-NoProfile".to_string(), "-Command".to_string()]);
+            return (
+                path.to_string_lossy().into_owned(),
+                vec!["-NoProfile".to_string(), "-Command".to_string()],
+            );
         }
-        if let Ok(system_root) = std::env::var("SystemRoot").or_else(|_| std::env::var("SYSTEMROOT")) {
+        if let Ok(system_root) =
+            std::env::var("SystemRoot").or_else(|_| std::env::var("SYSTEMROOT"))
+        {
             let powershell = PathBuf::from(&system_root)
                 .join("System32")
                 .join("WindowsPowerShell")
                 .join("v1.0")
                 .join("powershell.exe");
             if powershell.is_file() {
-                return (powershell.to_string_lossy().into_owned(), vec!["-NoProfile".to_string(), "-Command".to_string()]);
+                return (
+                    powershell.to_string_lossy().into_owned(),
+                    vec!["-NoProfile".to_string(), "-Command".to_string()],
+                );
             }
             let cmd = PathBuf::from(&system_root).join("System32").join("cmd.exe");
             if cmd.is_file() {
@@ -78,14 +89,19 @@ pub fn build_run_shell_command(shell_cmd: &str) -> std::process::Command {
 
         // Case 1: Command already starts with a shell binary (pwsh, powershell, cmd).
         // Run it directly to avoid nesting `pwsh -Command "pwsh -File ..."`.
-        if lower.starts_with("pwsh ") || lower.starts_with("pwsh.exe ")
-            || lower.starts_with("powershell ") || lower.starts_with("powershell.exe ")
-            || lower.starts_with("cmd ") || lower.starts_with("cmd.exe ")
+        if lower.starts_with("pwsh ")
+            || lower.starts_with("pwsh.exe ")
+            || lower.starts_with("powershell ")
+            || lower.starts_with("powershell.exe ")
+            || lower.starts_with("cmd ")
+            || lower.starts_with("cmd.exe ")
         {
             let parts = parse_command_line(shell_cmd);
             if parts.len() >= 2 {
                 let mut c = std::process::Command::new(&parts[0]);
-                for p in &parts[1..] { c.arg(p); }
+                for p in &parts[1..] {
+                    c.arg(p);
+                }
                 return c;
             }
         }
@@ -96,19 +112,27 @@ pub fn build_run_shell_command(shell_cmd: &str) -> std::process::Command {
         let first_token = trimmed.split_whitespace().next().unwrap_or("");
         let first_unquoted = first_token.trim_matches('"').trim_matches('\'');
         if first_unquoted.ends_with(".ps1") && std::path::Path::new(first_unquoted).exists() {
-            let shell = if which::which("pwsh").is_ok() { "pwsh" } else { "powershell" };
+            let shell = if which::which("pwsh").is_ok() {
+                "pwsh"
+            } else {
+                "powershell"
+            };
             let mut c = std::process::Command::new(shell);
             c.args(["-NoProfile", "-ExecutionPolicy", "Bypass", "-File"]);
             // Split remaining args so the .ps1 path and its arguments are separate args
             let parts = parse_command_line(trimmed);
-            for p in &parts { c.arg(p); }
+            for p in &parts {
+                c.arg(p);
+            }
             return c;
         }
 
         // Case 3: Regular command string. Wrap in shell.
         let (shell_prog, shell_args) = resolve_run_shell();
         let mut c = std::process::Command::new(&shell_prog);
-        for a in &shell_args { c.arg(a); }
+        for a in &shell_args {
+            c.arg(a);
+        }
         c.arg(shell_cmd);
         c
     }
@@ -116,7 +140,9 @@ pub fn build_run_shell_command(shell_cmd: &str) -> std::process::Command {
     {
         let (shell_prog, shell_args) = resolve_run_shell();
         let mut c = std::process::Command::new(&shell_prog);
-        for a in &shell_args { c.arg(a); }
+        for a in &shell_args {
+            c.arg(a);
+        }
         c.arg(shell_cmd);
         c
     }
@@ -1430,8 +1456,11 @@ fn execute_command_string_single(app: &mut AppState, cmd: &str) -> io::Result<()
             let mut cmd_parts: Vec<&str> = Vec::new();
             let mut background = false;
             for arg in &args[1..] {
-                if arg == "-b" { background = true; }
-                else { cmd_parts.push(arg); }
+                if arg == "-b" {
+                    background = true;
+                } else {
+                    cmd_parts.push(arg);
+                }
             }
             let shell_cmd = cmd_parts.join(" ");
             if !shell_cmd.is_empty() {
@@ -1483,14 +1512,13 @@ fn execute_command_string_single(app: &mut AppState, cmd: &str) -> io::Result<()
                                 let _ = tx.send(("run-shell".to_string(), text));
                             }
                             Err(e) => {
-                                let _ = tx.send(("run-shell".to_string(), format!("run-shell: {}", e)));
+                                let _ =
+                                    tx.send(("run-shell".to_string(), format!("run-shell: {}", e)));
                             }
                         }
                     });
-                    app.status_message = Some((
-                        format!("running: {}", shell_cmd_display),
-                        Instant::now(),
-                    ));
+                    app.status_message =
+                        Some((format!("running: {}", shell_cmd_display), Instant::now()));
                 }
             }
         }

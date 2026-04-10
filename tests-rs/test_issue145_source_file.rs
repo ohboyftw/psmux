@@ -21,7 +21,10 @@ fn source_file_applies_status_left() {
     std::fs::write(&tmp, "set -g status-left 'SOURCED_OK'\n").unwrap();
     source_file(&mut app, &tmp.display().to_string());
     let _ = std::fs::remove_file(&tmp);
-    assert_eq!(app.status_left, "SOURCED_OK", "source-file should update status-left");
+    assert_eq!(
+        app.status_left, "SOURCED_OK",
+        "source-file should update status-left"
+    );
 }
 
 #[test]
@@ -48,7 +51,10 @@ fn source_file_tilde_backslash_expansion() {
     let tilde_path = format!("~\\{}", filename);
     source_file(&mut app, &tilde_path);
     let _ = std::fs::remove_file(&full_path);
-    assert_eq!(app.history_limit, 4444, "source-file with ~\\ should expand tilde");
+    assert_eq!(
+        app.history_limit, 4444,
+        "source-file with ~\\ should expand tilde"
+    );
 }
 
 #[test]
@@ -63,7 +69,10 @@ fn source_file_tilde_forward_slash_expansion() {
     let tilde_path = format!("~/{}", filename);
     source_file(&mut app, &tilde_path);
     let _ = std::fs::remove_file(&full_path);
-    assert_eq!(app.history_limit, 3333, "source-file with ~/ should expand tilde");
+    assert_eq!(
+        app.history_limit, 3333,
+        "source-file with ~/ should expand tilde"
+    );
 }
 
 #[test]
@@ -71,12 +80,21 @@ fn source_file_bom_first_line_not_dropped() {
     let mut app = mock_app();
     let tmp = std::env::temp_dir().join("psmux_test_145_bom.conf");
     let bom = "\u{FEFF}";
-    let content = format!("{}set -g history-limit 6666\nset -g status-left 'BOM_OK'\n", bom);
+    let content = format!(
+        "{}set -g history-limit 6666\nset -g status-left 'BOM_OK'\n",
+        bom
+    );
     std::fs::write(&tmp, content).unwrap();
     source_file(&mut app, &tmp.display().to_string());
     let _ = std::fs::remove_file(&tmp);
-    assert_eq!(app.history_limit, 6666, "first line after BOM must be parsed");
-    assert_eq!(app.status_left, "BOM_OK", "second line after BOM must be parsed");
+    assert_eq!(
+        app.history_limit, 6666,
+        "first line after BOM must be parsed"
+    );
+    assert_eq!(
+        app.status_left, "BOM_OK",
+        "second line after BOM must be parsed"
+    );
 }
 
 #[test]
@@ -84,7 +102,10 @@ fn parse_config_content_bom_stripped() {
     let mut app = mock_app();
     let bom_content = "\u{FEFF}set -g history-limit 5555\nset -g status-right 'BOM_STRIP'\n";
     parse_config_content(&mut app, bom_content);
-    assert_eq!(app.history_limit, 5555, "parse_config_content should strip BOM from first line");
+    assert_eq!(
+        app.history_limit, 5555,
+        "parse_config_content should strip BOM from first line"
+    );
     assert_eq!(app.status_right, "BOM_STRIP");
 }
 
@@ -93,14 +114,20 @@ fn parse_config_content_no_bom_still_works() {
     let mut app = mock_app();
     let content = "set -g history-limit 1234\n";
     parse_config_content(&mut app, content);
-    assert_eq!(app.history_limit, 1234, "content without BOM should still parse normally");
+    assert_eq!(
+        app.history_limit, 1234,
+        "content without BOM should still parse normally"
+    );
 }
 
 #[test]
 fn source_file_missing_file_does_not_crash() {
     let mut app = mock_app();
     source_file(&mut app, "/nonexistent/path/config.conf");
-    assert_eq!(app.history_limit, 2000, "missing file should not change defaults");
+    assert_eq!(
+        app.history_limit, 2000,
+        "missing file should not change defaults"
+    );
 }
 
 #[test]
@@ -111,7 +138,10 @@ fn source_file_quoted_path() {
     let quoted = format!("\"{}\"", tmp.display());
     source_file(&mut app, &quoted);
     let _ = std::fs::remove_file(&tmp);
-    assert_eq!(app.history_limit, 2222, "source-file should handle quoted paths");
+    assert_eq!(
+        app.history_limit, 2222,
+        "source-file should handle quoted paths"
+    );
 }
 
 #[test]
@@ -122,27 +152,44 @@ fn source_file_single_quoted_path() {
     let quoted = format!("'{}'", tmp.display());
     source_file(&mut app, &quoted);
     let _ = std::fs::remove_file(&tmp);
-    assert_eq!(app.history_limit, 1111, "source-file should handle single-quoted paths");
+    assert_eq!(
+        app.history_limit, 1111,
+        "source-file should handle single-quoted paths"
+    );
 }
 
 #[test]
 fn source_file_with_bind_key_inside() {
     let mut app = mock_app();
     let tmp = std::env::temp_dir().join("psmux_test_145_bind.conf");
-    std::fs::write(&tmp, "bind-key r source-file ~/.tmux.conf\nset -g status-left 'BIND_OK'\n").unwrap();
+    std::fs::write(
+        &tmp,
+        "bind-key r source-file ~/.tmux.conf\nset -g status-left 'BIND_OK'\n",
+    )
+    .unwrap();
     source_file(&mut app, &tmp.display().to_string());
     let _ = std::fs::remove_file(&tmp);
-    assert_eq!(app.status_left, "BIND_OK", "source-file with bind-key inside should work");
+    assert_eq!(
+        app.status_left, "BIND_OK",
+        "source-file with bind-key inside should work"
+    );
 }
 
 #[test]
 fn source_file_crlf_line_endings() {
     let mut app = mock_app();
     let tmp = std::env::temp_dir().join("psmux_test_145_crlf.conf");
-    std::fs::write(&tmp, "set -g history-limit 7070\r\nset -g status-left 'CRLF_OK'\r\n").unwrap();
+    std::fs::write(
+        &tmp,
+        "set -g history-limit 7070\r\nset -g status-left 'CRLF_OK'\r\n",
+    )
+    .unwrap();
     source_file(&mut app, &tmp.display().to_string());
     let _ = std::fs::remove_file(&tmp);
-    assert_eq!(app.history_limit, 7070, "CRLF line endings should parse correctly");
+    assert_eq!(
+        app.history_limit, 7070,
+        "CRLF line endings should parse correctly"
+    );
     assert_eq!(app.status_left, "CRLF_OK");
 }
 

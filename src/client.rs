@@ -1329,7 +1329,8 @@ pub fn run_remote(
                                 if entry.c == "detach-client" || entry.c == "detach" {
                                     quit = true;
                                 } else {
-                                    let sub_cmds = crate::config::split_chained_commands_pub(&entry.c);
+                                    let sub_cmds =
+                                        crate::config::split_chained_commands_pub(&entry.c);
                                     for sub in &sub_cmds {
                                         cmd_batch.push(format!("{}\n", sub));
                                     }
@@ -1353,7 +1354,8 @@ pub fn run_remote(
                                 {
                                     confirm_cmd = Some(entry.c.clone());
                                 } else {
-                                    let sub_cmds = crate::config::split_chained_commands_pub(&entry.c);
+                                    let sub_cmds =
+                                        crate::config::split_chained_commands_pub(&entry.c);
                                     for sub in &sub_cmds {
                                         cmd_batch.push(format!("{}\n", sub));
                                     }
@@ -1488,7 +1490,10 @@ pub fn run_remote(
                                                     (b.r, b.t.clone(), b.k.clone(), b.c.clone())
                                                 })
                                                 .collect();
-                                        keys_viewer_lines = help::build_overlay_lines(&user_binds, defaults_suppressed);
+                                        keys_viewer_lines = help::build_overlay_lines(
+                                            &user_binds,
+                                            defaults_suppressed,
+                                        );
                                         keys_viewer = true;
                                     }
                                     KeyCode::Char('t') => {
@@ -2072,7 +2077,8 @@ pub fn run_remote(
                                     if !trimmed.is_empty() {
                                         command_history.push(trimmed.clone());
                                         command_history_idx = command_history.len();
-                                        let sub_cmds = crate::config::split_chained_commands_pub(&trimmed);
+                                        let sub_cmds =
+                                            crate::config::split_chained_commands_pub(&trimmed);
                                         for sub in &sub_cmds {
                                             cmd_batch.push(format!("{}\n", sub));
                                         }

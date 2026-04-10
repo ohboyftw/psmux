@@ -207,7 +207,9 @@ fn handle_spawn_agent(
 
             let retry_id = retry_rx
                 .recv_timeout(std::time::Duration::from_secs(10))
-                .map_err(|_| RpcErr::from((-32603, "Server response timeout (retry)".to_string())))?;
+                .map_err(|_| {
+                    RpcErr::from((-32603, "Server response timeout (retry)".to_string()))
+                })?;
 
             if let Some(retry_err) = retry_id.strip_prefix("ERROR:") {
                 return Err(RpcErr::from((SPAWN_FAILED, retry_err.to_string())));
@@ -542,7 +544,10 @@ fn handle_set_metadata(
         .map_err(|_| RpcErr::from((-32603, "Server response timeout".to_string())))?;
 
     if !found {
-        return Err(RpcErr::from((PANE_NOT_FOUND, format!("Pane {} not found", p.context_id))));
+        return Err(RpcErr::from((
+            PANE_NOT_FOUND,
+            format!("Pane {} not found", p.context_id),
+        )));
     }
 
     Ok(serde_json::json!({}))
@@ -733,7 +738,8 @@ mod tests {
     fn dispatch_spawn_agent_empty_command_spawns_shell() {
         // Empty command is allowed — spawns a default shell pane
         let (tx, rx) = std::sync::mpsc::channel();
-        let input = r#"{"id":"1","method":"spawn_agent","params":{"command":[],"wait_ready":false}}"#;
+        let input =
+            r#"{"id":"1","method":"spawn_agent","params":{"command":[],"wait_ready":false}}"#;
         // dispatch_rpc sends BackendSpawnAgent to tx; it will block waiting
         // for the server response. We just verify it doesn't return an error
         // synchronously (the -32602 rejection is gone).

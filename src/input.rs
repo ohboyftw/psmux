@@ -3015,7 +3015,9 @@ fn prime_pane_input(pane: &mut Pane) {
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
     loop {
         let dv = pane.data_version.load(std::sync::atomic::Ordering::Relaxed);
-        let lot = pane.last_output_time.load(std::sync::atomic::Ordering::Relaxed);
+        let lot = pane
+            .last_output_time
+            .load(std::sync::atomic::Ordering::Relaxed);
         if dv > 0 && lot > 0 {
             let now_ms = std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)

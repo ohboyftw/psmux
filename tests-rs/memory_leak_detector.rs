@@ -8,16 +8,16 @@
 //
 // IMPORTANT: Run with --test-threads=1 to avoid interference between tests.
 
+use std::io::Write;
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
-use std::io::Write;
 
 // ─── Configuration ─────────────────────────────────────────────────────────
 
-const LEAK_THRESHOLD_KB: u64 = 5120;      // 5MB max leak tolerated
-const CYCLE_COOLDOWN_MS: u64 = 200;       // wait between create/destroy
-const POST_STRESS_COOLDOWN_S: u64 = 5;    // wait after all cycles
-const RSS_SAMPLE_INTERVAL_MS: u64 = 500;  // sampling frequency
+const LEAK_THRESHOLD_KB: u64 = 5120; // 5MB max leak tolerated
+const CYCLE_COOLDOWN_MS: u64 = 200; // wait between create/destroy
+const POST_STRESS_COOLDOWN_S: u64 = 5; // wait after all cycles
+const RSS_SAMPLE_INTERVAL_MS: u64 = 500; // sampling frequency
 
 // ─── Helpers ───────────────────────────────────────────────────────────────
 
@@ -45,7 +45,16 @@ fn psmux_output(args: &[&str]) -> String {
 
 fn cleanup() {
     // Kill only test sessions, NOT the server — avoids destroying user's real sessions
-    for prefix in &["baseline", "leak-sess-", "pane-leak", "flood-leak", "lifecycle-anchor", "life-", "renamed-", "copy-flood"] {
+    for prefix in &[
+        "baseline",
+        "leak-sess-",
+        "pane-leak",
+        "flood-leak",
+        "lifecycle-anchor",
+        "life-",
+        "renamed-",
+        "copy-flood",
+    ] {
         let output = psmux_output(&["list-sessions", "-F", "#{session_name}"]);
         for line in output.lines() {
             if line.starts_with(prefix) {
@@ -63,8 +72,11 @@ fn get_server_rss_kb() -> Option<u64> {
     {
         // Use PowerShell to get WorkingSet of psmux process
         let output = Command::new("powershell")
-            .args(["-Command", "(Get-Process psmux -ErrorAction SilentlyContinue | \
-                Select-Object -First 1).WorkingSet64 / 1KB"])
+            .args([
+                "-Command",
+                "(Get-Process psmux -ErrorAction SilentlyContinue | \
+                Select-Object -First 1).WorkingSet64 / 1KB",
+            ])
             .output()
             .ok()?;
         let text = String::from_utf8_lossy(&output.stdout);
@@ -74,7 +86,10 @@ fn get_server_rss_kb() -> Option<u64> {
     {
         // Use /proc for Linux (useful in WSL testing)
         let output = Command::new("sh")
-            .args(["-c", "ps -o rss= -p $(pgrep -f 'psmux.*server' | head -1) 2>/dev/null"])
+            .args([
+                "-c",
+                "ps -o rss= -p $(pgrep -f 'psmux.*server' | head -1) 2>/dev/null",
+            ])
             .output()
             .ok()?;
         let text = String::from_utf8_lossy(&output.stdout);
@@ -97,7 +112,9 @@ fn sample_rss(duration: Duration, interval: Duration) -> Vec<(u64, u64)> {
 
 /// Compute linear regression slope on RSS samples (KB per millisecond)
 fn rss_growth_rate(samples: &[(u64, u64)]) -> f64 {
-    if samples.len() < 2 { return 0.0; }
+    if samples.len() < 2 {
+        return 0.0;
+    }
     let n = samples.len() as f64;
     let sum_x: f64 = samples.iter().map(|(t, _)| *t as f64).sum();
     let sum_y: f64 = samples.iter().map(|(_, r)| *r as f64).sum();
@@ -170,7 +187,10 @@ fn leak_test_session_create_destroy() {
     };
     result.report();
     cleanup();
-    assert!(result.passed, "Memory leak detected: {delta}KB over {cycles} cycles");
+    assert!(
+        result.passed,
+        "Memory leak detected: {delta}KB over {cycles} cycles"
+    );
 }
 
 #[test]
@@ -210,7 +230,10 @@ fn leak_test_pane_create_destroy() {
     };
     result.report();
     cleanup();
-    assert!(result.passed, "Pane leak detected: {delta}KB over {cycles}×10 panes");
+    assert!(
+        result.passed,
+        "Pane leak detected: {delta}KB over {cycles}×10 panes"
+    );
 }
 
 #[test]
@@ -222,11 +245,21 @@ fn leak_test_output_flood_bounded_buffer() {
 
     // Start flooding output
     #[cfg(windows)]
-    psmux(&["send-keys", "-t", "flood-leak",
+    psmux(&[
+        "send-keys",
+        "-t",
+        "flood-leak",
         "cmd /c \"for /L %i in (1,1,999999) do @echo ########################################\"",
-        "Enter"]);
+        "Enter",
+    ]);
     #[cfg(not(windows))]
-    psmux(&["send-keys", "-t", "flood-leak", "yes '########################################'", "Enter"]);
+    psmux(&[
+        "send-keys",
+        "-t",
+        "flood-leak",
+        "yes '########################################'",
+        "Enter",
+    ]);
 
     // Sample RSS for 60 seconds
     let samples = sample_rss(
@@ -243,7 +276,11 @@ fn leak_test_output_flood_bounded_buffer() {
 
     eprintln!(
         "[{}] output_flood_buffer: {} samples, growth_rate={:.2}KB/s",
-        if rate_kb_per_sec < 100.0 { "PASS" } else { "FAIL" },
+        if rate_kb_per_sec < 100.0 {
+            "PASS"
+        } else {
+            "FAIL"
+        },
         samples.len(),
         rate_kb_per_sec
     );
@@ -287,13 +324,24 @@ fn leak_test_full_lifecycle_stress() {
 
         // Send some output to exercise the VT100 parser
         for w in 0..3 {
-            psmux(&["send-keys", "-t", &format!("{sess}:{w}"), "echo hello", "Enter"]);
+            psmux(&[
+                "send-keys",
+                "-t",
+                &format!("{sess}:{w}"),
+                "echo hello",
+                "Enter",
+            ]);
         }
         std::thread::sleep(Duration::from_millis(100));
 
         // Rename, resize, exercise format engine
         psmux(&["rename-session", "-t", &sess, &format!("renamed-{i}")]);
-        psmux(&["rename-window", "-t", &format!("renamed-{i}:0"), &format!("win-{i}")]);
+        psmux(&[
+            "rename-window",
+            "-t",
+            &format!("renamed-{i}:0"),
+            &format!("win-{i}"),
+        ]);
 
         // Destroy
         psmux(&["kill-session", "-t", &format!("renamed-{i}")]);
@@ -314,7 +362,10 @@ fn leak_test_full_lifecycle_stress() {
     };
     result.report();
     cleanup();
-    assert!(result.passed, "Lifecycle leak: {delta}KB after {cycles} full cycles");
+    assert!(
+        result.passed,
+        "Lifecycle leak: {delta}KB after {cycles} full cycles"
+    );
 }
 
 /// Reproduces reported 11GB memory leak: flood output into a pane, then enter
@@ -334,7 +385,13 @@ fn leak_test_copy_mode_scroll_during_flood() {
         "cmd /c \"for /L %i in (1,1,999999) do @echo LINE_%i_########################################\"",
         "Enter"]);
     #[cfg(not(windows))]
-    psmux(&["send-keys", "-t", "copy-flood", "yes 'LINE_########################################'", "Enter"]);
+    psmux(&[
+        "send-keys",
+        "-t",
+        "copy-flood",
+        "yes 'LINE_########################################'",
+        "Enter",
+    ]);
 
     // Let output accumulate for 10 seconds
     std::thread::sleep(Duration::from_secs(10));
@@ -388,7 +445,11 @@ fn leak_test_copy_mode_scroll_during_flood() {
     eprintln!(
         "[{}] copy_mode_scroll_flood: baseline={baseline}KB final={final_rss}KB \
          delta={delta:+}KB rate={rate_kb_per_sec:.2}KB/s scroll_cycles={scroll_cycles}",
-        if delta < (LEAK_THRESHOLD_KB as i64 * 10) { "PASS" } else { "FAIL" },
+        if delta < (LEAK_THRESHOLD_KB as i64 * 10) {
+            "PASS"
+        } else {
+            "FAIL"
+        },
     );
 
     // Print RSS timeline

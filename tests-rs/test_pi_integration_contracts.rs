@@ -250,15 +250,16 @@ mod list_result_schema {
 
         // Second context: dead, optional fields omitted
         assert_eq!(contexts[1]["alive"], false);
-        assert!(contexts[1].get("cwd").is_none(), "cwd should be omitted for dead pane");
+        assert!(
+            contexts[1].get("cwd").is_none(),
+            "cwd should be omitted for dead pane"
+        );
     }
 
     /// Contract: empty list returns valid JSON with zero contexts.
     #[test]
     fn list_result_empty() {
-        let result = psmux::backend::protocol::ListResult {
-            contexts: vec![],
-        };
+        let result = psmux::backend::protocol::ListResult { contexts: vec![] };
         let json = serde_json::to_value(&result).expect("ListResult should serialize");
         let contexts = json["contexts"].as_array().expect("contexts must be array");
         assert_eq!(contexts.len(), 0);
@@ -307,9 +308,18 @@ mod context_info_roundtrip {
         assert_eq!(value["context_id"], "%0");
         assert_eq!(value["alive"], false);
         // Optional fields should not appear at all
-        assert!(value.get("cwd").is_none(), "cwd must not appear in minimal form");
-        assert!(value.get("title").is_none(), "title must not appear in minimal form");
-        assert!(value.get("shell_name").is_none(), "shell_name must not appear in minimal form");
+        assert!(
+            value.get("cwd").is_none(),
+            "cwd must not appear in minimal form"
+        );
+        assert!(
+            value.get("title").is_none(),
+            "title must not appear in minimal form"
+        );
+        assert!(
+            value.get("shell_name").is_none(),
+            "shell_name must not appear in minimal form"
+        );
     }
 }
 
@@ -390,8 +400,7 @@ mod pipe_discovery_contracts {
         let session = "my-session";
         let path = psmux::backend::pipe::pipe_path(session);
         assert_eq!(
-            path,
-            r"\\.\pipe\psmux-claude-backend-my-session",
+            path, r"\\.\pipe\psmux-claude-backend-my-session",
             "Pipe path must follow naming convention"
         );
     }
@@ -401,7 +410,10 @@ mod pipe_discovery_contracts {
     fn pipe_path_unique_per_session() {
         let path_a = psmux::backend::pipe::pipe_path("alpha");
         let path_b = psmux::backend::pipe::pipe_path("beta");
-        assert_ne!(path_a, path_b, "Different sessions must have different pipe paths");
+        assert_ne!(
+            path_a, path_b,
+            "Different sessions must have different pipe paths"
+        );
     }
 
     /// Contract: pipe_path() handles numeric session names (auto-generated).
@@ -409,8 +421,7 @@ mod pipe_discovery_contracts {
     fn pipe_path_numeric_session() {
         let path = psmux::backend::pipe::pipe_path("0");
         assert_eq!(
-            path,
-            r"\\.\pipe\psmux-claude-backend-0",
+            path, r"\\.\pipe\psmux-claude-backend-0",
             "Numeric session names must work"
         );
     }
@@ -437,8 +448,7 @@ mod pipe_discovery_contracts {
     fn pipe_path_with_namespace_prefix() {
         let path = psmux::backend::pipe::pipe_path("myns__0");
         assert_eq!(
-            path,
-            r"\\.\pipe\psmux-claude-backend-myns__0",
+            path, r"\\.\pipe\psmux-claude-backend-myns__0",
             "Namespace-prefixed session names must work"
         );
     }
@@ -506,7 +516,13 @@ mod boundary_edge_cases {
         };
         let json = serde_json::to_value(&info).expect("maximal ContextInfo should serialize");
         assert!(json.is_object());
-        assert_eq!(json["metadata"]["disallowed_tools"].as_array().unwrap().len(), 2);
+        assert_eq!(
+            json["metadata"]["disallowed_tools"]
+                .as_array()
+                .unwrap()
+                .len(),
+            2
+        );
     }
 
     /// Edge case: ContextInfo with only required fields.
@@ -527,8 +543,14 @@ mod boundary_edge_cases {
         assert!(obj.contains_key("alive"), "alive is required");
         // Optional fields should be absent
         assert!(!obj.contains_key("cwd"), "cwd should be absent when None");
-        assert!(!obj.contains_key("title"), "title should be absent when None");
-        assert!(!obj.contains_key("shell_name"), "shell_name should be absent when None");
+        assert!(
+            !obj.contains_key("title"),
+            "title should be absent when None"
+        );
+        assert!(
+            !obj.contains_key("shell_name"),
+            "shell_name should be absent when None"
+        );
     }
 
     /// Edge case: Unicode in title and cwd.
@@ -543,7 +565,8 @@ mod boundary_edge_cases {
             metadata: None,
         };
         let serialized = serde_json::to_string(&info).expect("unicode should serialize");
-        let value: serde_json::Value = serde_json::from_str(&serialized).expect("unicode should deserialize");
+        let value: serde_json::Value =
+            serde_json::from_str(&serialized).expect("unicode should deserialize");
         assert_eq!(value["title"], "vim README.md");
     }
 
@@ -594,15 +617,15 @@ mod rpc_response_with_list {
                 metadata: None,
             }],
         };
-        let response = psmux::backend::protocol::RpcResponse::success(
-            serde_json::json!(1),
-            list,
-        );
+        let response = psmux::backend::protocol::RpcResponse::success(serde_json::json!(1), list);
         let json = serde_json::to_value(&response).expect("RPC response should serialize");
 
         // JSON-RPC envelope
         assert_eq!(json["id"], 1);
-        assert!(json.get("error").is_none(), "success response must not have error");
+        assert!(
+            json.get("error").is_none(),
+            "success response must not have error"
+        );
 
         // Nested list result
         let ctx = &json["result"]["contexts"][0];

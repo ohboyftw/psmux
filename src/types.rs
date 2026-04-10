@@ -1319,11 +1319,9 @@ pub type FrameSlot = std::sync::Arc<(std::sync::Mutex<Option<String>>, std::sync
 static FRAME_PUSH_SLOTS: std::sync::Mutex<Vec<FrameSlot>> = std::sync::Mutex::new(Vec::new());
 
 /// Cumulative bytes pushed through frame channels (diagnostic).
-static FRAME_PUSH_TOTAL_BYTES: std::sync::atomic::AtomicU64 =
-    std::sync::atomic::AtomicU64::new(0);
+static FRAME_PUSH_TOTAL_BYTES: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 /// Cumulative frame count pushed (diagnostic).
-static FRAME_PUSH_TOTAL_COUNT: std::sync::atomic::AtomicU64 =
-    std::sync::atomic::AtomicU64::new(0);
+static FRAME_PUSH_TOTAL_COUNT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
 /// Register a frame slot for a persistent connection's writer thread.
 /// Returns the slot Arc for the writer thread to consume from.
@@ -1368,22 +1366,19 @@ pub fn push_frame(frame: &str) {
         FRAME_PUSH_TOTAL_BYTES.fetch_add(frame_bytes, std::sync::atomic::Ordering::Relaxed);
         let count = FRAME_PUSH_TOTAL_COUNT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
 
-        if crate::debug_log::memory_log_enabled()
-            && (pruned > 0 || count.is_multiple_of(100))
-        {
-                let total_bytes =
-                    FRAME_PUSH_TOTAL_BYTES.load(std::sync::atomic::Ordering::Relaxed);
-                crate::debug_log::memory_log(
-                    "frame",
-                    &format!(
-                        "push_frame #{}: size={} receivers={} pruned={} cumulative_bytes={}",
-                        count,
-                        crate::debug_log::format_bytes(frame.len() as u64),
-                        after,
-                        pruned,
-                        crate::debug_log::format_bytes(total_bytes),
-                    ),
-                );
+        if crate::debug_log::memory_log_enabled() && (pruned > 0 || count.is_multiple_of(100)) {
+            let total_bytes = FRAME_PUSH_TOTAL_BYTES.load(std::sync::atomic::Ordering::Relaxed);
+            crate::debug_log::memory_log(
+                "frame",
+                &format!(
+                    "push_frame #{}: size={} receivers={} pruned={} cumulative_bytes={}",
+                    count,
+                    crate::debug_log::format_bytes(frame.len() as u64),
+                    after,
+                    pruned,
+                    crate::debug_log::format_bytes(total_bytes),
+                ),
+            );
         }
     }
 }

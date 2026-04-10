@@ -148,7 +148,10 @@ impl PsuedoCon {
             };
 
             if result == S_OK {
-                return Ok(Self { con, used_passthrough: true });
+                return Ok(Self {
+                    con,
+                    used_passthrough: true,
+                });
             }
             // If the API call failed despite being on a supported build,
             // fall through to the standard path.
@@ -169,13 +172,20 @@ impl PsuedoCon {
             "failed to create psuedo console: HRESULT {}",
             result
         );
-        Ok(Self { con, used_passthrough: false })
+        Ok(Self {
+            con,
+            used_passthrough: false,
+        })
     }
 
     /// Create a ConPTY explicitly without passthrough mode, regardless of
     /// Windows build version.  Used by the retry logic when CreateProcessW
     /// rejects the passthrough ConPTY handle.
-    pub fn new_without_passthrough(size: COORD, input: FileDescriptor, output: FileDescriptor) -> Result<Self, Error> {
+    pub fn new_without_passthrough(
+        size: COORD,
+        input: FileDescriptor,
+        output: FileDescriptor,
+    ) -> Result<Self, Error> {
         let mut con: HPCON = INVALID_HANDLE_VALUE;
         let base_flags = PSUEDOCONSOLE_INHERIT_CURSOR
             | PSEUDOCONSOLE_RESIZE_QUIRK
@@ -195,7 +205,10 @@ impl PsuedoCon {
             "failed to create psuedo console (no passthrough): HRESULT {}",
             result
         );
-        Ok(Self { con, used_passthrough: false })
+        Ok(Self {
+            con,
+            used_passthrough: false,
+        })
     }
 
     pub fn resize(&self, size: COORD) -> Result<(), Error> {

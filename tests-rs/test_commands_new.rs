@@ -2128,8 +2128,12 @@ fn run_shell_captures_and_displays_output() {
 
     // run-shell is now async: the command runs in a background thread
     // and sends output via run_shell_rx. We need to recv the result.
-    let rx = app.run_shell_rx.as_ref().expect("run_shell_rx should be created");
-    let (title, text) = rx.recv_timeout(std::time::Duration::from_secs(10))
+    let rx = app
+        .run_shell_rx
+        .as_ref()
+        .expect("run_shell_rx should be created");
+    let (title, text) = rx
+        .recv_timeout(std::time::Duration::from_secs(10))
         .expect("should receive run-shell output within 10s");
     assert_eq!(title, "run-shell");
     assert!(
@@ -2168,8 +2172,12 @@ fn run_shell_alias_captures_output() {
 
     let _ = execute_command_string(&mut app, cmd);
 
-    let rx = app.run_shell_rx.as_ref().expect("run_shell_rx should be created");
-    let (_title, text) = rx.recv_timeout(std::time::Duration::from_secs(10))
+    let rx = app
+        .run_shell_rx
+        .as_ref()
+        .expect("run_shell_rx should be created");
+    let (_title, text) = rx
+        .recv_timeout(std::time::Duration::from_secs(10))
         .expect("should receive run alias output within 10s");
     assert!(
         text.contains("alias-test"),
@@ -2189,8 +2197,12 @@ fn run_shell_stderr_is_captured() {
 
     let _ = execute_command_string(&mut app, cmd);
 
-    let rx = app.run_shell_rx.as_ref().expect("run_shell_rx should be created");
-    let (_title, text) = rx.recv_timeout(std::time::Duration::from_secs(10))
+    let rx = app
+        .run_shell_rx
+        .as_ref()
+        .expect("run_shell_rx should be created");
+    let (_title, text) = rx
+        .recv_timeout(std::time::Duration::from_secs(10))
         .expect("should receive run-shell stderr output within 10s");
     assert!(
         text.contains("error-output") || text.contains("error"),
@@ -2212,8 +2224,12 @@ fn run_shell_empty_output_no_popup() {
 
     // run-shell is now async: mode is not changed synchronously.
     // The result arrives via run_shell_rx channel.
-    let rx = app.run_shell_rx.as_ref().expect("run_shell_rx should be created");
-    let (_title, text) = rx.recv_timeout(std::time::Duration::from_secs(10))
+    let rx = app
+        .run_shell_rx
+        .as_ref()
+        .expect("run_shell_rx should be created");
+    let (_title, text) = rx
+        .recv_timeout(std::time::Duration::from_secs(10))
         .expect("should receive run-shell output within 10s");
     // On Unix, `true` produces no output; on Windows, Write-Output '' produces a newline.
     // The app.rs/server drain code skips empty text, so no popup would be created.
@@ -2230,8 +2246,14 @@ fn run_shell_empty_output_no_popup() {
 #[test]
 fn new_window_bare_returns_action_new_window() {
     // Bare new-window with no args should still return the simple Action::NewWindow
-    assert!(matches!(parse_command_to_action("new-window"), Some(Action::NewWindow)));
-    assert!(matches!(parse_command_to_action("neww"), Some(Action::NewWindow)));
+    assert!(matches!(
+        parse_command_to_action("new-window"),
+        Some(Action::NewWindow)
+    ));
+    assert!(matches!(
+        parse_command_to_action("neww"),
+        Some(Action::NewWindow)
+    ));
 }
 
 #[test]
@@ -2241,7 +2263,11 @@ fn new_window_with_c_flag_returns_command_preserving_args() {
     match parse_command_to_action("new-window -c #{pane_current_path}") {
         Some(Action::Command(cmd)) => {
             assert!(cmd.contains("-c"), "expected -c in command, got: {}", cmd);
-            assert!(cmd.contains("#{pane_current_path}"), "expected format var in command, got: {}", cmd);
+            assert!(
+                cmd.contains("#{pane_current_path}"),
+                "expected format var in command, got: {}",
+                cmd
+            );
         }
         _ => panic!("expected Action::Command preserving -c"),
     }
@@ -2253,7 +2279,11 @@ fn new_window_with_name_flag_returns_command() {
     match parse_command_to_action("new-window -n myname") {
         Some(Action::Command(cmd)) => {
             assert!(cmd.contains("-n"), "expected -n in command, got: {}", cmd);
-            assert!(cmd.contains("myname"), "expected window name in command, got: {}", cmd);
+            assert!(
+                cmd.contains("myname"),
+                "expected window name in command, got: {}",
+                cmd
+            );
         }
         _ => panic!("expected Action::Command"),
     }
@@ -2264,7 +2294,11 @@ fn new_window_with_shell_command_returns_command() {
     // new-window -- python3 should also be preserved
     match parse_command_to_action("new-window -- python3") {
         Some(Action::Command(cmd)) => {
-            assert!(cmd.contains("python3"), "expected shell command in command, got: {}", cmd);
+            assert!(
+                cmd.contains("python3"),
+                "expected shell command in command, got: {}",
+                cmd
+            );
         }
         _ => panic!("expected Action::Command"),
     }

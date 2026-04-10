@@ -355,7 +355,11 @@ fn write_mouse_to_pty(pane: &mut Pane, col: i16, row: i16, vt_button: u8, press:
 
     mouse_log(&format!(
         "  -> PTY pipe mouse ({}): seq={:?}",
-        if matches!(encoding, vt100::MouseProtocolEncoding::Sgr) { "SGR" } else { "X10" },
+        if matches!(encoding, vt100::MouseProtocolEncoding::Sgr) {
+            "SGR"
+        } else {
+            "X10"
+        },
         std::str::from_utf8(&buf[..len]).unwrap_or("?")
     ));
     let _ = pane.writer.write_all(&buf[..len]);
@@ -1221,7 +1225,12 @@ pub fn respawn_active_pane(
         .openpty(size)
         .map_err(|e| io::Error::other(format!("openpty error: {e}")))?;
     let mut shell_cmd = if !expanded_shell.is_empty() {
-        build_default_shell(&expanded_shell, app.env_shim, app.allow_predictions, &app.session_name)
+        build_default_shell(
+            &expanded_shell,
+            app.env_shim,
+            app.allow_predictions,
+            &app.session_name,
+        )
     } else {
         detect_shell(&app.session_name)
     };
