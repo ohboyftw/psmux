@@ -5170,6 +5170,10 @@ pub fn run_server(
                                             let meta = crate::backend::protocol::AgentMetadata::from_metadata_map(&p.metadata);
                                             out.push(crate::backend::protocol::ContextInfo {
                                                 context_id: format!("%{}", p.id),
+                                                alive: !p.dead,
+                                                cwd: p.spawn_cwd.as_ref().map(|c| c.to_string_lossy().into_owned()),
+                                                title: if p.title.is_empty() { None } else { Some(p.title.clone()) },
+                                                shell_name: p.shell_name.clone(),
                                                 metadata: meta,
                                             });
                                         }

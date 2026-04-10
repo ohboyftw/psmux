@@ -204,6 +204,13 @@ pub struct ListResult {
 #[derive(Debug, Serialize)]
 pub struct ContextInfo {
     pub context_id: String,
+    pub alive: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cwd: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub shell_name: Option<String>,
     pub metadata: Option<AgentMetadata>,
 }
 
