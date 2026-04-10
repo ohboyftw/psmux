@@ -44,7 +44,8 @@ Full scripting support including `send-keys`, `capture-pane`, `pipe-pane`,
 
 ### Remote & Backend Features (ohboy-builds)
 - **Remote tmux control mode**: `attach-remote`, `new-session-remote`, `list-sessions-remote` — connect to remote tmux sessions over SSH using `-CC` control mode
-- **CustomPaneBackend**: JSON-RPC named pipe server (`CLAUDE_PANE_BACKEND_SOCKET` env var) for Claude Code's TeammateTool agent spawning protocol. Injects `CLAUDE_CODE_NO_FLICKER=1` for flicker-free agent rendering.
+- **CustomPaneBackend**: JSON-RPC named pipe server (`CLAUDE_PANE_BACKEND_SOCKET` / `PI_PANE_BACKEND_SOCKET` env vars) for Claude Code's TeammateTool and Pi coding agent's PsmuxAdapter. Injects `CLAUDE_CODE_NO_FLICKER=1` for flicker-free agent rendering.
+- **Pi coding agent integration**: `PSMUX=1` boolean detection, `PSMUX_SESSION` set to real session name in all code paths, `PSMUX_PANE_ID` mirrors `TMUX_PANE`, enriched JSON-RPC `list` response (`alive`, `cwd`, `title`, `shell_name`), early `~/.psmux/{session}.pipe` discovery file write at session start
 - **DCS passthrough**: `set -g allow-passthrough on` forwards DCS tmux passthrough sequences to the host terminal (e.g., for title setting, clipboard)
 
 ### Neovim / TUI Support (ohboy-builds)
@@ -88,6 +89,7 @@ Read `references/architecture.md` for the full system design.
 ## Test Infrastructure
 - `tests-rs/test_boundary_contracts.rs` — 60 tests: SGR/X10 encoding, coordinate translation, VT state machine, pane-switch handshakes, edge cases
 - `tests-rs/test_feature_contracts.rs` — 33 tests: focus reporting, cursor style, mouse encoding, state diff contracts
+- `tests-rs/test_pi_integration_contracts.rs` — 32 tests: Pi adapter env var contracts, ContextInfo schema/serialization, pipe discovery, edge cases
 - `tests-rs/test_vt100_mouse.rs` — VT100 mouse mode detection
 - `tests/` — PowerShell integration tests (swarm backend, issue-specific)
-- Total: ~1,100 tests across all targets
+- Total: ~1,130 tests across all targets

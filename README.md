@@ -213,6 +213,7 @@ See [docs/power-pack-tools.md](docs/power-pack-tools.md) for the full tool stack
 >
 > **Agent Compatibility:**
 > - **Claude Code `TeammateTool`** — Auto-detected via `$TMUX`. Tested with 5-8 concurrent agents
+> - **Pi coding agent (`PsmuxAdapter`)** — Detected via `$PSMUX=1`. Env vars: `PI_PANE_BACKEND_SOCKET`, `PSMUX_SESSION` (real session name), `PSMUX_PANE_ID`. JSON-RPC `list` returns `alive`, `cwd`, `title`, `shell_name` per pane
 > - **Warm pool lifecycle** — Version-stamped warm panes, orphan cleanup on session exit
 > - **`send-keys --wait-ready`** — Server-side pane readiness polling before key delivery
 > - **`-e KEY=VAL`** — Per-pane environment variables on `new-window`/`split-window`
