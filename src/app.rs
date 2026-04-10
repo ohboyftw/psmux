@@ -280,7 +280,9 @@ pub fn run(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> io::Result<
                 let mut parts = line.split_whitespace();
                 let cmd = parts.next().unwrap_or("");
                 // parse optional target specifier
-                let args: Vec<&str> = parts.by_ref().collect();
+                let args_raw: Vec<&str> = parts.by_ref().collect();
+                let args_owned = crate::cli::normalize_flag_equals_borrowed(&args_raw);
+                let args: Vec<&str> = args_owned.iter().map(|s| s.as_str()).collect();
                 let mut target_win: Option<usize> = global_target_win;
                 let mut target_pane: Option<usize> = global_target_pane;
                 let mut pane_is_id = global_pane_is_id;

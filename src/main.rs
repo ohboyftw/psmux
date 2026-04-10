@@ -73,7 +73,7 @@ fn main() {
 }
 
 fn run_main() -> io::Result<()> {
-    let args: Vec<String> = env::args().collect();
+    let args: Vec<String> = crate::cli::normalize_flag_equals(env::args().collect());
 
     // Clean up any stale port files at startup
     cleanup_stale_port_files();
