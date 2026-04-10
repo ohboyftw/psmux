@@ -1008,14 +1008,23 @@ pub fn set_tmux_env(
         format!("/tmp/tmux-{}/{},{},0", server_pid, sn, port),
     );
     builder.env("TMUX_PANE", format!("%{}", pane_id));
+    // R7: psmux-branded pane identity, mirrors TMUX_PANE.
+    builder.env("PSMUX_PANE_ID", format!("%{}", pane_id));
     // Override the placeholder "1" from build_command/build_default_shell with the
     // real session name.  Tools like Claude Code can use PSMUX_SESSION for explicit
     // psmux detection (e.g. `if (process.env.PSMUX_SESSION) return 'psmux'`).
     builder.env("PSMUX_SESSION", session_name);
+    // R1: simple boolean detection — `if (process.env.PSMUX)`.
+    builder.env("PSMUX", "1");
     // CustomPaneBackend named pipe path — Claude Code's TeammateTool discovers
     // the backend endpoint via this env var.
     builder.env(
         "CLAUDE_PANE_BACKEND_SOCKET",
+        crate::backend::pipe::pipe_path(session_name),
+    );
+    // R3: pi-canonical backend socket discovery — same pipe, pi-branded name.
+    builder.env(
+        "PI_PANE_BACKEND_SOCKET",
         crate::backend::pipe::pipe_path(session_name),
     );
     // Prevent MSYS2/Git-Bash from path-mangling the TMUX value (which starts
