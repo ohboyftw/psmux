@@ -83,6 +83,55 @@ Upstream added server-side control mode (2,594 lines). ohboy-builds has CustomPa
   - Risk: None — additive files
   - Blocked by: -C/-CC CLI flags (tests need working implementation)
 
+### Tier 2: Flag Normalization (sync-2026-04-10-panther)
+
+- [ ] **Port `-x=VALUE` flag normalization from `0b18080`** `TODO`
+  - Tools like claude-squad use `has-session -t=NAME` which silently passes
+  - Add `normalize_flag_equals()` to cli.rs, wire into app.rs + connection.rs entry points
+  - Files: `src/cli.rs` (new function), `src/app.rs` (+1), `src/server/connection.rs` (+2) — all diverged
+  - Test: `tests-rs/test_issue196_flag_equals.rs` (NEW, cherry-pick clean)
+  - Risk: Low — flag parsing is upstream of dispatch
+
+### Tier 3: Scroll Without Copy Mode (sync-2026-04-10-panther)
+
+- [ ] **Port scroll_pane_scrollback from `6bcb9f5` (PR #194)** `TODO`
+  - Scroll pane buffer directly when scroll-enter-copy-mode is off
+  - Extract `scroll_pane_scrollback()` from copy_mode.rs, wire into input.rs + window_ops.rs
+  - Add `scroll-enter-copy-mode` option to `src/server/options.rs` (option_catalog.rs deleted in ohboy-builds)
+  - Files: `src/copy_mode.rs`, `src/input.rs`, `src/window_ops.rs`, `src/server/options.rs` — all diverged
+  - Risk: Medium — touches input handling
+
+### Tier 4: Fixes (sync-2026-04-10-panther)
+
+- [ ] **Port defaults_suppressed reset from `266d414`** `TODO`
+  - `unbind-key -a` flag never reset on source-file reload
+  - Files: `src/commands.rs`, `src/server/mod.rs` — both diverged
+  - Risk: Low
+
+- [ ] **Port paste timeout from `86a7519`** `TODO`
+  - Bracketed paste state machine has no timeout — lost close sequence = permanent freeze
+  - Add paste_start timestamp, 2s timeout, 1MB cap
+  - Files: `src/app.rs`, `src/ssh_input.rs` — both diverged
+  - Risk: Medium — input handling sensitive
+
+- [ ] **Port unbind-key -a table support from `f9d443d`** `TODO`
+  - unbind-key -a now supports -T table flag; defaults_suppressed moved in struct
+  - Files: `src/commands.rs`, `src/config.rs`, `src/pane.rs`, `src/server/connection.rs`, `src/server/mod.rs` — all diverged
+  - New files: `examples/enter_diag.rs`, `tests/test_full_feature.ps1` (cherry-pick clean)
+  - Risk: High — touches 5 diverged files
+
+- [ ] **Verify session.rs namespace functions from `3e61a0d`** `TODO`
+  - Check if `resolve_last_session_name_ns()` and `list_session_names_ns()` exist in ohboy-builds
+  - If missing, port from upstream session.rs
+  - Risk: Low — check only
+
+### Tier 5: Docs (sync-2026-04-10-panther)
+
+- [ ] **Merge upstream docs update from `c6088d5`** `TODO`
+  - 13 features documented, 7 plugins, 4 themes added
+  - Files: `docs/configuration.md`, `docs/features.md`, `docs/plugins.md`, `docs/scripting.md`
+  - Risk: Low — docs only, may have minor conflicts
+
 ### Tier 2: Quick Config (sync-2026-04-01-griffin)
 
 - [ ] **Set `CLAUDE_CODE_NO_FLICKER=1` in CustomPaneBackend spawn env** `TODO`

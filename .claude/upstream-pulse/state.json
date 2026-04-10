@@ -1,0 +1,15 @@
+{
+  "last_check": "2026-04-10T12:00:00Z",
+  "tag": "sync-2026-04-10-panther",
+  "codename_index": 13,
+  "upstream_sha": "c6088d5",
+  "claude_code_version": "2.1.100",
+  "pi_version": "0.66.1",
+  "sources": {
+    "claude_code_changelog": "https://code.claude.com/docs/en/changelog",
+    "claude_code_releases": "https://github.com/anthropics/claude-code/releases",
+    "claude_code_npm": "https://registry.npmjs.org/@anthropic-ai/claude-code",
+    "pi_npm": "https://registry.npmjs.org/@mariozechner/pi-coding-agent",
+    "pi_changelog": "https://raw.githubusercontent.com/badlogic/pi-mono/main/packages/ai/CHANGELOG.md"
+  }
+}
