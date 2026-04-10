@@ -102,7 +102,16 @@ fn mixed_args_normalize_correctly() {
 #[test]
 fn multiple_flags_with_equals() {
     let input = &["capture-pane", "-t=dev:0.1", "-S=0", "-E=100", "-p"];
-    let expected = vec!["capture-pane", "-t", "dev:0.1", "-S", "0", "-E", "100", "-p"];
+    let expected = vec![
+        "capture-pane",
+        "-t",
+        "dev:0.1",
+        "-S",
+        "0",
+        "-E",
+        "100",
+        "-p",
+    ];
     assert_eq!(nfe(input), expected);
 }
 
@@ -136,5 +145,8 @@ fn borrowed_no_split_long_flag() {
 fn borrowed_mixed_args() {
     let args: Vec<&str> = vec!["-t=dev:0", "-S=10", "positional", "--long=v"];
     let result = normalize_flag_equals_borrowed(&args);
-    assert_eq!(result, vec!["-t", "dev:0", "-S", "10", "positional", "--long=v"]);
+    assert_eq!(
+        result,
+        vec!["-t", "dev:0", "-S", "10", "positional", "--long=v"]
+    );
 }

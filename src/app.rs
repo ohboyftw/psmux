@@ -74,7 +74,11 @@ mod bracket_paste_detect {
         /// Accumulating paste content between open and close sequences.
         Pasting { buf: String, started: Instant },
         /// Inside paste, matching characters of the close sequence.
-        MatchClose { idx: usize, buf: String, started: Instant },
+        MatchClose {
+            idx: usize,
+            buf: String,
+            started: Instant,
+        },
     }
 
     pub enum Action {
@@ -208,7 +212,11 @@ mod bracket_paste_detect {
                 if let Some(b) = key_byte(&key) {
                     if b == CLOSE[0] {
                         // Potential close sequence start.
-                        *state = State::MatchClose { idx: 1, buf, started };
+                        *state = State::MatchClose {
+                            idx: 1,
+                            buf,
+                            started,
+                        };
                         return Action::Consumed;
                     }
                 }
