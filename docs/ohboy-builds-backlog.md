@@ -134,11 +134,8 @@ Upstream added server-side control mode (2,594 lines). ohboy-builds has CustomPa
 
 ### Tier 2: Quick Config (sync-2026-04-01-griffin)
 
-- [ ] **Set `CLAUDE_CODE_NO_FLICKER=1` in CustomPaneBackend spawn env** `TODO`
-  - Claude Code v2.1.89 adds flicker-free alt-screen rendering env var
-  - Action: Add to pane spawn environment in `src/backend/dispatcher.rs`
-  - Files: `src/backend/dispatcher.rs` (~1 line)
-  - Risk: None — additive env var
+- [x] **Set `CLAUDE_CODE_NO_FLICKER=1` in CustomPaneBackend spawn env** `DONE`
+  - Already implemented in `src/backend/dispatcher.rs:137-141`
 
 ### Tier 3: Manual Ports (sync-2026-04-01-griffin)
 
@@ -354,6 +351,9 @@ These are quality-of-life fixes for interactive tmux-compatible usage. They don'
 | Clippy fixes (perform.rs, term.rs, window_ops.rs) | 2026-04-06 | Direct fix |
 | Zoom meta_dirty (`acb51b2`) | 2026-04-07 | Manual port — server/mod.rs |
 | Run-shell absolute paths (`b9a6d88`) | 2026-04-07 | Manual port — commands.rs |
+| Flag normalization -x=VALUE (`0b18080`) | 2026-04-10 | Manual port — cli.rs + 3 entry points |
+| Paste timeout (#197) (`86a7519`) | 2026-04-10 | Manual port — app.rs + ssh_input.rs |
+| CLAUDE_CODE_NO_FLICKER=1 | 2026-04-10 | Already present in dispatcher.rs |
 
 ## Won't Do
 
