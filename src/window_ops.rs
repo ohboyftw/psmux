@@ -1221,9 +1221,9 @@ pub fn respawn_active_pane(
         .openpty(size)
         .map_err(|e| io::Error::other(format!("openpty error: {e}")))?;
     let mut shell_cmd = if !expanded_shell.is_empty() {
-        build_default_shell(&expanded_shell, app.env_shim, app.allow_predictions)
+        build_default_shell(&expanded_shell, app.env_shim, app.allow_predictions, &app.session_name)
     } else {
-        detect_shell()
+        detect_shell(&app.session_name)
     };
     set_tmux_env(
         &mut shell_cmd,

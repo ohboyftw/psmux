@@ -198,11 +198,11 @@ pub fn create_window(
         crate::format::expand_format(&app.default_shell, app)
     };
     let mut shell_cmd = if command.is_some() {
-        build_command(command, app.env_shim, app.allow_predictions)
+        build_command(command, app.env_shim, app.allow_predictions, &app.session_name)
     } else if !expanded_shell.is_empty() {
-        build_default_shell(&expanded_shell, app.env_shim, app.allow_predictions)
+        build_default_shell(&expanded_shell, app.env_shim, app.allow_predictions, &app.session_name)
     } else {
-        build_command(None, app.env_shim, app.allow_predictions)
+        build_command(None, app.env_shim, app.allow_predictions, &app.session_name)
     };
     // Override CWD if -c start_dir was specified
     if let Some(dir) = start_dir {
@@ -373,9 +373,9 @@ pub fn spawn_warm_pane(
     // Expand format variables like #{pane_current_path} at spawn time (#111).
     let expanded_shell = crate::format::expand_format(&app.default_shell, app);
     let mut shell_cmd = if !expanded_shell.is_empty() {
-        build_default_shell(&expanded_shell, app.env_shim, app.allow_predictions)
+        build_default_shell(&expanded_shell, app.env_shim, app.allow_predictions, &app.session_name)
     } else {
-        build_command(None, app.env_shim, app.allow_predictions)
+        build_command(None, app.env_shim, app.allow_predictions, &app.session_name)
     };
     let pane_id = app.next_pane_id;
     app.next_pane_id += 1;
@@ -457,7 +457,7 @@ pub fn create_window_raw(
         .openpty(size)
         .map_err(|e| io::Error::other(format!("openpty error: {e}")))?;
 
-    let mut shell_cmd = build_raw_command(raw_args);
+    let mut shell_cmd = build_raw_command(raw_args, &app.session_name);
     set_tmux_env(
         &mut shell_cmd,
         app.next_pane_id,
@@ -761,11 +761,11 @@ pub fn split_active_with_command(
         crate::format::expand_format(&app.default_shell, app)
     };
     let mut shell_cmd = if command.is_some() {
-        build_command(command, app.env_shim, app.allow_predictions)
+        build_command(command, app.env_shim, app.allow_predictions, &app.session_name)
     } else if !expanded_shell.is_empty() {
-        build_default_shell(&expanded_shell, app.env_shim, app.allow_predictions)
+        build_default_shell(&expanded_shell, app.env_shim, app.allow_predictions, &app.session_name)
     } else {
-        build_command(None, app.env_shim, app.allow_predictions)
+        build_command(None, app.env_shim, app.allow_predictions, &app.session_name)
     };
     // Override CWD if -c start_dir was specified
     if let Some(dir) = start_dir {
@@ -979,8 +979,8 @@ pub fn kill_pane_by_id(app: &mut AppState, pane_id: usize) -> io::Result<()> {
     Ok(())
 }
 
-pub fn detect_shell() -> CommandBuilder {
-    build_command(None, false, false)
+pub fn detect_shell(session_name: &str) -> CommandBuilder {
+    build_command(None, false, false, session_name)
 }
 
 /// Set TMUX, TMUX_PANE, and PSMUX_SESSION environment variables on a CommandBuilder.
@@ -1245,6 +1245,7 @@ pub fn build_command(
     command: Option<&str>,
     env_shim: bool,
     allow_predictions: bool,
+    session_name: &str,
 ) -> CommandBuilder {
     // Capture CWD early — portable_pty on Windows defaults to USERPROFILE
     // (home dir) when no cwd is set on CommandBuilder, so we must set it
@@ -1261,7 +1262,8 @@ pub fn build_command(
                 }
                 builder.env("TERM", "xterm-256color");
                 builder.env("COLORTERM", "truecolor");
-                builder.env("PSMUX_SESSION", "1");
+                builder.env("PSMUX_SESSION", session_name);
+                builder.env("PSMUX", "1");
 
                 let stem = std::path::Path::new(&path)
                     .file_stem()
@@ -1287,7 +1289,8 @@ pub fn build_command(
                 }
                 builder.env("TERM", "xterm-256color");
                 builder.env("COLORTERM", "truecolor");
-                builder.env("PSMUX_SESSION", "1");
+                builder.env("PSMUX_SESSION", session_name);
+                builder.env("PSMUX", "1");
                 builder.args(["-NoLogo", "-Command", cmd]);
                 builder
             }
@@ -1310,7 +1313,8 @@ pub fn build_command(
                 }
                 builder.env("TERM", "xterm-256color");
                 builder.env("COLORTERM", "truecolor");
-                builder.env("PSMUX_SESSION", "1");
+                builder.env("PSMUX_SESSION", session_name);
+                builder.env("PSMUX", "1");
                 if path.to_lowercase().contains("pwsh") {
                     builder.args(["-NoLogo", "-NoProfile", "-NoExit", "-Command", &psrl_init]);
                 }
@@ -1323,7 +1327,8 @@ pub fn build_command(
                 }
                 builder.env("TERM", "xterm-256color");
                 builder.env("COLORTERM", "truecolor");
-                builder.env("PSMUX_SESSION", "1");
+                builder.env("PSMUX_SESSION", session_name);
+                builder.env("PSMUX", "1");
                 // Apply the same -NoProfile + manual profile sourcing for
                 // the fallback pwsh.exe path (previously had no PSRL fix).
                 builder.args(["-NoLogo", "-NoProfile", "-NoExit", "-Command", &psrl_init]);
@@ -1389,6 +1394,7 @@ pub fn build_default_shell(
     shell_path: &str,
     env_shim: bool,
     allow_predictions: bool,
+    session_name: &str,
 ) -> CommandBuilder {
     let (program, extra_args) = resolve_shell_program(shell_path);
 
@@ -1404,7 +1410,8 @@ pub fn build_default_shell(
     }
     builder.env("TERM", "xterm-256color");
     builder.env("COLORTERM", "truecolor");
-    builder.env("PSMUX_SESSION", "1");
+    builder.env("PSMUX_SESSION", session_name);
+    builder.env("PSMUX", "1");
 
     // Prepend extra arguments (e.g. -NoProfile) BEFORE our -NoExit/-Command block
     // so they're interpreted as flags rather than as -Command arguments.
@@ -1445,9 +1452,9 @@ pub fn build_default_shell(
 /// Build a CommandBuilder for direct execution (no shell wrapping).
 /// raw_args[0] is the program, rest are its arguments.
 /// Used when -- separator is specified in new-session.
-pub fn build_raw_command(raw_args: &[String]) -> CommandBuilder {
+pub fn build_raw_command(raw_args: &[String], session_name: &str) -> CommandBuilder {
     if raw_args.is_empty() {
-        return build_command(None, true, false);
+        return build_command(None, true, false, session_name);
     }
     let program = &raw_args[0];
     let mut builder = CommandBuilder::new(program);
@@ -1458,7 +1465,8 @@ pub fn build_raw_command(raw_args: &[String]) -> CommandBuilder {
     }
     builder.env("TERM", "xterm-256color");
     builder.env("COLORTERM", "truecolor");
-    builder.env("PSMUX_SESSION", "1");
+    builder.env("PSMUX_SESSION", session_name);
+    builder.env("PSMUX", "1");
     if raw_args.len() > 1 {
         let args: Vec<&str> = raw_args[1..].iter().map(|s| s.as_str()).collect();
         builder.args(args);
