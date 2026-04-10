@@ -588,6 +588,13 @@ pub fn run_server(
     let verpath = format!("{}\\{}.version", dir, app.port_file_base());
     let _ = std::fs::write(&verpath, crate::types::build_version_stamp());
 
+    // R4: Write pipe discovery file early so PsmuxAdapter can detect psmux
+    // before the pipe listener thread starts.  The pipe listener also writes
+    // this file (idempotent update) once it starts accepting connections.
+    let pipe_name = crate::backend::pipe::pipe_path(&app.session_name);
+    let pipe_file = format!("{}\\{}.pipe", dir, app.port_file_base());
+    let _ = std::fs::write(&pipe_file, &pipe_name);
+
     // Expose the server identity via env var so that child processes spawned
     // by run-shell (from hooks, keybindings, etc.) can find this server when
     // they call `psmux set -g ...` or other CLI commands.
