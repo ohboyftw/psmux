@@ -83,6 +83,16 @@ Upstream added server-side control mode (2,594 lines). ohboy-builds has CustomPa
   - Risk: None — additive files
   - Blocked by: -C/-CC CLI flags (tests need working implementation)
 
+### Tier 3: Hook Background Mode (sync-2026-04-11-wren) — DONE
+
+- [x] **Port `ensure_background()` + `fire_hooks()` from `5f8c20d`** `DONE`
+
+### Tier 4: Hook Quoting Fixes (sync-2026-04-11-wren) — DONE
+
+- [x] **Port set-hook quoting preservation from `f81632a` + `3bcff11`** `DONE`
+  - Client-side: not needed (ohboy-builds forwards raw cmd string to server)
+  - Server-side: ported quoting-aware extraction + `-a` append support to `connection.rs`
+
 ### Tier 2: Flag Normalization (sync-2026-04-10-panther)
 
 - [ ] **Port `-x=VALUE` flag normalization from `0b18080`** `TODO`
@@ -354,6 +364,8 @@ These are quality-of-life fixes for interactive tmux-compatible usage. They don'
 | Flag normalization -x=VALUE (`0b18080`) | 2026-04-10 | Manual port — cli.rs + 3 entry points |
 | Paste timeout (#197) (`86a7519`) | 2026-04-10 | Manual port — app.rs + ssh_input.rs |
 | CLAUDE_CODE_NO_FLICKER=1 | 2026-04-10 | Already present in dispatcher.rs |
+| Hook run-shell background (`5f8c20d`) | 2026-04-11 | Manual port — commands.rs + server/mod.rs |
+| Set-hook quoting (`f81632a` + `3bcff11`) | 2026-04-11 | Manual port — connection.rs (client-side N/A) |
 
 ## Won't Do
 

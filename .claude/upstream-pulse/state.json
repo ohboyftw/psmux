@@ -1,9 +1,9 @@
 {
-  "last_check": "2026-04-10T12:00:00Z",
-  "tag": "sync-2026-04-10-panther",
-  "codename_index": 13,
-  "upstream_sha": "c6088d5",
-  "claude_code_version": "2.1.100",
+  "last_check": "2026-04-11T12:00:00Z",
+  "tag": "sync-2026-04-11-wren",
+  "codename_index": 14,
+  "upstream_sha": "5f8c20d",
+  "claude_code_version": "2.1.101",
   "pi_version": "0.66.1",
   "sources": {
     "claude_code_changelog": "https://code.claude.com/docs/en/changelog",

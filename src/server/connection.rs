@@ -1745,6 +1745,7 @@ pub(crate) fn handle_connection(
             }
             "set-hook" => {
                 let unset = args.iter().any(|a| a.starts_with('-') && a.contains('u'));
+                let has_append = args.iter().any(|a| a.starts_with('-') && a.contains('a'));
                 let non_flag: Vec<&str> = args
                     .iter()
                     .filter(|a| !a.starts_with('-'))
@@ -1756,10 +1757,19 @@ pub(crate) fn handle_connection(
                         let _ = tx.send(CtrlReq::RemoveHook(non_flag[0].to_string()));
                     }
                 } else if non_flag.len() >= 2 {
-                    let _ = tx.send(CtrlReq::SetHook(
-                        non_flag[0].to_string(),
-                        non_flag[1..].join(" "),
-                    ));
+                    // Extract hook command from raw line to preserve quoting
+                    // (join of parsed tokens loses quotes around paths with spaces)
+                    let hook_name = non_flag[0];
+                    let hook_cmd = if let Some(pos) = line.find(hook_name) {
+                        line[pos + hook_name.len()..].trim().to_string()
+                    } else {
+                        non_flag[1..].join(" ")
+                    };
+                    if has_append {
+                        let _ = tx.send(CtrlReq::AppendHook(hook_name.to_string(), hook_cmd));
+                    } else {
+                        let _ = tx.send(CtrlReq::SetHook(hook_name.to_string(), hook_cmd));
+                    }
                 }
             }
             "show-hooks" => {

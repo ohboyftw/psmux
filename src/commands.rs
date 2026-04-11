@@ -573,11 +573,34 @@ pub fn parse_menu_definition(def: &str, x: Option<i16>, y: Option<i16>) -> Menu 
     menu
 }
 
-/// Fire hooks for a given event
+/// Ensure a run-shell command uses -b (background) so it does not
+/// set "running: ..." status messages or create output popups.
+pub fn ensure_background(cmd: &str) -> String {
+    let t = cmd.trim_start();
+    let prefix = if t.starts_with("run-shell ") {
+        Some("run-shell")
+    } else if t.starts_with("run ") {
+        Some("run")
+    } else {
+        None
+    };
+    if let Some(p) = prefix {
+        let rest = t[p.len()..].trim_start();
+        if !rest.starts_with("-b") {
+            return format!("{} -b {}", p, rest);
+        }
+    }
+    cmd.to_string()
+}
+
+/// Fire hooks for a given event.
+/// All run-shell commands from hooks are forced into background mode
+/// to avoid "running: ..." status bar noise and output popups.
 pub fn fire_hooks(app: &mut AppState, event: &str) {
     if let Some(commands) = app.hooks.get(event).cloned() {
         for cmd in commands {
-            let _ = execute_command_string(app, &cmd);
+            let bg_cmd = ensure_background(&cmd);
+            let _ = execute_command_string(app, &bg_cmd);
         }
     }
 }

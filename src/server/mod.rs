@@ -871,14 +871,7 @@ pub fn run_server(
     // Fire client-attached hooks once at startup so plugins populate initial
     // data (e.g. CPU/battery) even for detached sessions (tppanel previews).
     {
-        let cmds: Vec<String> = app
-            .hooks
-            .get("client-attached")
-            .cloned()
-            .unwrap_or_default();
-        for cmd in cmds {
-            let _ = execute_command_string(&mut app, &cmd);
-        }
+        crate::commands::fire_hooks(&mut app, "client-attached");
     }
     // Spawn a warm server for the NEXT new-session when the current session
     // is allowed to keep background state alive.
@@ -5533,10 +5526,7 @@ pub fn run_server(
                     // Fire any hooks registered for the event that just occurred
                     if let Some(event) = hook_event {
                         let _pre_hook_idx = app.active_idx;
-                        let cmds: Vec<String> = app.hooks.get(event).cloned().unwrap_or_default();
-                        for cmd in cmds {
-                            let _ = execute_command_string(&mut app, &cmd);
-                        }
+                        crate::commands::fire_hooks(&mut app, event);
                         // Check if the hook itself changed active_idx
                         if app.active_idx != _pre_hook_idx && crate::debug_log::server_log_enabled()
                         {
@@ -5708,13 +5698,16 @@ pub fn run_server(
             if elapsed >= app.status_interval {
                 app.last_status_interval_fire = std::time::Instant::now();
                 let _pre_status_idx = app.active_idx;
-                let cmds: Vec<String> = app
-                    .hooks
-                    .get("status-interval")
-                    .cloned()
-                    .unwrap_or_default();
-                for cmd in cmds {
-                    let _ = execute_command_string(&mut app, &cmd);
+                {
+                    let cmds: Vec<String> = app
+                        .hooks
+                        .get("status-interval")
+                        .cloned()
+                        .unwrap_or_default();
+                    for cmd in cmds {
+                        let bg_cmd = crate::commands::ensure_background(&cmd);
+                        let _ = execute_command_string(&mut app, &bg_cmd);
+                    }
                 }
                 if app.active_idx != _pre_status_idx && crate::debug_log::server_log_enabled() {
                     crate::debug_log::server_log(
