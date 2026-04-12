@@ -5404,17 +5404,41 @@ pub fn run_server(
                         CtrlReq::Exec {
                             command,
                             shell,
+                            pane_id,
                             resp,
                         } => {
                             // Gather pane context on the server thread (fast),
                             // then spawn the actual command on a background thread
                             // to avoid blocking the server event loop.
-                            let win = &app.windows[app.active_idx];
-                            let mut exec_cwd = active_pane(&win.root, &win.active_path)
-                                .and_then(|p| p.spawn_cwd.clone())
-                                .or_else(|| std::env::current_dir().ok());
-                            let pane_pid =
-                                active_pane(&win.root, &win.active_path).and_then(|p| p.child_pid);
+                            let (mut exec_cwd, pane_pid) = if let Some(pid) = pane_id {
+                                let mut found_cwd = None;
+                                let mut found_pid = None;
+                                for win in &app.windows {
+                                    if let Some(path) =
+                                        crate::tree::find_path_by_id(&win.root, pid)
+                                    {
+                                        if let Some(p) =
+                                            crate::tree::active_pane(&win.root, &path)
+                                        {
+                                            found_cwd = p.spawn_cwd.clone();
+                                            found_pid = p.child_pid;
+                                        }
+                                        break;
+                                    }
+                                }
+                                (
+                                    found_cwd.or_else(|| std::env::current_dir().ok()),
+                                    found_pid,
+                                )
+                            } else {
+                                let win = &app.windows[app.active_idx];
+                                let cwd = active_pane(&win.root, &win.active_path)
+                                    .and_then(|p| p.spawn_cwd.clone())
+                                    .or_else(|| std::env::current_dir().ok());
+                                let pid = active_pane(&win.root, &win.active_path)
+                                    .and_then(|p| p.child_pid);
+                                (cwd, pid)
+                            };
 
                             // Try to get the pane's actual cwd from its process
                             if let Some(pid) = pane_pid {

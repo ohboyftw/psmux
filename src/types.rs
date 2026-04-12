@@ -1147,6 +1147,7 @@ pub enum CtrlReq {
     Exec {
         command: String,
         shell: Option<String>,
+        pane_id: Option<usize>,
         resp: mpsc::Sender<String>,
     },
     DisplayMenu(String, Option<i16>, Option<i16>),

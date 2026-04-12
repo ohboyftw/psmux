@@ -2168,6 +2168,7 @@ pub(crate) fn handle_connection(
                     let _ = tx.send(CtrlReq::Exec {
                         command: cmd_str,
                         shell: shell_override,
+                        pane_id: if pane_is_id { target_pane } else { None },
                         resp: rtx,
                     });
                     if let Ok(result) = rrx.recv_timeout(Duration::from_secs(300)) {
