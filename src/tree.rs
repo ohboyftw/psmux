@@ -572,6 +572,12 @@ fn prune_exited_inner(
                     .flatten()
                     .map(|s| s.exit_code() as i32);
                 p.exit_code = exit_code;
+                p.dead_time = Some(
+                    std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .unwrap_or_default()
+                        .as_millis() as u64,
+                );
                 exited.push((p.id, exit_code));
                 return if remain_on_exit {
                     p.dead = true;
@@ -584,6 +590,12 @@ fn prune_exited_inner(
                 Ok(Some(status)) => {
                     let exit_code = Some(status.exit_code() as i32);
                     p.exit_code = exit_code;
+                    p.dead_time = Some(
+                        std::time::SystemTime::now()
+                            .duration_since(std::time::UNIX_EPOCH)
+                            .unwrap_or_default()
+                            .as_millis() as u64,
+                    );
                     exited.push((p.id, exit_code));
                     if remain_on_exit {
                         p.dead = true;

@@ -1597,7 +1597,16 @@ pub fn expand_var(var: &str, app: &AppState, win_idx: usize) -> String {
                 "0".into()
             }
         }
-        "pane_dead_signal" | "pane_dead_time" => "0".into(),
+        "pane_dead_signal" => "0".into(),
+        "pane_dead_time" => {
+            if let Some(p) = target_pane() {
+                p.dead_time
+                    .map(|t| (t / 1000).to_string())
+                    .unwrap_or_else(|| "0".into())
+            } else {
+                "0".into()
+            }
+        }
         "pane_dead_status" | "pane_exit_code" => {
             if let Some(p) = target_pane() {
                 p.exit_code

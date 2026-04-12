@@ -173,6 +173,9 @@ pub struct Pane {
     pub killed: bool,
     /// Exit code of the child process, set when the process exits.
     pub exit_code: Option<i32>,
+    /// Unix epoch milliseconds when the child process exited.
+    /// Exposed as `#{pane_dead_time}` (converted to seconds for tmux compat).
+    pub dead_time: Option<u64>,
     /// Cached VT bridge detection result (for mouse injection).
     /// Updated on first mouse event and refreshed every 2 seconds.
     pub vt_bridge_cache: Option<(Instant, bool)>,

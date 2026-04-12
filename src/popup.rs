@@ -116,6 +116,7 @@ pub fn create_popup_pane(
         dead: false,
         killed: false,
         exit_code: None,
+        dead_time: None,
         vt_bridge_cache: None,
         vti_mode_cache: None,
         mouse_input_cache: None,
