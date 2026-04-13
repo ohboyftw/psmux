@@ -2,7 +2,7 @@
 
 **Date**: 2026-04-12
 **Branch**: `ohboy-build-agent-first` (off `ohboy-builds`)
-**Status**: Approved design, ready for implementation planning
+**Status**: Phase 1 implementation complete (Tasks 1-10)
 
 ## Problem
 
@@ -83,18 +83,15 @@ Response:
 ```
 
 **Implementation approach**:
-- New `CtrlReq::Exec` variant in `src/types.rs`
-- Server spawns child process inheriting target pane's env and cwd (already tracked in pane metadata)
+- New `CtrlReq::Exec` variant in `src/types.rs` with `pane_id: Option<usize>` for targeting
+- Server resolves pane by `pane_id` or falls back to active pane (`src/server/mod.rs`)
+- `-t %N` targeting wired through CLI parser in `src/server/connection.rs`
+- JSON-RPC method `exec` in `src/backend/dispatcher.rs` (`handle_exec` function)
+- `ExecParams`/`ExecResult` types in `src/backend/protocol.rs`
 - Process runs outside the PTY — stdout and stderr go back to caller, not to pane's screen
-- The spawned process has no PTY — it is non-interactive (like `docker exec` without `-it`)
 - Pane's interactive shell is undisturbed
-- If `--capture` is not set, stdout/stderr are discarded and only the exit code is returned
-- Timeout via `WaitForSingleObject` with `dwMilliseconds`
-- JSON-RPC method `exec` in `src/backend/dispatcher.rs`
 
-**Key files**: `src/types.rs`, `src/server/mod.rs`, `src/backend/dispatcher.rs`, `src/backend/protocol.rs`, `src/commands.rs`
-
-**Script augmentation**: `exec-and-wait.ps1` — wraps exec with retry logic and structured output for orchestration scripts.
+**Key files**: `src/types.rs`, `src/server/mod.rs`, `src/server/connection.rs`, `src/backend/dispatcher.rs`, `src/backend/protocol.rs`
 
 **Subsumes**: Tier 2 item #5 (`run-shell` server-side execution), item #6 (`send-keys --wait-ready`).
 
@@ -127,13 +124,13 @@ psmux list-panes -F "#{pane_id} #{pane_dead} #{pane_exit_code}"
 CODE=$(psmux display-message -t %3 -p "#{pane_exit_code}")
 ```
 
-**Implementation approach**:
-- `GetExitCodeProcess()` after child handle signals on Windows
-- Store as `exit_code: Option<u32>` on `Pane` struct alongside existing `dead: bool`
-- Add `exit_signal: Option<String>`, `dead_time: Option<u64>` to Pane
-- Format variable resolution in `src/format.rs` (follows existing `#{pane_dead}` pattern)
+**Implementation approach** (implemented):
+- `dead_time: Option<u64>` on `Pane` struct — set to Unix epoch ms when process exits via `prune_exited_inner`
+- Format variable `pane_dead_time` resolves to real timestamp (ms/1000 for tmux compat), "0" for alive panes
+- `ExitedPaneInfo` struct in `src/tree.rs` with `pane_id`, `exit_code`, `elapsed_ms`, `command`
+- `spawn_time: std::time::Instant` on Pane for elapsed_ms calculation
 
-**Key files**: `src/pane.rs`, `src/format.rs`
+**Key files**: `src/types.rs`, `src/tree.rs`, `src/format.rs`, `src/pane.rs`, `src/popup.rs`
 
 **Replaces**: Canopy's `.canopy-done`/`.canopy-failed` sentinel files, capture-pane + regex for success/error strings, any orchestrator's "did this agent finish?" polling.
 
@@ -165,15 +162,16 @@ The CustomPaneBackend already pushes `context_exited` events over the named pipe
 - **Canopy / FlowForge**: Subscribe to push events instead of polling `list-panes`. Sub-millisecond completion detection.
 - **Health monitor script**: Connects to pipe, consumes events, detects stalls, alerts on failures.
 
-**Implementation approach**:
-- Extend `PushEvent` enum in `src/backend/protocol.rs` with `ContextReady` and `ExecCompleted`
-- In `src/pane.rs`, child process reaper calls `GetExitCodeProcess` and pushes enriched event via `push_backend_event()`
-- `context_ready` hooks into existing readiness tracking (`data_version` + `last_output_time` in dispatcher)
-- `exec_completed` pushed at end of `CtrlReq::Exec` handler
+**Implementation approach** (implemented):
+- `ContextReadyEvent`/`ContextReadyParams` and `ExecCompletedEvent`/`ExecCompletedParams` in `src/backend/protocol.rs`
+- `ContextExitedParams` enriched with `elapsed_ms: Option<u64>` and `command: Option<String>`
+- `context_ready` fires from readiness scan in `src/server/mod.rs` — 500ms output stability window, `readiness_notified: bool` prevents duplicates
+- `exec_completed` pushed at end of `handle_exec` in `src/backend/dispatcher.rs`
+- `context_exited` enrichment uses `ExitedPaneInfo` from `src/tree.rs`
 
-**Key files**: `src/backend/protocol.rs`, `src/backend/dispatcher.rs`, `src/pane.rs`, `src/server/mod.rs`
+**Key files**: `src/backend/protocol.rs`, `src/backend/dispatcher.rs`, `src/server/mod.rs`, `src/tree.rs`
 
-**Script augmentation**: `psmux-health-monitor.ps1` — connects to named pipe, consumes push events, implements stall detection (no events from pane within configurable threshold), failure alerting (non-zero exit code), session summary on demand. This is the script-layer equivalent of ECC's loop-operator health checks, fed by real binary events.
+**Script augmentation**: `scripts/psmux-health-monitor.ps1` — connects to named pipe, consumes push events, implements stall detection and failure alerting with JSON output mode.
 
 ---
 
@@ -206,15 +204,9 @@ psmux set-option -t agent -p @role builder
 - `--shell` flag works: `new-window --shell bash -- ./script.sh`
 - JSON-RPC `spawn_agent` already accepts a `command` field — this makes the CLI match the backend
 
-**Implementation approach**:
-- Pane spawn path in `src/session.rs`/`src/pane.rs` already supports custom commands for the backend dispatcher
-- Surface that capability to CLI parser in `src/commands.rs`
-- Parse `--` separator, collect remaining args as the command
-- Mostly wiring, not new logic
+**Implementation approach**: This feature already existed in the codebase prior to this work. The `-- command` separator and `--shell` flag were already wired through `new-window` and `split-window`. Task 8 added end-to-end verification tests confirming it works correctly.
 
 **Key files**: `src/commands.rs`, `src/session.rs`, `src/pane.rs`
-
-**Script augmentation**: `spawn-agent.ps1` — combines worktree creation + `new-window -- command` + metadata tagging in one call. Bridge for orchestration scripts.
 
 ---
 
