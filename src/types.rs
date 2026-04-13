@@ -176,6 +176,11 @@ pub struct Pane {
     /// Unix epoch milliseconds when the child process exited.
     /// Exposed as `#{pane_dead_time}` (converted to seconds for tmux compat).
     pub dead_time: Option<u64>,
+    /// True after a `context_ready` push event has been sent for this pane.
+    pub readiness_notified: bool,
+    /// Monotonic instant when this pane was spawned. Used to compute elapsed_ms
+    /// in `context_exited` events.
+    pub spawn_time: std::time::Instant,
     /// Cached VT bridge detection result (for mouse injection).
     /// Updated on first mouse event and refreshed every 2 seconds.
     pub vt_bridge_cache: Option<(Instant, bool)>,

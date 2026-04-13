@@ -117,6 +117,8 @@ pub fn create_popup_pane(
         killed: false,
         exit_code: None,
         dead_time: None,
+        readiness_notified: false,
+        spawn_time: std::time::Instant::now(),
         vt_bridge_cache: None,
         vti_mode_cache: None,
         mouse_input_cache: None,

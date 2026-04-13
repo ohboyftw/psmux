@@ -79,6 +79,10 @@ fn test_agent_metadata_captures_frontmatter() {
 fn test_list_returns_color_in_metadata() {
     let info = psmux::backend::protocol::ContextInfo {
         context_id: "%1".into(),
+        alive: true,
+        cwd: None,
+        title: None,
+        shell_name: None,
         metadata: Some(psmux::backend::protocol::AgentMetadata {
             name: Some("worker-1".into()),
             color: Some("blue".into()),

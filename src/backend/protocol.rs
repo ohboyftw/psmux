@@ -196,6 +196,26 @@ pub struct RunShellResult {
     pub elapsed_ms: u64,
 }
 
+#[derive(Debug, Deserialize)]
+pub struct ExecParams {
+    pub context_id: Option<String>,
+    pub command: String,
+    #[serde(default)]
+    pub capture: bool,
+    pub timeout_ms: Option<u64>,
+    pub shell: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct ExecResult {
+    pub exit_code: i32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub stdout: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub stderr: Option<String>,
+    pub elapsed_ms: u64,
+}
+
 #[derive(Debug, Serialize)]
 pub struct ListResult {
     pub contexts: Vec<ContextInfo>,
@@ -231,6 +251,37 @@ pub struct ContextExitedEvent {
 pub struct ContextExitedParams {
     pub context_id: String,
     pub exit_code: Option<i32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub elapsed_ms: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub command: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct ContextReadyEvent {
+    pub method: String,
+    pub params: ContextReadyParams,
+}
+
+#[derive(Debug, Serialize)]
+pub struct ContextReadyParams {
+    pub context_id: String,
+    pub ready_signal: String,
+    pub data_version: u64,
+}
+
+#[derive(Debug, Serialize)]
+pub struct ExecCompletedEvent {
+    pub method: String,
+    pub params: ExecCompletedParams,
+}
+
+#[derive(Debug, Serialize)]
+pub struct ExecCompletedParams {
+    pub context_id: String,
+    pub exit_code: i32,
+    pub command: String,
+    pub elapsed_ms: u64,
 }
 
 impl RpcResponse {
