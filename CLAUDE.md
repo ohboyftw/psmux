@@ -70,6 +70,7 @@ Full scripting support including `send-keys`, `capture-pane`, `pipe-pane`,
 - Configuration parsing supports tmux `set -g` syntax
 - Copy mode implements vim-like keybindings with scrollback buffer (2000 lines default)
 - **CustomPaneBackend** (`src/backend/`): JSON-RPC over named pipes — `protocol.rs` (types), `pipe.rs` (listener), `dispatcher.rs` (routing)
+- **Agent Execution Layer** (`src/backend/dispatcher.rs`, branch `ohboy-build-agent-first`): Programmatic-first agent interface. JSON-RPC `exec` method runs a command directly in a target pane (`-t %N`), returns PID + exit code. Push events: `context_ready` (pane reached idle prompt), `exec_completed` (command finished with exit_code + elapsed_ms), and enriched `context_exited` (adds elapsed_ms + command). CLI mirrors: `psmux exec -t %N -- command`, `new-window -- command`, `split-window -- command`.
 - **Remote control mode** (`src/remote/`): SSH transport + tmux `-CC` parser + pane manager for rendering remote sessions locally
 - **DCS passthrough** (`crates/vt100-psmux/`): VT parser hook/put/unhook DCS handlers with `PassthroughQueue` forwarding
 - **VT terminal state tracking** (`crates/vt100-psmux/`): Focus reporting (`?1004h`), cursor style (DECSCUSR), mouse mode/encoding — all tracked in `screen.rs` with `state_diff()` for pane switching
@@ -88,7 +89,7 @@ Read `references/architecture.md` for the full system design.
 
 ## Test Infrastructure
 - `tests-rs/test_boundary_contracts.rs` — 60 tests: SGR/X10 encoding, coordinate translation, VT state machine, pane-switch handshakes, edge cases
-- `tests-rs/test_feature_contracts.rs` — 33 tests: focus reporting, cursor style, mouse encoding, state diff contracts
+- `tests-rs/test_feature_contracts.rs` — 40 tests: focus reporting, cursor style, mouse encoding, state diff contracts
 - `tests-rs/test_pi_integration_contracts.rs` — 32 tests: Pi adapter env var contracts, ContextInfo schema/serialization, pipe discovery, edge cases
 - `tests-rs/test_vt100_mouse.rs` — VT100 mouse mode detection
 - `tests/` — PowerShell integration tests (swarm backend, issue-specific)
