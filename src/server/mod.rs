@@ -5404,17 +5404,39 @@ pub fn run_server(
                         CtrlReq::Exec {
                             command,
                             shell,
+                            pane_id,
                             resp,
                         } => {
                             // Gather pane context on the server thread (fast),
                             // then spawn the actual command on a background thread
                             // to avoid blocking the server event loop.
-                            let win = &app.windows[app.active_idx];
-                            let mut exec_cwd = active_pane(&win.root, &win.active_path)
-                                .and_then(|p| p.spawn_cwd.clone())
-                                .or_else(|| std::env::current_dir().ok());
-                            let pane_pid =
-                                active_pane(&win.root, &win.active_path).and_then(|p| p.child_pid);
+                            let (mut exec_cwd, pane_pid) = if let Some(pid) = pane_id {
+                                let mut found_cwd = None;
+                                let mut found_pid = None;
+                                for win in &app.windows {
+                                    if let Some(path) = crate::tree::find_path_by_id(&win.root, pid)
+                                    {
+                                        if let Some(p) = crate::tree::active_pane(&win.root, &path)
+                                        {
+                                            found_cwd = p.spawn_cwd.clone();
+                                            found_pid = p.child_pid;
+                                        }
+                                        break;
+                                    }
+                                }
+                                (
+                                    found_cwd.or_else(|| std::env::current_dir().ok()),
+                                    found_pid,
+                                )
+                            } else {
+                                let win = &app.windows[app.active_idx];
+                                let cwd = active_pane(&win.root, &win.active_path)
+                                    .and_then(|p| p.spawn_cwd.clone())
+                                    .or_else(|| std::env::current_dir().ok());
+                                let pid = active_pane(&win.root, &win.active_path)
+                                    .and_then(|p| p.child_pid);
+                                (cwd, pid)
+                            };
 
                             // Try to get the pane's actual cwd from its process
                             if let Some(pid) = pane_pid {
@@ -5466,27 +5488,32 @@ pub fn run_server(
                                     cmd.env(k, v);
                                 }
 
+                                let start = std::time::Instant::now();
                                 let result = match cmd.output() {
                                     Ok(output) => {
+                                        let elapsed_ms = start.elapsed().as_millis() as u64;
                                         let stdout =
                                             String::from_utf8_lossy(&output.stdout).into_owned();
                                         let stderr =
                                             String::from_utf8_lossy(&output.stderr).into_owned();
                                         let exit_code = output.status.code().unwrap_or(-1);
                                         format!(
-                                            "{{\"exit_code\":{},\"stdout\":{},\"stderr\":{}}}",
+                                            "{{\"exit_code\":{},\"stdout\":{},\"stderr\":{},\"elapsed_ms\":{}}}",
                                             exit_code,
                                             serde_json::to_string(&stdout)
                                                 .unwrap_or_else(|_| "\"\"".into()),
                                             serde_json::to_string(&stderr)
                                                 .unwrap_or_else(|_| "\"\"".into()),
+                                            elapsed_ms,
                                         )
                                     }
                                     Err(e) => {
+                                        let elapsed_ms = start.elapsed().as_millis() as u64;
                                         format!(
-                                            "{{\"exit_code\":-1,\"stdout\":\"\",\"stderr\":{}}}",
+                                            "{{\"exit_code\":-1,\"stdout\":\"\",\"stderr\":{},\"elapsed_ms\":{}}}",
                                             serde_json::to_string(&e.to_string())
                                                 .unwrap_or_else(|_| "\"exec failed\"".into()),
+                                            elapsed_ms,
                                         )
                                     }
                                 };
@@ -5839,6 +5866,37 @@ pub fn run_server(
                     drain_wait_pane_queue(&mut app);
                 }
             }
+            // Fire context_ready push events for newly-ready panes
+            let now_ms = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_millis() as u64;
+            for win in &mut app.windows {
+                tree::visit_leaves_mut(&mut win.root, &mut |p| {
+                    if p.dead || p.readiness_notified {
+                        return;
+                    }
+                    let dv = p.data_version.load(std::sync::atomic::Ordering::Acquire);
+                    let lot = p
+                        .last_output_time
+                        .load(std::sync::atomic::Ordering::Acquire);
+                    if dv > 0 && lot > 0 && now_ms.saturating_sub(lot) >= 500 {
+                        p.readiness_notified = true;
+                        let event = crate::backend::protocol::ContextReadyEvent {
+                            method: "context_ready".into(),
+                            params: crate::backend::protocol::ContextReadyParams {
+                                context_id: format!("%{}", p.id),
+                                ready_signal: "output_stable".into(),
+                                data_version: dv,
+                            },
+                        };
+                        if let Ok(json) = serde_json::to_string(&event) {
+                            crate::types::push_backend_event(&json);
+                        }
+                    }
+                });
+            }
+
             // Warm (standby) servers must always shut down when their
             // panes are gone, regardless of exit-empty / remain-on-exit
             // user config.  They are internal implementation details and

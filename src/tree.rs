@@ -50,6 +50,18 @@ pub fn split_with_gaps(is_horizontal: bool, sizes: &[u16], area: Rect) -> Vec<Re
     rects
 }
 
+/// Call `f` on every leaf pane in the tree (mutable access).
+pub fn visit_leaves_mut(node: &mut Node, f: &mut dyn FnMut(&mut Pane)) {
+    match node {
+        Node::Leaf(p) => f(p),
+        Node::Split { children, .. } => {
+            for child in children {
+                visit_leaves_mut(child, f);
+            }
+        }
+    }
+}
+
 pub fn active_pane_mut<'a>(node: &'a mut Node, path: &[usize]) -> Option<&'a mut Pane> {
     let mut cur = node;
     for &idx in path.iter() {
@@ -522,16 +534,25 @@ pub fn get_split_mut<'a>(node: &'a mut Node, path: &[usize]) -> Option<&'a mut N
     Some(cur)
 }
 
+struct ExitedPaneInfo {
+    pane_id: usize,
+    exit_code: Option<i32>,
+    elapsed_ms: Option<u64>,
+    command: Option<String>,
+}
+
 pub fn prune_exited(n: Node, remain_on_exit: bool) -> Option<Node> {
-    let mut exited = Vec::new();
+    let mut exited: Vec<ExitedPaneInfo> = Vec::new();
     let result = prune_exited_inner(n, remain_on_exit, &mut exited);
     // Push context_exited events for all newly-dead panes
-    for (pane_id, exit_code) in exited {
+    for info in &exited {
         let event = crate::backend::protocol::ContextExitedEvent {
             method: "context_exited".into(),
             params: crate::backend::protocol::ContextExitedParams {
-                context_id: format!("%{}", pane_id),
-                exit_code,
+                context_id: format!("%{}", info.pane_id),
+                exit_code: info.exit_code,
+                elapsed_ms: info.elapsed_ms,
+                command: info.command.clone(),
             },
         };
         if let Ok(json) = serde_json::to_string(&event) {
@@ -542,8 +563,8 @@ pub fn prune_exited(n: Node, remain_on_exit: bool) -> Option<Node> {
         crate::mycel::publish_pane_event(
             "psmux/pane/died",
             &serde_json::json!({
-                "pane_id": format!("%{}", pane_id),
-                "exit_code": exit_code,
+                "pane_id": format!("%{}", info.pane_id),
+                "exit_code": info.exit_code,
             }),
         );
     }
@@ -551,11 +572,11 @@ pub fn prune_exited(n: Node, remain_on_exit: bool) -> Option<Node> {
 }
 
 /// Inner recursive implementation of prune_exited that collects newly-exited
-/// pane info (pane_id, exit_code) for push event delivery.
+/// pane info for push event delivery.
 fn prune_exited_inner(
     n: Node,
     remain_on_exit: bool,
-    exited: &mut Vec<(usize, Option<i32>)>,
+    exited: &mut Vec<ExitedPaneInfo>,
 ) -> Option<Node> {
     match n {
         Node::Leaf(mut p) => {
@@ -572,7 +593,18 @@ fn prune_exited_inner(
                     .flatten()
                     .map(|s| s.exit_code() as i32);
                 p.exit_code = exit_code;
-                exited.push((p.id, exit_code));
+                p.dead_time = Some(
+                    std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .unwrap_or_default()
+                        .as_millis() as u64,
+                );
+                exited.push(ExitedPaneInfo {
+                    pane_id: p.id,
+                    exit_code,
+                    elapsed_ms: Some(p.spawn_time.elapsed().as_millis() as u64),
+                    command: p.spawn_command.clone(),
+                });
                 return if remain_on_exit {
                     p.dead = true;
                     Some(Node::Leaf(p))
@@ -584,7 +616,18 @@ fn prune_exited_inner(
                 Ok(Some(status)) => {
                     let exit_code = Some(status.exit_code() as i32);
                     p.exit_code = exit_code;
-                    exited.push((p.id, exit_code));
+                    p.dead_time = Some(
+                        std::time::SystemTime::now()
+                            .duration_since(std::time::UNIX_EPOCH)
+                            .unwrap_or_default()
+                            .as_millis() as u64,
+                    );
+                    exited.push(ExitedPaneInfo {
+                        pane_id: p.id,
+                        exit_code,
+                        elapsed_ms: Some(p.spawn_time.elapsed().as_millis() as u64),
+                        command: p.spawn_command.clone(),
+                    });
                     if remain_on_exit {
                         p.dead = true;
                         Some(Node::Leaf(p))

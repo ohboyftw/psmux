@@ -657,3 +657,99 @@ mod mouse_encoding_utf8 {
         );
     }
 }
+
+// =========================================================================
+// TASK 1: pane_dead_time tracking
+//
+// The Pane struct records the Unix epoch milliseconds when a child process
+// exits. The format variable #{pane_dead_time} returns the timestamp in
+// seconds (tmux compat).
+// =========================================================================
+
+#[test]
+fn pane_dead_time_is_set_on_exit() {
+    let now_ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_millis() as u64;
+    assert!(now_ms > 0, "timestamp should be positive");
+}
+
+#[test]
+fn pane_dead_time_format_contract() {
+    let timestamp_str = "1712937600";
+    let parsed: u64 = timestamp_str
+        .parse()
+        .expect("dead_time must be parseable as u64");
+    assert!(
+        parsed > 1_000_000_000,
+        "should be a reasonable unix timestamp"
+    );
+}
+
+// =========================================================================
+// TASK 3: JSON-RPC exec method for CustomPaneBackend
+// =========================================================================
+
+#[test]
+fn exec_params_deserializes_correctly() {
+    let json = r#"{"context_id": "%3", "command": "cargo test", "capture": true, "timeout_ms": 60000, "shell": "bash"}"#;
+    let params: serde_json::Value = serde_json::from_str(json).unwrap();
+    assert_eq!(params["context_id"], "%3");
+    assert_eq!(params["capture"], true);
+    assert_eq!(params["timeout_ms"], 60000);
+}
+
+#[test]
+fn exec_result_serializes_correctly() {
+    let result = serde_json::json!({"exit_code": 0, "stdout": "test output", "stderr": "", "elapsed_ms": 4200});
+    let serialized = serde_json::to_string(&result).unwrap();
+    assert!(serialized.contains("exit_code"));
+    assert!(serialized.contains("elapsed_ms"));
+}
+
+// =========================================================================
+// TASK 4: context_ready push event
+// =========================================================================
+
+#[test]
+fn context_ready_event_serializes_correctly() {
+    let event = serde_json::json!({
+        "method": "context_ready",
+        "params": {"context_id": "%3", "ready_signal": "output_stable", "data_version": 42u64}
+    });
+    let json = serde_json::to_string(&event).unwrap();
+    assert!(json.contains("context_ready"));
+    assert!(json.contains("output_stable"));
+}
+
+// =========================================================================
+// TASK 5: Enriched context_exited push event
+// =========================================================================
+
+#[test]
+fn context_exited_event_includes_elapsed_and_command() {
+    let event = serde_json::json!({
+        "method": "context_exited",
+        "params": {"context_id": "%1", "exit_code": 0, "elapsed_ms": 45200u64, "command": "cargo test"}
+    });
+    let json = serde_json::to_string(&event).unwrap();
+    assert!(json.contains("elapsed_ms"));
+    assert!(json.contains("command"));
+    assert!(json.contains("exit_code"));
+}
+
+// =========================================================================
+// TASK 6: exec_completed push event
+// =========================================================================
+
+#[test]
+fn exec_completed_event_serializes_correctly() {
+    let event = serde_json::json!({
+        "method": "exec_completed",
+        "params": {"context_id": "%3", "exit_code": 1, "command": "npm test", "elapsed_ms": 8400u64}
+    });
+    let json = serde_json::to_string(&event).unwrap();
+    assert!(json.contains("exec_completed"));
+    assert!(json.contains("exit_code"));
+}

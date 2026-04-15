@@ -60,6 +60,7 @@ pub fn dispatch_rpc(line: &str, tx: &mpsc::Sender<CtrlReq>) -> Option<String> {
         "set_metadata" => handle_set_metadata(&req.params, tx),
         "list" => handle_list(&req.params, tx),
         "run_shell" => handle_run_shell(&req.params, tx),
+        "exec" => handle_exec(&req.params, tx),
         _ => Err(RpcErr::from((
             -32601,
             format!("Method not found: {}", req.method),
@@ -696,6 +697,87 @@ fn handle_run_shell(
             }
         }
     }
+}
+
+/// Handle `exec` — run a command in a pane's context via CtrlReq::Exec.
+///
+/// Unlike `run_shell` which spawns a process directly in the dispatcher thread,
+/// this delegates to the server's Exec handler which resolves the pane's live
+/// CWD and environment, then runs on a background thread.
+fn handle_exec(
+    params: &serde_json::Value,
+    tx: &mpsc::Sender<CtrlReq>,
+) -> Result<serde_json::Value, RpcErr> {
+    let p: ExecParams = serde_json::from_value(params.clone())
+        .map_err(|e| RpcErr::from((-32602, format!("Invalid params: {e}"))))?;
+
+    if p.command.is_empty() {
+        return Err(RpcErr::from((
+            -32602,
+            "command must not be empty".to_string(),
+        )));
+    }
+
+    let pane_id = p.context_id.as_deref().and_then(parse_pane_id);
+    let timeout_ms = p.timeout_ms.unwrap_or(30000);
+    let event_context_id = p.context_id.clone().unwrap_or_else(|| "active".into());
+    let event_command = p.command.clone();
+
+    let (resp_tx, resp_rx) = mpsc::channel();
+    tx.send(CtrlReq::Exec {
+        command: p.command,
+        shell: p.shell,
+        pane_id,
+        resp: resp_tx,
+    })
+    .map_err(|_| RpcErr::from((-32603, "Server channel closed".to_string())))?;
+
+    let raw = resp_rx
+        .recv_timeout(std::time::Duration::from_millis(timeout_ms + 5000))
+        .map_err(|_| RpcErr {
+            code: COMMAND_TIMEOUT,
+            message: format!("Exec timed out after {}ms", timeout_ms),
+            data: None,
+        })?;
+
+    // Parse the JSON response from the server's Exec handler
+    let parsed: serde_json::Value = serde_json::from_str(&raw)
+        .map_err(|e| RpcErr::from((-32603, format!("Internal error: {e}"))))?;
+
+    let exit_code = parsed["exit_code"].as_i64().unwrap_or(-1) as i32;
+    let elapsed_ms = parsed["elapsed_ms"].as_u64().unwrap_or(0);
+
+    let result = if p.capture {
+        ExecResult {
+            exit_code,
+            stdout: parsed["stdout"].as_str().map(String::from),
+            stderr: parsed["stderr"].as_str().map(String::from),
+            elapsed_ms,
+        }
+    } else {
+        ExecResult {
+            exit_code,
+            stdout: None,
+            stderr: None,
+            elapsed_ms,
+        }
+    };
+
+    // Fire exec_completed push event
+    let event = ExecCompletedEvent {
+        method: "exec_completed".into(),
+        params: ExecCompletedParams {
+            context_id: event_context_id,
+            exit_code,
+            command: event_command,
+            elapsed_ms,
+        },
+    };
+    if let Ok(json) = serde_json::to_string(&event) {
+        crate::types::push_backend_event(&json);
+    }
+
+    serde_json::to_value(result).map_err(|e| RpcErr::from((-32603, format!("Internal error: {e}"))))
 }
 
 #[cfg(test)]
