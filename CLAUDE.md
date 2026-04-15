@@ -75,6 +75,7 @@ Full scripting support including `send-keys`, `capture-pane`, `pipe-pane`,
 - **DCS passthrough** (`crates/vt100-psmux/`): VT parser hook/put/unhook DCS handlers with `PassthroughQueue` forwarding
 - **VT terminal state tracking** (`crates/vt100-psmux/`): Focus reporting (`?1004h`), cursor style (DECSCUSR), mouse mode/encoding — all tracked in `screen.rs` with `state_diff()` for pane switching
 - **Focus event injection** (`src/server/helpers.rs`): `send_focus_events()` sends `\x1b[I`/`\x1b[O` on pane switch when child has `?1004h` enabled
+- **Mycel event bus** (`src/mycel.rs`): Publishes `psmux/*` topics when built with `--features mycel`. Full topic list: [docs/mycel-topics.md](docs/mycel-topics.md).
 
 ## Upstream Sync
 At session start, check `.claude/upstream-pulse/state.json` — if `last_check` is >3 days old,
