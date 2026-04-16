@@ -50,6 +50,11 @@ path = "tests-rs/cpu_runoff_detector.rs"
 name = "test_pi_integration_contracts"
 path = "tests-rs/test_pi_integration_contracts.rs"
 
+[[test]]
+name = "test_mycel_topics"
+path = "tests-rs/test_mycel_topics.rs"
+required-features = ["mycel"]
+
 # Windows only
 [target.'cfg(not(windows))'.dependencies]
 [target.'cfg(windows)'.dependencies]

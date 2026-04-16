@@ -5,6 +5,8 @@
 pub mod backend;
 pub mod debug_log;
 pub mod hints;
+#[cfg(feature = "mycel")]
+pub mod mycel;
 pub mod remote;
 pub mod session;
 pub mod types;

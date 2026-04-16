@@ -15,12 +15,27 @@ struct PublishMsg {
     payload: Vec<u8>,
 }
 
+/// Canonical topic names published by psmux.
+///
+/// External subscribers (canopy, orchestrators, observability tools) depend
+/// on these exact strings. Changing any topic here is a breaking change.
+pub mod topics {
+    pub const PANE_CREATED: &str = "psmux/pane/created";
+    pub const PANE_READY: &str = "psmux/pane/ready";
+    pub const PANE_EXITED: &str = "psmux/pane/exited";
+    pub const EXEC_COMPLETED: &str = "psmux/exec/completed";
+    pub const SESSION_CREATED: &str = "psmux/session/created";
+    pub const SESSION_RENAMED: &str = "psmux/session/renamed";
+    pub const SESSION_KILLED: &str = "psmux/session/killed";
+}
+
 /// Handle to the mycel background publisher thread.
 ///
 /// Send-only — the background thread owns the async client.
 /// If the mycel server is unreachable, messages are silently dropped.
 pub struct MycelBus {
     tx: mpsc::Sender<PublishMsg>,
+    client_id: String,
 }
 
 impl MycelBus {
@@ -34,10 +49,12 @@ impl MycelBus {
     pub fn new(client_id: &str) -> Self {
         let (tx, rx) = mpsc::channel::<PublishMsg>();
         let client_id = client_id.to_string();
+        let client_id_bg = client_id.clone();
 
         thread::Builder::new()
             .name("mycel-bus".into())
             .spawn(move || {
+                let client_id = client_id_bg;
                 let rt = tokio::runtime::Builder::new_current_thread()
                     .enable_all()
                     .build()
@@ -69,7 +86,12 @@ impl MycelBus {
             })
             .expect("mycel: failed to spawn bus thread");
 
-        Self { tx }
+        Self { tx, client_id }
+    }
+
+    /// The client_id this bus was initialised with (e.g. `"psmux@hostname"`).
+    pub fn client_id(&self) -> &str {
+        &self.client_id
     }
 
     /// Publish a JSON payload to a topic.
@@ -100,6 +122,12 @@ pub fn init_mycel_bus(client_id: &str) {
 /// Get a reference to the global mycel bus, if initialized.
 pub fn mycel_bus() -> Option<&'static MycelBus> {
     MYCEL_BUS.get()
+}
+
+/// Return the client_id the global bus was initialised with.
+/// Returns `None` if the bus has not been initialised.
+pub fn mycel_client_id() -> Option<&'static str> {
+    MYCEL_BUS.get().map(|b| b.client_id())
 }
 
 /// Convenience: publish a pane lifecycle event if the bus is connected.

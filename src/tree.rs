@@ -560,13 +560,16 @@ pub fn prune_exited(n: Node, remain_on_exit: bool) -> Option<Node> {
         }
         // Publish to mycel event bus (optional)
         #[cfg(feature = "mycel")]
-        crate::mycel::publish_pane_event(
-            "psmux/pane/died",
-            &serde_json::json!({
+        {
+            let payload = serde_json::json!({
                 "pane_id": format!("%{}", info.pane_id),
                 "exit_code": info.exit_code,
-            }),
-        );
+            });
+            crate::mycel::publish_pane_event(crate::mycel::topics::PANE_EXITED, &payload);
+            // TODO(deprecate): remove psmux/pane/died in next release — kept
+            // as a shim so existing subscribers (canopy, etc.) don't break.
+            crate::mycel::publish_pane_event("psmux/pane/died", &payload);
+        }
     }
     result
 }
