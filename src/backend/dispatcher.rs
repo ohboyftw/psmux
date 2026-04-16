@@ -763,6 +763,19 @@ fn handle_exec(
         }
     };
 
+    // Publish to mycel bus before moving values into the push event
+    #[cfg(feature = "mycel")]
+    crate::mycel::publish_pane_event(
+        crate::mycel::topics::EXEC_COMPLETED,
+        &serde_json::json!({
+            "pane_id": &event_context_id,
+            "pid": 0u32,
+            "exit_code": exit_code,
+            "elapsed_ms": elapsed_ms,
+            "command": &event_command,
+        }),
+    );
+
     // Fire exec_completed push event
     let event = ExecCompletedEvent {
         method: "exec_completed".into(),
