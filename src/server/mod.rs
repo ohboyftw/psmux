@@ -631,6 +631,15 @@ pub fn run_server(
         crate::mycel::init_mycel_bus(&format!("psmux@{}", hostname));
     }
 
+    #[cfg(feature = "mycel")]
+    crate::mycel::publish_pane_event(
+        crate::mycel::topics::SESSION_CREATED,
+        &serde_json::json!({
+            "session_name": app.session_name,
+            "client_id": crate::mycel::mycel_client_id().unwrap_or("unknown"),
+        }),
+    );
+
     // Clone tx for the backend pipe listener before moving tx into the TCP accept thread.
     let backend_tx = tx.clone();
     let backend_session_name = app.session_name.clone();
@@ -3291,6 +3300,14 @@ pub fn run_server(
                                 let ns = app.socket_name.as_deref().map(|l| format!("{l}__"));
                                 crate::session::kill_warm_servers(ns.as_deref());
                             }
+                            #[cfg(feature = "mycel")]
+                            crate::mycel::publish_pane_event(
+                                crate::mycel::topics::SESSION_KILLED,
+                                &serde_json::json!({
+                                    "session_name": app.session_name,
+                                    "client_id": crate::mycel::mycel_client_id().unwrap_or("unknown"),
+                                }),
+                            );
                             // TerminateProcess is synchronous on Windows — processes
                             // are already dead.  Minimal delay for OS handle cleanup.
                             std::thread::sleep(std::time::Duration::from_millis(10));
@@ -3353,6 +3370,7 @@ pub fn run_server(
                             let _ = resp.send((dv, lot));
                         }
                         CtrlReq::RenameSession(name) => {
+                            let _old_session_name = app.session_name.clone();
                             let home = env::var("USERPROFILE")
                                 .or_else(|_| env::var("HOME"))
                                 .unwrap_or_default();
@@ -3384,6 +3402,15 @@ pub fn run_server(
                                 }
                             }
                             app.session_name = name;
+                            #[cfg(feature = "mycel")]
+                            crate::mycel::publish_pane_event(
+                                crate::mycel::topics::SESSION_RENAMED,
+                                &serde_json::json!({
+                                    "session_name": app.session_name,
+                                    "old_name": _old_session_name,
+                                    "client_id": crate::mycel::mycel_client_id().unwrap_or("unknown"),
+                                }),
+                            );
                             // Update env so run-shell/hooks from this server target the new name
                             crate::util::set_env("PSMUX_TARGET_SESSION", app.port_file_base());
                             hook_event = Some("after-rename-session");
@@ -5893,6 +5920,14 @@ pub fn run_server(
                         if let Ok(json) = serde_json::to_string(&event) {
                             crate::types::push_backend_event(&json);
                         }
+                        #[cfg(feature = "mycel")]
+                        crate::mycel::publish_pane_event(
+                            crate::mycel::topics::PANE_READY,
+                            &serde_json::json!({
+                                "pane_id": format!("%{}", p.id),
+                                "elapsed_ms": p.spawn_time.elapsed().as_millis() as u64,
+                            }),
+                        );
                     }
                 });
             }
