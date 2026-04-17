@@ -174,6 +174,41 @@ pub fn wait_exit(_pid: u32, _timeout_ms: u64) -> WaitOutcome {
     }
 }
 
+/// Wait for a file to appear at `path`. Checks if already exists first.
+///
+/// Polls `path.exists()` every 50 ms. Polling is used (rather than
+/// `ReadDirectoryChangesW`) because it is simpler, cross-volume safe,
+/// and handles parent-directory-created-late cases uniformly. A 50 ms
+/// cadence is responsive enough for sentinel-file workflows.
+pub fn wait_file(path: &std::path::Path, timeout_ms: u64) -> WaitOutcome {
+    const POLL_INTERVAL_MS: u64 = 50;
+
+    let start = Instant::now();
+    if path.exists() {
+        return WaitOutcome::Success {
+            elapsed_ms: start.elapsed().as_millis() as u64,
+        };
+    }
+
+    let deadline = start + std::time::Duration::from_millis(timeout_ms);
+    loop {
+        let now = Instant::now();
+        if now >= deadline {
+            return WaitOutcome::Timeout {
+                elapsed_ms: start.elapsed().as_millis() as u64,
+            };
+        }
+        let remaining = deadline - now;
+        let sleep_for = remaining.min(std::time::Duration::from_millis(POLL_INTERVAL_MS));
+        std::thread::sleep(sleep_for);
+        if path.exists() {
+            return WaitOutcome::Success {
+                elapsed_ms: start.elapsed().as_millis() as u64,
+            };
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -198,5 +233,43 @@ mod tests {
             WaitOutcome::ExitSuccess { exit_code, .. } => assert_eq!(exit_code, 42),
             other => panic!("expected ExitSuccess, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn wait_file_returns_success_when_file_preexists() {
+        let dir = std::env::temp_dir().join("psmux-test-waitfile");
+        std::fs::create_dir_all(&dir).ok();
+        let target = dir.join("preexist.flag");
+        std::fs::write(&target, "ok").unwrap();
+        let result = wait_file(&target, 100);
+        assert!(matches!(result, WaitOutcome::Success { .. }));
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn wait_file_returns_success_when_file_created_async() {
+        let dir = std::env::temp_dir().join("psmux-test-waitfile-async");
+        std::fs::create_dir_all(&dir).ok();
+        let target = dir.join("delayed.flag");
+        let _ = std::fs::remove_file(&target);
+        let target2 = target.clone();
+        std::thread::spawn(move || {
+            std::thread::sleep(std::time::Duration::from_millis(200));
+            std::fs::write(&target2, "ok").unwrap();
+        });
+        let result = wait_file(&target, 5000);
+        assert!(matches!(result, WaitOutcome::Success { .. }));
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn wait_file_returns_timeout_when_file_never_created() {
+        let target = std::env::temp_dir()
+            .join("psmux-test-waitfile-never")
+            .join("nope.flag");
+        std::fs::create_dir_all(target.parent().unwrap()).ok();
+        let result = wait_file(&target, 200);
+        assert!(matches!(result, WaitOutcome::Timeout { .. }));
+        std::fs::remove_dir_all(target.parent().unwrap()).ok();
     }
 }
