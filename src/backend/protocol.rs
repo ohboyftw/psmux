@@ -206,6 +206,19 @@ pub struct ExecParams {
     pub shell: Option<String>,
 }
 
+#[derive(Debug, Deserialize)]
+pub struct WaitForParams {
+    /// One of: `"exit"`, `"file"`, `"output"`, `"ready"`.
+    pub condition: String,
+    /// Condition-specific argument (PID for exit, path for file, regex for output).
+    /// Ignored for `ready`.
+    pub arg: Option<String>,
+    /// `%N`-style pane context for `output` / `ready` modes.
+    pub pane_id: Option<String>,
+    /// Wait ceiling. Defaults to 1 hour.
+    pub timeout_ms: Option<u64>,
+}
+
 #[derive(Debug, Serialize)]
 pub struct ExecResult {
     pub exit_code: i32,

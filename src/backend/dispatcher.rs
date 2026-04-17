@@ -61,6 +61,7 @@ pub fn dispatch_rpc(line: &str, tx: &mpsc::Sender<CtrlReq>) -> Option<String> {
         "list" => handle_list(&req.params, tx),
         "run_shell" => handle_run_shell(&req.params, tx),
         "exec" => handle_exec(&req.params, tx),
+        "wait_for" => handle_wait_for(&req.params, tx),
         _ => Err(RpcErr::from((
             -32601,
             format!("Method not found: {}", req.method),
@@ -791,6 +792,88 @@ fn handle_exec(
     }
 
     serde_json::to_value(result).map_err(|e| RpcErr::from((-32603, format!("Internal error: {e}"))))
+}
+
+/// Handle `wait_for` — run a blocking wait condition on the server side.
+///
+/// Dispatches on `condition` to the matching executor in `crate::wait_for`.
+/// Returns the `WaitOutcome` as the JSON-RPC result (serde tag = "kind").
+fn handle_wait_for(
+    params: &serde_json::Value,
+    tx: &mpsc::Sender<CtrlReq>,
+) -> Result<serde_json::Value, RpcErr> {
+    let p: WaitForParams = serde_json::from_value(params.clone())
+        .map_err(|e| RpcErr::from((-32602, format!("Invalid params: {e}"))))?;
+
+    let timeout_ms = p.timeout_ms.unwrap_or(3_600_000);
+
+    let condition = crate::wait_for::WaitCondition::parse(&p.condition, p.arg.as_deref(), None)
+        .map_err(|e| RpcErr::from((-32602, e)))?;
+
+    let pane_id = p.pane_id.as_deref().and_then(parse_pane_id);
+
+    let outcome = match condition {
+        crate::wait_for::WaitCondition::Exit { pid } => {
+            #[cfg(windows)]
+            {
+                crate::wait_for::wait_exit(pid, timeout_ms)
+            }
+            #[cfg(not(windows))]
+            {
+                let _ = pid;
+                crate::wait_for::WaitOutcome::Error {
+                    reason: "wait_for exit is only supported on Windows".into(),
+                }
+            }
+        }
+        crate::wait_for::WaitCondition::File { path } => {
+            crate::wait_for::wait_file(&path, timeout_ms)
+        }
+        crate::wait_for::WaitCondition::Output { pattern } => {
+            let tx_for_closure = tx.clone();
+            let screen_fn = || {
+                let (ctx, crx) = mpsc::channel::<String>();
+                let _ = tx_for_closure.send(CtrlReq::GetPaneContents { pane_id, resp: ctx });
+                crx.recv_timeout(std::time::Duration::from_secs(1))
+                    .unwrap_or_default()
+            };
+            crate::wait_for::wait_output(&pattern, screen_fn, timeout_ms, 50)
+        }
+        crate::wait_for::WaitCondition::Ready => {
+            // Poll #{pane_ready} via DisplayMessage every 250 ms.
+            let start = std::time::Instant::now();
+            let deadline = start + std::time::Duration::from_millis(timeout_ms);
+            loop {
+                let (ptx, prx) = mpsc::channel::<String>();
+                let _ = tx.send(CtrlReq::DisplayMessage(
+                    ptx,
+                    "#{pane_ready}".to_string(),
+                    pane_id,
+                    false,
+                ));
+                let ready = prx
+                    .recv_timeout(std::time::Duration::from_secs(1))
+                    .map(|s| s.trim() == "1")
+                    .unwrap_or(false);
+                if ready {
+                    break crate::wait_for::WaitOutcome::Success {
+                        elapsed_ms: start.elapsed().as_millis() as u64,
+                    };
+                }
+                let now = std::time::Instant::now();
+                if now >= deadline {
+                    break crate::wait_for::WaitOutcome::Timeout {
+                        elapsed_ms: start.elapsed().as_millis() as u64,
+                    };
+                }
+                let remaining = deadline - now;
+                std::thread::sleep(remaining.min(std::time::Duration::from_millis(250)));
+            }
+        }
+    };
+
+    serde_json::to_value(outcome)
+        .map_err(|e| RpcErr::from((-32603, format!("Internal error: {e}"))))
 }
 
 #[cfg(test)]
