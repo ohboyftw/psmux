@@ -187,6 +187,10 @@ pub struct WorkerState {
     pub started_at: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub finished_at: Option<String>,
+    /// Path to a psmux crash report (from `crash::crash_directory()`) recorded
+    /// when the worker's pane vanished without a clean exit code.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub crash_dump_path: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -208,6 +212,7 @@ impl WorkerState {
             exit_code: None,
             started_at: None,
             finished_at: None,
+            crash_dump_path: None,
         }
     }
 
@@ -405,6 +410,32 @@ fn now_iso8601() -> String {
     chrono::Utc::now().to_rfc3339()
 }
 
+/// Scan recent psmux crash reports for one that likely belongs to this worker.
+/// Prefers a PID match; falls back to the newest crash after `started_at`.
+fn find_crash_for(ws: &WorkerState) -> Option<String> {
+    let entries = crate::crash::list_crashes(10);
+    if entries.is_empty() {
+        return None;
+    }
+    if let Some(pid) = ws.pid {
+        if let Some(e) = entries.iter().find(|e| e.pid == pid) {
+            return Some(e.path.to_string_lossy().into_owned());
+        }
+    }
+    let started_ts = ws
+        .started_at
+        .as_deref()
+        .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
+        .map(|dt| dt.timestamp() as u64);
+    let candidate = entries.first()?;
+    match started_ts {
+        Some(start) if candidate.timestamp >= start => {
+            Some(candidate.path.to_string_lossy().into_owned())
+        }
+        _ => None,
+    }
+}
+
 /// Path to the psmux binary currently executing this orchestrator.
 fn psmux_exe() -> Result<PathBuf, String> {
     std::env::current_exe().map_err(|e| format!("cannot resolve psmux binary: {e}"))
@@ -569,6 +600,13 @@ pub fn run_plan(
                 } else {
                     WorkerStatus::Failed
                 };
+                // Pane vanished with no usable exit code — try to associate a
+                // psmux crash report for post-mortem inspection.
+                if code == -1 {
+                    if let Some(path) = find_crash_for(ws) {
+                        ws.crash_dump_path = Some(path);
+                    }
+                }
             }
             if state
                 .workers
