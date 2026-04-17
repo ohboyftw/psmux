@@ -5,10 +5,12 @@
 //! launches panes in topological order using `wait-for --exit` for dependency
 //! resolution.
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::fmt;
-use std::path::PathBuf;
+use std::fs;
+use std::io;
+use std::path::{Path, PathBuf};
 
 /// A parsed orchestration plan.
 #[derive(Debug, Deserialize)]
@@ -159,5 +161,188 @@ impl Plan {
                 !completed.contains(&w.id) && w.depends_on.iter().all(|dep| completed.contains(dep))
             })
             .collect()
+    }
+}
+
+// ─── State store ────────────────────────────────────────────────────────────
+
+/// Persistent orchestration state for a single plan run.
+#[derive(Debug, Serialize, Deserialize)]
+pub struct OrchestrationState {
+    pub session: String,
+    pub workers: HashMap<String, WorkerState>,
+}
+
+/// Per-worker runtime state.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WorkerState {
+    pub status: WorkerStatus,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pane_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pid: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub exit_code: Option<i32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub started_at: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub finished_at: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum WorkerStatus {
+    Pending,
+    Running,
+    Succeeded,
+    Failed,
+    Skipped,
+}
+
+impl WorkerState {
+    pub fn new_pending() -> Self {
+        Self {
+            status: WorkerStatus::Pending,
+            pane_id: None,
+            pid: None,
+            exit_code: None,
+            started_at: None,
+            finished_at: None,
+        }
+    }
+
+    pub fn is_terminal(&self) -> bool {
+        matches!(
+            self.status,
+            WorkerStatus::Succeeded | WorkerStatus::Failed | WorkerStatus::Skipped
+        )
+    }
+}
+
+impl OrchestrationState {
+    /// Initialize a fresh state with all workers `Pending`.
+    pub fn new_for_plan(plan: &Plan) -> Self {
+        let workers = plan
+            .workers
+            .iter()
+            .map(|w| (w.id.clone(), WorkerState::new_pending()))
+            .collect();
+        Self {
+            session: plan.session.clone(),
+            workers,
+        }
+    }
+
+    /// Atomically write state to `path` via a sibling `.tmp` file + rename.
+    pub fn save(&self, path: &Path) -> io::Result<()> {
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent)?;
+        }
+        let mut tmp = path.to_path_buf();
+        let tmp_name = match path.file_name() {
+            Some(n) => {
+                let mut s = n.to_os_string();
+                s.push(".tmp");
+                s
+            }
+            None => {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    "state path has no file name",
+                ));
+            }
+        };
+        tmp.set_file_name(tmp_name);
+
+        let data = serde_json::to_vec_pretty(self)
+            .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
+        fs::write(&tmp, &data)?;
+        fs::rename(&tmp, path)?;
+        Ok(())
+    }
+
+    /// Read and deserialize state from `path`.
+    pub fn load(path: &Path) -> io::Result<Self> {
+        let data = fs::read(path)?;
+        serde_json::from_slice(&data).map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))
+    }
+
+    /// Set of worker ids whose status is terminal (succeeded/failed/skipped).
+    pub fn completed_ids(&self) -> HashSet<String> {
+        self.workers
+            .iter()
+            .filter(|(_, ws)| ws.is_terminal())
+            .map(|(id, _)| id.clone())
+            .collect()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn plan_from(json: &str) -> Plan {
+        serde_json::from_str(json).unwrap()
+    }
+
+    #[test]
+    fn state_roundtrips_through_save_load() {
+        let plan = plan_from(
+            r#"{
+                "version": 1,
+                "session": "s",
+                "workers": [
+                    { "id": "a", "command": ["x"] },
+                    { "id": "b", "command": ["y"], "depends_on": ["a"] }
+                ]
+            }"#,
+        );
+        let mut state = OrchestrationState::new_for_plan(&plan);
+        state.workers.get_mut("a").unwrap().status = WorkerStatus::Succeeded;
+        state.workers.get_mut("a").unwrap().exit_code = Some(0);
+        state.workers.get_mut("a").unwrap().pid = Some(12345);
+
+        let tmp = std::env::temp_dir().join(format!(
+            "psmux_orch_state_{}_{}.json",
+            std::process::id(),
+            chrono::Utc::now().timestamp_nanos_opt().unwrap_or(0)
+        ));
+        state.save(&tmp).unwrap();
+
+        let loaded = OrchestrationState::load(&tmp).unwrap();
+        assert_eq!(loaded.session, "s");
+        assert_eq!(
+            loaded.workers.get("a").unwrap().status,
+            WorkerStatus::Succeeded
+        );
+        assert_eq!(loaded.workers.get("a").unwrap().pid, Some(12345));
+        assert_eq!(
+            loaded.workers.get("b").unwrap().status,
+            WorkerStatus::Pending
+        );
+
+        fs::remove_file(&tmp).ok();
+    }
+
+    #[test]
+    fn atomic_save_removes_tmp_sibling_after_success() {
+        let plan = plan_from(
+            r#"{
+                "version": 1,
+                "session": "s",
+                "workers": [{ "id": "a", "command": ["x"] }]
+            }"#,
+        );
+        let state = OrchestrationState::new_for_plan(&plan);
+        let dir = std::env::temp_dir().join(format!("psmux_orch_atomic_{}", std::process::id()));
+        fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("state.json");
+        state.save(&path).unwrap();
+
+        assert!(path.exists(), "state.json should exist");
+        let tmp = dir.join("state.json.tmp");
+        assert!(!tmp.exists(), "tmp file must be renamed away, not left behind");
+
+        fs::remove_dir_all(&dir).ok();
     }
 }
