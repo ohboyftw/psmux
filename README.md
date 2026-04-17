@@ -273,8 +273,13 @@ Critical fixes for production use with Claude Code and agent swarms:
 | **Env shim always-active** | Agent teams env vars (`CLAUDE_PANE_BACKEND_SOCKET`) not propagating when native `env.exe` exists | Shim installs unconditionally; handles POSIX escapes from shell-quote |
 | **bg=default color** | `bg=default` in styles rendered as black instead of terminal default | `parse_tmux_color("default")` returns `Color::Reset` |
 | **manual_rename flag** | `new-window -n NAME` auto-rename overwrites explicit name | Sets `manual_rename = true` when `-n` flag is used |
+| **Stale `.port` files (#204)** | Ghost sessions lingered in `psmux ls` when the initial pane command failed to spawn | `create_window()` error path removes `.port`/`.key`/`.version`/`.pipe` + kills warm pane before returning |
+| **Window name `pwsh` flash (#229)** | Window title briefly flashed to `pwsh` before settling on the real command (agent/TUI flicker) | `get_foreground_process_name()` returns `None` instead of shell-name fallback; auto-rename `continue`s to preserve the current name |
+| **switch-client routing (#202)** | `switch-client -t other` was routed to the destination server, which replied "already on that session" | main.rs skips setting `PSMUX_TARGET_SESSION` for `switch-client`/`switchc`; `TMUX` env var resolves the current (source) session for routing |
 
 These fixes compound: the DCS buffer growth caused memory pressure, which slowed child processes, which filled ConPTY input buffers, which blocked the event loop, which buffered all keybindings for minutes.
+
+**Upstream sync** (`sync-2026-04-18-finch`): the last three rows above were ported from upstream `psmux/psmux` as part of the automated `/upstream-pulse` workflow. See `.claude/upstream-pulse/reports/sync-2026-04-18-finch.md` and `docs/ohboy-builds-backlog.md` for the full 47-commit triage, decomposition rationale, and queued work.
 
 ## Television Integration
 

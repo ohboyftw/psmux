@@ -21,6 +21,154 @@ Persistent task backlog for the ohboy-builds fork. Updated after each `/upstream
 
 ## Active Backlog
 
+### Tier 2: Quick Config (sync-2026-04-18-finch) — RESOLVED
+
+- [x] **Default `allow-set-title` to off** — `WONT DO STANDALONE` (subsumed by Tier 3)
+  - Upstream `4162d97` flips a default, but ohboy-builds never had the
+    `allow_set_title` field — the flip is meaningless without first porting
+    the feature. Merged into the Tier 3 port below (field added with
+    default = `false`, matching post-flip upstream).
+
+- [x] **Reset `rsel_pane_rect`/`rsel_block` in right-click copy path** — `WONT DO`
+  - Upstream `e0657c4` references `rsel_*` state from PR #212 (pwsh-mouse-selection),
+    which ohboy-builds has never ported. When/if PR #212 is ported (Tier 5,
+    `4b5b5a4`), this fix should be included in the same port.
+
+### Tier 3: Low Complexity / High Impact (sync-2026-04-18-finch)
+
+- [ ] **Port `allow_set_title` field + OSC 0/2 pane_title propagation** `TODO`
+  - Combines `eb338c8` (extract helper, run unconditionally) + `4162d97`
+    (default to off) + the original inline OSC propagation that never
+    landed on ohboy-builds.
+  - Steps:
+    1. Add `allow_set_title: bool` to `AppState` in `src/types.rs` (default `false`).
+    2. Add `title_locked: bool` to `Pane` (for `select-pane -T` honoring).
+    3. Add `propagate_osc_titles()` + `propagate_osc_titles_in_tree()` to `src/server/helpers.rs`.
+    4. Call `propagate_osc_titles(&mut app)` in `server/mod.rs` pre-auto-rename pass (~L1186).
+    5. Wire `set -g allow-set-title` parsing into `config.rs` + `server/options.rs`.
+    6. Cherry-pick `docs/pane-titles.md` (additive, 175 lines).
+    7. Port 7 verification tests from `tests/test_issue231_osc_title_propagation.ps1`.
+  - Files: `src/types.rs`, `src/server/helpers.rs`, `src/server/mod.rs`,
+    `src/config.rs`, `src/server/options.rs`, `docs/pane-titles.md`, tests.
+  - Value: pairs with Feature #11 (Pane Title Bar) — OSC-emitting programs
+    (ssh, vim, starship) can drive pane border titles automatically.
+  - Risk: Medium — server/mod.rs + types.rs both diverged
+  - REGRESSION RISK: CustomPaneBackend, Agent Orchestration
+
+- [ ] **Window name no longer flashes to pwsh on session creation** `TODO`
+  - Upstream: `b6c7784` — `src/commands.rs` +16, `src/platform.rs` +10, `src/server/connection.rs` +14, `src/server/mod.rs` +13
+  - Value: cleaner agent spawn UX (no pwsh flash for CustomPaneBackend jobs)
+  - Risk: Medium — 4 diverged files
+  - REGRESSION RISK: CustomPaneBackend
+
+- [ ] **Fix stale .port files when pane spawn fails (#204)** `TODO`
+  - Upstream: `fd07145` — `src/server/mod.rs` (~28 lines) + new test
+  - Value: directly relevant to CustomPaneBackend pipe-discovery hygiene
+  - Risk: Medium — diverged file
+  - REGRESSION RISK: CustomPaneBackend
+
+### Tier 5: Cross-Session join-pane via TCP Proxy — `f8fa11d` + `85cafd9`
+
+Upstream added a new multi-session transport layer for join-pane/move-pane with a
+TCP proxy. Overlaps conceptually with CustomPaneBackend (both offer "pane as
+transport endpoint") but via different plumbing.
+
+**Decomposed tasks:**
+
+- [ ] **Port `src/cross_session.rs` (161 lines, NEW)** `TODO`
+  - Additive file — cherry-pick clean unless imports conflict
+  - Risk: Low
+
+- [ ] **Port `src/cross_session_server.rs` (302 lines, NEW)** `TODO`
+  - Additive file — TCP listener for cross-session pane proxying
+  - Risk: Low
+
+- [ ] **Port `src/proxy_pane.rs` (276 lines, NEW)** `TODO`
+  - Additive file — proxy pane representation
+  - Risk: Low
+
+- [ ] **Wire cross-session types into `src/types.rs`** `TODO`
+  - Upstream adds ~49 lines to types.rs; ohboy-builds has CtrlReq divergence
+  - Risk: Medium — conflict hotspot; WONT DO if CustomPaneBackend already
+    subsumes the use case
+
+- [ ] **Wire cross-session handlers into server/connection.rs + server/mod.rs** `TODO`
+  - server/connection.rs +96, server/mod.rs +51, main.rs +111
+  - Risk: High — all heavily diverged
+  - Consider: skip if CustomPaneBackend's JSON-RPC `exec` + pipe protocol
+    covers the target use case (likely yes for agent workloads)
+
+### Tier 5: CREATE_NO_WINDOW + Combined Flag Parsing — `a5d1b23`
+
+16k-line commit combines three independent features + a massive test suite.
+
+**Decomposed tasks:**
+
+- [ ] **Port CREATE_NO_WINDOW for background subprocesses** `TODO`
+  - Files: `src/platform.rs` (+54 additive), `src/copy_mode.rs`, a few other spawn sites
+  - Value: eliminates pwsh/cmd flash on agent spawn (critical for CustomPaneBackend UX)
+  - Risk: Medium — `src/platform.rs` is a known diverged file
+  - Priority: high for agent UX polish
+
+- [ ] **Port combined flag parsing (e.g., `-abc` → `-a -b -c`)** `TODO`
+  - Files: `src/commands.rs`, `src/server/connection.rs`, `src/main.rs`
+  - Risk: Medium — commands.rs heavily diverged
+
+- [ ] **Port `set-option -o` (only-if-unset)** `TODO`
+  - Small addition to `src/server/options.rs` / option parsing
+  - Risk: Low — localized
+
+- [ ] **Cherry-pick rust test files (additive)** `TODO`
+  - `tests-rs/test_flag_parity.rs` (2171 lines), `tests-rs/test_config_exhaustive.rs`
+    (2545 lines), `tests-rs/test_hide_window.rs` (419), `tests-rs/test_mega_unit_coverage.rs`
+    (715), `tests-rs/test_issue215_session_persistence.rs` (511)
+  - Risk: Low if they compile; may need adaptation for ohboy-builds divergence
+
+- [ ] **Cherry-pick PowerShell integration tests (additive)** `TODO`
+  - test_cli_flag_parity, test_cli_mega_suite, test_combined_flags,
+    test_config_exhaustive_{cli,tcp,tui}, test_hide_window_e2e,
+    test_issue215_session_persistence, test_tcp_*, test_win32_tui_*
+  - Risk: Low — additive, but may reference upstream-only codepaths
+
+### Tier 5: Remove legacy `src/app.rs` — `44de600`
+
+- [ ] **Evaluate whether to follow upstream deletion of `src/app.rs`** `TODO` `LOW`
+  - Upstream deleted `src/app.rs` (1303 lines) and migrated functionality into
+    client/server modules
+  - ohboy-builds still uses `src/app.rs` for our own additions (bracket paste
+    state, run-shell, focus-events wiring)
+  - Risk: Very high — would be a multi-day refactor
+  - Likely resolution: WONT DO (follow upstream) or LATER (wait for
+    ohboy-builds to independently converge on client/server split)
+
+### Tier 5: Misc Features (sync-2026-04-18-finch)
+
+- [ ] **pane_title defaults to hostname + show-options resolves default-shell** `TODO`
+  - Upstream: `e20630b` — `src/pane.rs` +13, `src/format.rs` +29, server/mod.rs +35
+  - Plus 18 new PowerShell tests + `tests/injector.cs` (213-line keystroke injector)
+  - Risk: Medium — pane.rs and format.rs diverged
+  - Decompose: take the injector helper + test files separately (additive),
+    port the default-shell resolution logic to show-options
+
+- [ ] **new-session -e environment variable support (#205)** `TODO`
+  - Upstream: `9926b85` + `38d7cfa` — `src/commands.rs`, `src/main.rs`,
+    `src/server/connection.rs`, `src/server/mod.rs`, `src/util.rs` (+139 NEW file)
+  - Value: clean way to set per-session env — useful for agent teams
+    (CLAUDE_PANE_BACKEND_SOCKET per spawn)
+  - Risk: Medium — 4 diverged files + 1 new util.rs file
+  - REGRESSION RISK: CustomPaneBackend, Agent Orchestration
+
+- [ ] **pwsh-mouse-selection option (#211)** `TODO` `LOW`
+  - Upstream: `4b5b5a4` — `src/client.rs` (+452) + options wiring
+  - Value: interactive UX polish, low agent relevance
+  - Risk: Medium — client.rs heavily diverged
+
+- [ ] **send-keys C-x/M-x local path parsing aligned with server (#230)** `TODO`
+  - Upstream: `d47b65c` — `src/commands.rs` +101
+  - Value: fixes a send-keys correctness gap
+  - Risk: Medium — commands.rs diverged
+  - REGRESSION RISK: Agent Orchestration (send-keys is core dispatch path)
+
 ### Upstream Control Mode Server (-C/-CC) — `b68962b`
 
 Upstream added server-side control mode (2,594 lines). ohboy-builds has CustomPaneBackend (JSON-RPC) for the same programmatic control use case, but control mode adds tmux protocol compatibility for third-party tooling.

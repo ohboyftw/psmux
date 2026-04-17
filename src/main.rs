@@ -138,7 +138,15 @@ fn run_main() -> io::Result<()> {
             // directly. Otherwise (e.g. -t %2, -t :1.0) fall through to
             // the TMUX env var resolution below so we connect to the right
             // server when invoked from inside a psmux pane.
-            if has_explicit_session {
+            //
+            // Exception: for switch-client, -t is the DESTINATION session,
+            // not the server to route the command to. Skip setting
+            // PSMUX_TARGET_SESSION so the TMUX-based fallback below resolves
+            // the current (source) session for routing. PSMUX_TARGET_FULL
+            // still carries the destination for the server handler (#202).
+            let is_switch_client =
+                args.iter().any(|a| a == "switch-client" || a == "switchc");
+            if has_explicit_session && !is_switch_client {
                 env::set_var("PSMUX_TARGET_SESSION", &port_file_base);
             }
         }

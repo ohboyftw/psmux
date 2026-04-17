@@ -1911,10 +1911,11 @@ pub mod process_info {
                 autorename_log(&format!("pid={} fg_child=None (BFS found nothing)", pid));
             }
         }
-        // Fallback: shell's own process name.
-        let shell_name = get_process_name(pid);
-        autorename_log(&format!("pid={} fallback_name={:?}", pid, shell_name));
-        shell_name
+        // No foreground child found.  Return None so the caller can preserve
+        // the current window name instead of briefly flashing to the shell
+        // name before the child process has spawned (issue #229).
+        autorename_log(&format!("pid={} no_foreground_child", pid));
+        None
     }
 
     /// Get the CWD of the foreground process in the pane.

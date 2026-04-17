@@ -875,8 +875,8 @@ pub fn run_server(
     if let Some(ref dir) = start_dir {
         env::set_current_dir(dir).ok();
     }
-    if let Some(ref raw_args) = raw_command {
-        create_window_raw(&*pty_system, &mut app, raw_args)?;
+    let create_result = if let Some(ref raw_args) = raw_command {
+        create_window_raw(&*pty_system, &mut app, raw_args)
     } else {
         create_window(
             &*pty_system,
@@ -884,7 +884,19 @@ pub fn run_server(
             initial_command.as_deref(),
             None,
             None,
-        )?;
+        )
+    };
+    if let Err(e) = create_result {
+        // Clean up port/key/version/pipe files so stale entries are not left
+        // behind when the pane command fails to spawn (issue #204).
+        let _ = std::fs::remove_file(&regpath);
+        let _ = std::fs::remove_file(&keypath);
+        let _ = std::fs::remove_file(&verpath);
+        let _ = std::fs::remove_file(&pipe_file);
+        if let Some(mut wp) = app.warm_pane.take() {
+            wp.child.kill().ok();
+        }
+        return Err(e);
     }
     if let Some(prev) = saved_dir {
         env::set_current_dir(prev).ok();
@@ -1788,8 +1800,16 @@ pub fn run_server(
                                             let new_name = if auto_rename {
                                                 // automatic-rename: use foreground process name
                                                 if let Some(pid) = p.child_pid {
-                                                    crate::platform::process_info::get_foreground_process_name(pid)
-                                                        .unwrap_or_else(|| "shell".into())
+                                                    match crate::platform::process_info::get_foreground_process_name(pid) {
+                                                        Some(name) => name,
+                                                        None => {
+                                                            // No foreground child found yet.  Keep the
+                                                            // current window name rather than flashing
+                                                            // to the shell name before a child process
+                                                            // spawns (#229).
+                                                            continue;
+                                                        }
+                                                    }
                                                 } else if allow_rename && !p.title.is_empty() {
                                                     p.title.clone()
                                                 } else {
