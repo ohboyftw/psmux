@@ -209,6 +209,41 @@ pub fn wait_file(path: &std::path::Path, timeout_ms: u64) -> WaitOutcome {
     }
 }
 
+/// Wait for a regex pattern to match the pane's live screen buffer.
+///
+/// `screen_fn` is invoked every `poll_interval_ms` to fetch the current
+/// screen text. In production this closure calls `pane.screen().contents()`.
+pub fn wait_output<F>(
+    pattern: &regex::Regex,
+    screen_fn: F,
+    timeout_ms: u64,
+    poll_interval_ms: u64,
+) -> WaitOutcome
+where
+    F: Fn() -> String,
+{
+    let start = Instant::now();
+    let deadline = start + std::time::Duration::from_millis(timeout_ms);
+    let interval = std::time::Duration::from_millis(poll_interval_ms);
+
+    loop {
+        let text = screen_fn();
+        if pattern.is_match(&text) {
+            return WaitOutcome::Success {
+                elapsed_ms: start.elapsed().as_millis() as u64,
+            };
+        }
+        let now = Instant::now();
+        if now >= deadline {
+            return WaitOutcome::Timeout {
+                elapsed_ms: start.elapsed().as_millis() as u64,
+            };
+        }
+        let remaining = deadline - now;
+        std::thread::sleep(remaining.min(interval));
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -271,5 +306,51 @@ mod tests {
         let result = wait_file(&target, 200);
         assert!(matches!(result, WaitOutcome::Timeout { .. }));
         std::fs::remove_dir_all(target.parent().unwrap()).ok();
+    }
+
+    #[test]
+    fn wait_output_matches_immediately() {
+        let re = regex::Regex::new("READY").unwrap();
+        let result = wait_output(&re, || "some text READY here".to_string(), 1000, 10);
+        assert!(matches!(result, WaitOutcome::Success { .. }));
+        if let WaitOutcome::Success { elapsed_ms } = result {
+            assert!(elapsed_ms < 100, "should match on first poll");
+        }
+    }
+
+    #[test]
+    fn wait_output_matches_after_delay() {
+        use std::sync::atomic::{AtomicU32, Ordering};
+        let counter = std::sync::Arc::new(AtomicU32::new(0));
+        let c = counter.clone();
+        let re = regex::Regex::new("DONE$").unwrap();
+        let result = wait_output(
+            &re,
+            move || {
+                let n = c.fetch_add(1, Ordering::Relaxed);
+                if n >= 5 {
+                    "status: DONE".to_string()
+                } else {
+                    "status: working".to_string()
+                }
+            },
+            5000,
+            10,
+        );
+        assert!(matches!(result, WaitOutcome::Success { .. }));
+    }
+
+    #[test]
+    fn wait_output_times_out_when_no_match() {
+        let re = regex::Regex::new("NEVER_MATCH_THIS").unwrap();
+        let result = wait_output(&re, || "hello world".to_string(), 200, 50);
+        assert!(matches!(result, WaitOutcome::Timeout { .. }));
+    }
+
+    #[test]
+    fn wait_output_multiline_regex() {
+        let re = regex::Regex::new(r"(?m)^\$ $").unwrap();
+        let result = wait_output(&re, || "output line\n$ \n".to_string(), 1000, 10);
+        assert!(matches!(result, WaitOutcome::Success { .. }));
     }
 }
