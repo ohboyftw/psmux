@@ -227,7 +227,7 @@ See [docs/power-pack-tools.md](docs/power-pack-tools.md) for the full tool stack
 > - **`kill-pane` fix** — Immediately removes the window when the last pane is killed (no more dead pane lingering)
 > - **Target error handling** — `list-panes -t %nonexistent` and `list-windows -t` return non-zero exit codes
 >
-> **Server-Side Wait (Phase 2):**
+> **Server-Side Wait:**
 > - **`wait-for --exit PID`** — Block until a process exits via `WaitForSingleObject`, returns exit code
 > - **`wait-for --file PATH`** — Block until a file appears (server-side polling). Eliminates client-side sentinel loops
 > - **`wait-for --output REGEX`** — Block until a regex matches the pane's live screen buffer (50ms polling)
@@ -235,12 +235,12 @@ See [docs/power-pack-tools.md](docs/power-pack-tools.md) for the full tool stack
 > - **`--json` output** — All wait-for modes return structured `WaitOutcome` JSON for machine consumption
 > - **JSON-RPC `wait_for`** — Same conditions available via the CustomPaneBackend named pipe
 >
-> **Mycel Event Bus (Phase 2):**
+> **Mycel Event Bus:**
 > - **7 `psmux/*` topics** — `pane/created`, `pane/ready`, `pane/exited`, `exec/completed`, `session/created`, `session/renamed`, `session/killed`
 > - **Fire-and-forget** — Non-blocking publish to mycel server when built with `--features mycel`
 > - **Deprecation shim** — `psmux/pane/died` still published alongside `psmux/pane/exited` for one release
 >
-> **DAG Orchestration (Phase 2):**
+> **DAG Orchestration:**
 > - **`psmux orchestrate plan.json`** — Reads a worker DAG, provisions git worktrees, launches panes in topological order
 > - **Dependency resolution** — Workers with `depends_on` wait for predecessors to exit successfully before starting
 > - **Failure propagation** — Non-zero exit skips all transitive dependents; independent workers continue
@@ -248,7 +248,7 @@ See [docs/power-pack-tools.md](docs/power-pack-tools.md) for the full tool stack
 > - **`--cleanup`** — Removes worktrees and orchestration state after completion
 > - **`--json`** — Machine-readable final state with per-worker status, exit codes, and crash dump paths
 >
-> **Crash Diagnostics (Phase 2):**
+> **Crash Diagnostics:**
 > - **Panic hook** — Writes crash reports with full backtrace to `%LOCALAPPDATA%/psmux/crashes/`
 > - **`psmux debug crashes list`** — List crash dumps newest-first
 > - **`psmux debug crashes show <file>`** — Print crash report contents
