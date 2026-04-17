@@ -59,6 +59,10 @@ required-features = ["mycel"]
 name = "test_wait_for_contracts"
 path = "tests-rs/test_wait_for_contracts.rs"
 
+[[test]]
+name = "test_orchestrate_contracts"
+path = "tests-rs/test_orchestrate_contracts.rs"
+
 # Windows only
 [target.'cfg(not(windows))'.dependencies]
 [target.'cfg(windows)'.dependencies]
