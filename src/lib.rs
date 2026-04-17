@@ -10,3 +10,4 @@ pub mod mycel;
 pub mod remote;
 pub mod session;
 pub mod types;
+pub mod wait_for;
