@@ -277,6 +277,95 @@ impl OrchestrationState {
     }
 }
 
+// ─── Worktree provisioning ──────────────────────────────────────────────────
+
+/// Resolve a worker's `cwd` against the plan directory when relative.
+fn resolve_cwd(plan_dir: &Path, cwd: &Path) -> PathBuf {
+    if cwd.is_absolute() {
+        cwd.to_path_buf()
+    } else {
+        plan_dir.join(cwd)
+    }
+}
+
+/// Resolve a worktree's `repo` path against the plan directory when relative.
+fn resolve_repo(plan_dir: &Path, repo: &Path) -> PathBuf {
+    if repo.is_absolute() {
+        repo.to_path_buf()
+    } else {
+        plan_dir.join(repo)
+    }
+}
+
+/// Build the `git worktree add` args for a worker. Separated for testing.
+fn worktree_add_args(cwd: &Path, spec: &WorktreeSpec) -> Vec<String> {
+    let mut args = vec![
+        "worktree".to_string(),
+        "add".to_string(),
+        cwd.to_string_lossy().into_owned(),
+        "-b".to_string(),
+        spec.branch.clone(),
+    ];
+    if let Some(base) = &spec.base {
+        args.push(base.clone());
+    }
+    args
+}
+
+/// For each worker with a `worktree`, run `git worktree add` inside the
+/// worker's resolved repo directory.
+pub fn provision_worktrees(plan: &Plan, plan_dir: &Path) -> Result<(), String> {
+    for w in &plan.workers {
+        let Some(spec) = &w.worktree else {
+            continue;
+        };
+        let cwd = match &w.cwd {
+            Some(c) => resolve_cwd(plan_dir, c),
+            None => {
+                return Err(format!("worker {} has worktree but no cwd", w.id));
+            }
+        };
+        let repo = resolve_repo(plan_dir, &spec.repo);
+        let args = worktree_add_args(&cwd, spec);
+        let output = std::process::Command::new("git")
+            .current_dir(&repo)
+            .args(&args)
+            .output()
+            .map_err(|e| format!("worker {}: failed to spawn git: {e}", w.id))?;
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            return Err(format!(
+                "worker {}: git worktree add failed: {}",
+                w.id,
+                stderr.trim()
+            ));
+        }
+    }
+    Ok(())
+}
+
+/// For each worker with a `worktree`, run `git worktree remove`.
+pub fn cleanup_worktrees(plan: &Plan) -> Result<(), String> {
+    for w in &plan.workers {
+        let Some(spec) = &w.worktree else { continue };
+        let Some(cwd) = &w.cwd else { continue };
+        let output = std::process::Command::new("git")
+            .current_dir(&spec.repo)
+            .args(["worktree", "remove", &cwd.to_string_lossy()])
+            .output()
+            .map_err(|e| format!("worker {}: failed to spawn git: {e}", w.id))?;
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            return Err(format!(
+                "worker {}: git worktree remove failed: {}",
+                w.id,
+                stderr.trim()
+            ));
+        }
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -344,5 +433,30 @@ mod tests {
         assert!(!tmp.exists(), "tmp file must be renamed away, not left behind");
 
         fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn worktree_add_args_without_base() {
+        let spec = WorktreeSpec {
+            repo: PathBuf::from("."),
+            branch: "feat-x".into(),
+            base: None,
+        };
+        let args = worktree_add_args(Path::new("/tmp/wt-x"), &spec);
+        assert_eq!(args, vec!["worktree", "add", "/tmp/wt-x", "-b", "feat-x"]);
+    }
+
+    #[test]
+    fn worktree_add_args_with_base() {
+        let spec = WorktreeSpec {
+            repo: PathBuf::from("."),
+            branch: "feat-y".into(),
+            base: Some("origin/main".into()),
+        };
+        let args = worktree_add_args(Path::new("/tmp/wt-y"), &spec);
+        assert_eq!(
+            args,
+            vec!["worktree", "add", "/tmp/wt-y", "-b", "feat-y", "origin/main"]
+        );
     }
 }
