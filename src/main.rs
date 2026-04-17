@@ -8,6 +8,7 @@ mod client;
 mod commands;
 mod config;
 mod copy_mode;
+mod crash;
 mod debug_log;
 mod format;
 mod help;
@@ -65,6 +66,7 @@ use crate::session::{
 use crate::ssh_input::{is_ssh_session, send_mouse_enable, InputSource};
 
 fn main() {
+    crash::install_crash_handler();
     if let Err(e) = run_main() {
         // Print a user-friendly error message instead of Rust's Debug format
         // which shows "Error: Custom { kind: Other, error: \"...\" }"  (fixes #47)
@@ -2798,6 +2800,65 @@ fn run_main() -> io::Result<()> {
                 }
             }
             return Ok(());
+        }
+        // debug - Diagnostic subcommands (crashes, …)
+        "debug" => {
+            let sub = cmd_args.get(1).map(|s| s.as_str()).unwrap_or("");
+            match sub {
+                "crashes" => {
+                    let action = cmd_args.get(2).map(|s| s.as_str()).unwrap_or("list");
+                    match action {
+                        "list" => {
+                            let entries = crate::crash::list_crashes(20);
+                            if entries.is_empty() {
+                                println!(
+                                    "no crash reports in {}",
+                                    crate::crash::crash_directory().display()
+                                );
+                            } else {
+                                println!("{:<10} {:<12} FILE", "PID", "TIMESTAMP");
+                                for e in entries {
+                                    let name = e
+                                        .path
+                                        .file_name()
+                                        .map(|n| n.to_string_lossy().into_owned())
+                                        .unwrap_or_default();
+                                    println!("{:<10} {:<12} {}", e.pid, e.timestamp, name);
+                                }
+                            }
+                            return Ok(());
+                        }
+                        "show" => {
+                            let Some(name) = cmd_args.get(3) else {
+                                eprintln!("psmux debug crashes show: missing filename");
+                                std::process::exit(2);
+                            };
+                            let path = crate::crash::crash_directory().join(name);
+                            match crate::crash::show_crash(&path) {
+                                Ok(contents) => {
+                                    print!("{}", contents);
+                                    return Ok(());
+                                }
+                                Err(e) => {
+                                    eprintln!("psmux debug crashes show: {}: {e}", path.display());
+                                    std::process::exit(2);
+                                }
+                            }
+                        }
+                        _ => {
+                            eprintln!(
+                                "psmux debug crashes: unknown action '{action}'\n\
+                                 usage: psmux debug crashes list | psmux debug crashes show <filename>"
+                            );
+                            std::process::exit(2);
+                        }
+                    }
+                }
+                _ => {
+                    eprintln!("psmux debug: unknown subcommand '{sub}'\nusage: psmux debug crashes list|show");
+                    std::process::exit(2);
+                }
+            }
         }
         // orchestrate - Execute a plan.json DAG of workers
         "orchestrate" => {

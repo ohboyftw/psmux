@@ -3,6 +3,7 @@
 #![allow(dead_code)]
 
 pub mod backend;
+pub mod crash;
 pub mod debug_log;
 pub mod hints;
 #[cfg(feature = "mycel")]

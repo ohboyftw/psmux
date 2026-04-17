@@ -561,15 +561,8 @@ pub fn run_server(
     window_name: Option<String>,
     init_size: Option<(u16, u16)>,
 ) -> io::Result<()> {
-    // Write crash info to a log file when stderr is unavailable (detached server)
-    std::panic::set_hook(Box::new(|info| {
-        let home = std::env::var("USERPROFILE")
-            .or_else(|_| std::env::var("HOME"))
-            .unwrap_or_default();
-        let path = format!("{}\\.psmux\\crash.log", home);
-        let bt = std::backtrace::Backtrace::force_capture();
-        let _ = std::fs::write(&path, format!("{info}\n\nBacktrace:\n{bt}"));
-    }));
+    // Keep only the newest 20 crash reports across runs.
+    crate::crash::prune_crashes(20);
     // Install console control handler to prevent termination on client detach
     install_console_ctrl_handler();
 
