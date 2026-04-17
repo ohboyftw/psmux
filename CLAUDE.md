@@ -77,6 +77,8 @@ Full scripting support including `send-keys`, `capture-pane`, `pipe-pane`,
 - **Focus event injection** (`src/server/helpers.rs`): `send_focus_events()` sends `\x1b[I`/`\x1b[O` on pane switch when child has `?1004h` enabled
 - **Mycel event bus** (`src/mycel.rs`): Publishes `psmux/*` topics when built with `--features mycel`. Full topic list: [docs/mycel-topics.md](docs/mycel-topics.md).
 - **Server-side wait** (`src/wait_for.rs`): `psmux wait-for` blocks until a condition is met — `--exit PID` (WaitForSingleObject), `--file PATH` (filesystem poll), `--output REGEX` (live screen buffer match), `--ready` (pane idle prompt). JSON-RPC `wait_for` method in CustomPaneBackend. `--json` flag for machine-readable `WaitOutcome`. Replaces all client-side polling loops.
+- **DAG orchestration** (`src/orchestrate.rs`): `psmux orchestrate <plan.json>` reads a worker DAG, provisions git worktrees, launches panes in topological order, polls for exit, skips dependents on failure. State persisted to `.orchestration/<session>/state.json` for crash recovery. `--cleanup` removes worktrees. `--json` for machine output.
+- **Crash diagnostics** (`src/crash.rs`): Panic hook writes crash reports with backtrace to `%LOCALAPPDATA%/psmux/crashes/`. `psmux debug crashes list|show`. Auto-prunes to 20 newest on server start. Orchestrate records `crash_dump_path` in worker state when a pane dies without clean exit.
 
 ## Upstream Sync
 At session start, check `.claude/upstream-pulse/state.json` — if `last_check` is >3 days old,

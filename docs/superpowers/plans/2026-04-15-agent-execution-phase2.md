@@ -201,8 +201,8 @@ Depends on Feature 4 (`wait-for --exit`) for `depends_on` resolution.
 
 ### Task 13: `plan.json` schema + parser
 
-- [ ] **Step 1: Failing tests** — parse minimal plan with two workers and a dependency, validate schema errors.
-- [ ] **Step 2: Types** (`src/orchestrate.rs` new file):
+- [x] **Step 1: Failing tests** — parse minimal plan with two workers and a dependency, validate schema errors.
+- [x] **Step 2: Types** (`src/orchestrate.rs` new file):
 
 ```rust
 #[derive(Deserialize)]
@@ -231,42 +231,42 @@ pub struct WorktreeSpec {
 }
 ```
 
-- [ ] **Step 3:** DAG validation — reject cycles; reject unknown `depends_on` IDs.
+- [x] **Step 3:** DAG validation — reject cycles; reject unknown `depends_on` IDs.
 
 ### Task 14: State store (`.orchestration/<session>/state.json`)
 
-- [ ] **Step 1: Failing test** — state survives process restart (write, drop handle, re-read).
-- [ ] **Step 2: Implement** atomic write (write `state.json.tmp` → rename). Fields: `worker_id → {status: pending|running|succeeded|failed, pane_id, pid, exit_code, started_at, finished_at}`.
+- [x] **Step 1: Failing test** — state survives process restart (write, drop handle, re-read).
+- [x] **Step 2: Implement** atomic write (write `state.json.tmp` → rename). Fields: `worker_id → {status: pending|running|succeeded|failed, pane_id, pid, exit_code, started_at, finished_at}`.
 
 ### Task 15: Worktree provisioning
 
-- [ ] **Step 1:** For each worker with `worktree`, shell out to `git worktree add <cwd> -b <branch> <base>`. Capture exit code. Abort plan on failure.
-- [ ] **Step 2: Teardown** — on `orchestrate --cleanup <session>`, run `git worktree remove <cwd>` for each.
+- [x] **Step 1:** For each worker with `worktree`, shell out to `git worktree add <cwd> -b <branch> <base>`. Capture exit code. Abort plan on failure.
+- [x] **Step 2: Teardown** — on `orchestrate --cleanup <session>`, run `git worktree remove <cwd>` for each.
 
 ### Task 16: Pane creation + command launch
 
-- [ ] **Step 1:** For each ready worker (no unmet deps), call `new_window -- <command>` in the target session via existing server API. Record `pane_id` + `pid` in state.
-- [ ] **Step 2:** Register a `wait-for --exit <pid>` for each running worker. On completion, update state, re-scan for newly unblocked workers, spawn them.
+- [x] **Step 1:** For each ready worker (no unmet deps), call `new_window -- <command>` in the target session via existing server API. Record `pane_id` + `pid` in state.
+- [x] **Step 2:** Register a `wait-for --exit <pid>` for each running worker. On completion, update state, re-scan for newly unblocked workers, spawn them.
 
 ### Task 17: Failure modes
 
-- [ ] **Step 1: Test** — worker exits non-zero → dependents are marked `skipped`, not spawned. Plan exits with aggregated failure code.
-- [ ] **Step 2: Test** — orchestrate crash recovery: kill mid-run, re-invoke `orchestrate plan.json`, skips succeeded workers, resumes in-flight ones.
+- [x] **Step 1: Test** — worker exits non-zero → dependents are marked `skipped`, not spawned. Plan exits with aggregated failure code.
+- [x] **Step 2: Test** — orchestrate crash recovery: kill mid-run, re-invoke `orchestrate plan.json`, skips succeeded workers, resumes in-flight ones.
 
 ### Task 18: CLI wiring
 
-- [ ] **Step 1:** `psmux orchestrate <plan.json> [--session NAME] [--cleanup]` in `src/main.rs` + dispatch.
-- [ ] **Step 2:** Human-readable status output (pane per worker, dep graph) and `--json` machine output.
+- [x] **Step 1:** `psmux orchestrate <plan.json> [--session NAME] [--cleanup]` in `src/main.rs` + dispatch.
+- [x] **Step 2:** Human-readable status output (pane per worker, dep graph) and `--json` machine output.
 
 ### Task 19: End-to-end integration test
 
-- [ ] **Step 1:** `tests/test_orchestrate.ps1` — plan with 3 workers (A, B, C; B depends on A; C depends on A+B), all succeed, verify order via exit timestamps.
-- [ ] **Step 2:** Failure path test — middle worker fails, downstream skipped.
+- [x] **Step 1:** `tests/test_orchestrate.ps1` — plan with 3 workers (A, B, C; B depends on A; C depends on A+B), all succeed, verify order via exit timestamps.
+- [x] **Step 2:** Failure path test — middle worker fails, downstream skipped.
 
 ### Task 20: Docs + example plan
 
-- [ ] **Step 1:** `docs/orchestrate.md` with a canopy-shaped example (feature branch per worker, isolated cwd).
-- [ ] **Step 2:** Add row to CLAUDE.md Architecture Notes.
+- [x] **Step 1:** `docs/orchestrate.md` with a canopy-shaped example (feature branch per worker, isolated cwd).
+- [x] **Step 2:** Add row to CLAUDE.md Architecture Notes.
 
 ---
 
@@ -282,12 +282,12 @@ pub struct WorktreeSpec {
 
 Before declaring Phase 2 complete:
 
-- [ ] `cargo fmt --check && cargo clippy -- -D warnings && cargo test --all`
-- [ ] `pwsh tests/test_wait_for.ps1` passes
-- [ ] `pwsh tests/test_orchestrate.ps1` passes (all paths)
-- [ ] Mycel smoke: `mycel sub 'psmux/>'`, run a session, observe `pane/created`, `pane/ready`, `exec/completed`, `pane/exited`, `session/*`
-- [ ] Run full garden — no new code-doc drift introduced
-- [ ] CLAUDE.md updated with wait-for, mycel topic list, orchestrate
+- [x] `cargo fmt --check && cargo clippy -- -D warnings && cargo test --all`
+- [x] `pwsh tests/test_wait_for.ps1` passes
+- [x] `pwsh tests/test_orchestrate.ps1` passes (all paths)
+- [x] Mycel smoke: `mycel sub 'psmux/>'`, run a session, observe `pane/created`, `pane/ready`, `exec/completed`, `pane/exited`, `session/*`
+- [x] Run full garden — no new code-doc drift introduced
+- [x] CLAUDE.md updated with wait-for, mycel topic list, orchestrate
 
 ---
 
@@ -304,19 +304,19 @@ Before declaring Phase 2 complete:
 - Modify: `src/main.rs` (install filter before any other init)
 - Modify: `Cargo.toml` (add `minidump-writer = "0.10"` — crates.io Rust minidump writer, no MSVC DbgHelp dep required)
 
-- [ ] **Step 1: Failing test** — `cargo test --test test_crash_handler` spawns a child binary that panics, asserts a `.dmp` file exists in the configured crash dir with non-zero size.
-- [ ] **Step 2: Implement**
+- [x] **Step 1: Failing test** — `cargo test --test test_crash_handler` spawns a child binary that panics, asserts a `.dmp` file exists in the configured crash dir with non-zero size.
+- [x] **Step 2: Implement**
   - `std::panic::set_hook` → writes minidump + panic message + backtrace to `%LOCALAPPDATA%/psmux/crashes/psmux-{pid}-{unix_ts}.dmp`
   - Win32 `SetUnhandledExceptionFilter` → writes minidump for access violations / stack overflow that bypass panic hook
   - Both hooks log the crash path to `stderr` so Claude Code / orchestrate can surface it
-- [ ] **Step 3: CLI surface**
+- [x] **Step 3: CLI surface**
   - `psmux debug crashes list` — list crash dumps newest-first with timestamp + session name
   - `psmux debug crashes show <id>` — print the panic message / exception code
-- [ ] **Step 4: Retention** — keep last 20 dumps; prune older on session start.
+- [x] **Step 4: Retention** — keep last 20 dumps; prune older on session start.
 
 ### Task 22: Orchestrate crash recovery uses crash dir
 
-- [ ] Modify Feature 6 state store (Task 14) to record `crash_dump_path` when a worker's pane dies without an exit code. `orchestrate --resume` surfaces the path to the user.
+- [x] Modify Feature 6 state store (Task 14) to record `crash_dump_path` when a worker's pane dies without an exit code. `orchestrate --resume` surfaces the path to the user.
 
 ---
 
