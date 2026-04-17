@@ -14,6 +14,7 @@ mod help;
 mod hints;
 mod input;
 mod layout;
+mod orchestrate;
 mod pane;
 mod platform;
 mod popup;
@@ -2797,6 +2798,145 @@ fn run_main() -> io::Result<()> {
                 }
             }
             return Ok(());
+        }
+        // orchestrate - Execute a plan.json DAG of workers
+        "orchestrate" => {
+            let mut plan_path: Option<String> = None;
+            let mut session_override: Option<String> = None;
+            let mut cleanup = false;
+            let mut json_mode = false;
+            let mut i = 1;
+            while i < cmd_args.len() {
+                match cmd_args[i].as_str() {
+                    "--session" => {
+                        if let Some(s) = cmd_args.get(i + 1) {
+                            session_override = Some(s.to_string());
+                            i += 1;
+                        }
+                    }
+                    "--cleanup" => cleanup = true,
+                    "--json" => json_mode = true,
+                    s if !s.starts_with('-') && plan_path.is_none() => {
+                        plan_path = Some(s.to_string());
+                    }
+                    _ => {}
+                }
+                i += 1;
+            }
+
+            let Some(plan_path) = plan_path else {
+                eprintln!(
+                    "psmux orchestrate: missing plan.json path\n\
+                     usage: psmux orchestrate <plan.json> [--session NAME] [--cleanup] [--json]"
+                );
+                std::process::exit(2);
+            };
+
+            let plan_file = std::path::PathBuf::from(&plan_path);
+            let plan_dir = plan_file
+                .parent()
+                .map(std::path::Path::to_path_buf)
+                .unwrap_or_else(|| std::path::PathBuf::from("."));
+            let raw = std::fs::read_to_string(&plan_file).map_err(|e| {
+                io::Error::other(format!(
+                    "cannot read plan file {}: {e}",
+                    plan_file.display()
+                ))
+            })?;
+            let mut plan: crate::orchestrate::Plan = serde_json::from_str(&raw)
+                .map_err(|e| io::Error::other(format!("invalid plan json: {e}")))?;
+            if let Some(s) = &session_override {
+                plan.session = s.clone();
+            }
+            if let Err(e) = plan.validate() {
+                eprintln!("psmux orchestrate: {e}");
+                std::process::exit(2);
+            }
+
+            let state_dir = std::path::PathBuf::from(".orchestration").join(&plan.session);
+            let state_path = state_dir.join("state.json");
+
+            if cleanup {
+                if let Err(e) = crate::orchestrate::cleanup_worktrees(&plan) {
+                    eprintln!("psmux orchestrate --cleanup: {e}");
+                    std::process::exit(2);
+                }
+                if state_dir.exists() {
+                    if let Err(e) = std::fs::remove_dir_all(&state_dir) {
+                        eprintln!(
+                            "psmux orchestrate --cleanup: failed to remove {}: {e}",
+                            state_dir.display()
+                        );
+                        std::process::exit(2);
+                    }
+                }
+                return Ok(());
+            }
+
+            if let Err(e) = crate::orchestrate::provision_worktrees(&plan, &plan_dir) {
+                eprintln!("psmux orchestrate: {e}");
+                std::process::exit(2);
+            }
+
+            let mut state = if state_path.exists() {
+                crate::orchestrate::OrchestrationState::load(&state_path)
+                    .map_err(|e| io::Error::other(format!("cannot load state: {e}")))?
+            } else {
+                crate::orchestrate::OrchestrationState::new_for_plan(&plan)
+            };
+            state
+                .save(&state_path)
+                .map_err(|e| io::Error::other(format!("cannot write initial state: {e}")))?;
+
+            if let Err(e) = crate::orchestrate::run_plan(&plan, &mut state, &plan_dir, &state_path)
+            {
+                eprintln!("psmux orchestrate: {e}");
+                std::process::exit(2);
+            }
+
+            use crate::orchestrate::WorkerStatus;
+            let mut succeeded = 0usize;
+            let mut failed = 0usize;
+            let mut skipped = 0usize;
+            for ws in state.workers.values() {
+                match ws.status {
+                    WorkerStatus::Succeeded => succeeded += 1,
+                    WorkerStatus::Failed => failed += 1,
+                    WorkerStatus::Skipped => skipped += 1,
+                    _ => {}
+                }
+            }
+
+            if json_mode {
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&state).unwrap_or_else(|_| "{}".into())
+                );
+            } else {
+                println!(
+                    "orchestrate {}: {} succeeded, {} failed, {} skipped",
+                    plan.session, succeeded, failed, skipped
+                );
+                for w in &plan.workers {
+                    if let Some(ws) = state.workers.get(&w.id) {
+                        let status = match ws.status {
+                            WorkerStatus::Succeeded => "succeeded",
+                            WorkerStatus::Failed => "failed",
+                            WorkerStatus::Skipped => "skipped",
+                            WorkerStatus::Running => "running",
+                            WorkerStatus::Pending => "pending",
+                        };
+                        let code = ws
+                            .exit_code
+                            .map(|c| format!(" exit={c}"))
+                            .unwrap_or_default();
+                        println!("  {} {}{}", w.id, status, code);
+                    }
+                }
+            }
+
+            let exit_code = if failed > 0 || skipped > 0 { 1 } else { 0 };
+            std::process::exit(exit_code);
         }
         // wait-pane - Wait for a pane's child process to exit
         "wait-pane" | "waitp" => {

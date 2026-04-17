@@ -411,11 +411,7 @@ fn psmux_exe() -> Result<PathBuf, String> {
 }
 
 /// Spawn a pane for `worker` using `psmux new-window -P`. Returns pane id.
-fn spawn_worker_pane(
-    plan: &Plan,
-    plan_dir: &Path,
-    worker: &Worker,
-) -> Result<String, String> {
+fn spawn_worker_pane(plan: &Plan, plan_dir: &Path, worker: &Worker) -> Result<String, String> {
     let exe = psmux_exe()?;
     let mut cmd = std::process::Command::new(&exe);
     cmd.args([
@@ -505,10 +501,12 @@ pub fn run_plan(
     state_path: &Path,
 ) -> Result<(), String> {
     loop {
-        let all_terminal = plan
-            .workers
-            .iter()
-            .all(|w| state.workers.get(&w.id).is_some_and(WorkerState::is_terminal));
+        let all_terminal = plan.workers.iter().all(|w| {
+            state
+                .workers
+                .get(&w.id)
+                .is_some_and(WorkerState::is_terminal)
+        });
         if all_terminal {
             return Ok(());
         }
@@ -656,7 +654,10 @@ mod tests {
 
         assert!(path.exists(), "state.json should exist");
         let tmp = dir.join("state.json.tmp");
-        assert!(!tmp.exists(), "tmp file must be renamed away, not left behind");
+        assert!(
+            !tmp.exists(),
+            "tmp file must be renamed away, not left behind"
+        );
 
         fs::remove_dir_all(&dir).ok();
     }
@@ -682,7 +683,14 @@ mod tests {
         let args = worktree_add_args(Path::new("/tmp/wt-y"), &spec);
         assert_eq!(
             args,
-            vec!["worktree", "add", "/tmp/wt-y", "-b", "feat-y", "origin/main"]
+            vec![
+                "worktree",
+                "add",
+                "/tmp/wt-y",
+                "-b",
+                "feat-y",
+                "origin/main"
+            ]
         );
     }
 
