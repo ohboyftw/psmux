@@ -366,6 +366,38 @@ pub fn cleanup_worktrees(plan: &Plan) -> Result<(), String> {
     Ok(())
 }
 
+// ─── Dependents / failure propagation ───────────────────────────────────────
+
+/// Transitive closure of workers that directly or indirectly depend on
+/// `worker_id`. Does not include `worker_id` itself.
+pub fn dependents(plan: &Plan, worker_id: &str) -> HashSet<String> {
+    let mut out = HashSet::new();
+    let mut frontier: Vec<String> = vec![worker_id.to_string()];
+    while let Some(current) = frontier.pop() {
+        for w in &plan.workers {
+            if w.depends_on.iter().any(|d| d == &current) && out.insert(w.id.clone()) {
+                frontier.push(w.id.clone());
+            }
+        }
+    }
+    out
+}
+
+/// Mark all transitive dependents of `failed_id` as `Skipped` (unless already
+/// terminal).
+fn skip_dependents(plan: &Plan, state: &mut OrchestrationState, failed_id: &str) {
+    for dep_id in dependents(plan, failed_id) {
+        let entry = state
+            .workers
+            .entry(dep_id)
+            .or_insert_with(WorkerState::new_pending);
+        if !entry.is_terminal() {
+            entry.status = WorkerStatus::Skipped;
+            entry.finished_at = Some(now_iso8601());
+        }
+    }
+}
+
 // ─── Orchestration loop ─────────────────────────────────────────────────────
 
 /// ISO-8601 timestamp helper.
@@ -510,6 +542,7 @@ pub fn run_plan(
                     ws.exit_code = Some(-1);
                     ws.finished_at = Some(now_iso8601());
                     state.workers.insert(worker.id.clone(), ws);
+                    skip_dependents(plan, state, &worker.id);
                     state
                         .save(state_path)
                         .map_err(|se| format!("save state: {se}"))?;
@@ -538,6 +571,13 @@ pub fn run_plan(
                 } else {
                     WorkerStatus::Failed
                 };
+            }
+            if state
+                .workers
+                .get(&worker_id)
+                .is_some_and(|ws| ws.status == WorkerStatus::Failed)
+            {
+                skip_dependents(plan, state, &worker_id);
             }
             updated = true;
         }
@@ -644,5 +684,65 @@ mod tests {
             args,
             vec!["worktree", "add", "/tmp/wt-y", "-b", "feat-y", "origin/main"]
         );
+    }
+
+    #[test]
+    fn dependents_returns_transitive_closure() {
+        let plan = plan_from(
+            r#"{
+                "version": 1,
+                "session": "s",
+                "workers": [
+                    { "id": "a", "command": ["x"] },
+                    { "id": "b", "command": ["y"], "depends_on": ["a"] },
+                    { "id": "c", "command": ["z"], "depends_on": ["b"] },
+                    { "id": "d", "command": ["w"] }
+                ]
+            }"#,
+        );
+        let deps = dependents(&plan, "a");
+        assert!(deps.contains("b"));
+        assert!(deps.contains("c"));
+        assert!(!deps.contains("d"));
+        assert!(!deps.contains("a"));
+    }
+
+    #[test]
+    fn skip_dependents_marks_downstream_skipped() {
+        let plan = plan_from(
+            r#"{
+                "version": 1,
+                "session": "s",
+                "workers": [
+                    { "id": "a", "command": ["x"] },
+                    { "id": "b", "command": ["y"], "depends_on": ["a"] },
+                    { "id": "c", "command": ["z"], "depends_on": ["b"] },
+                    { "id": "d", "command": ["w"] }
+                ]
+            }"#,
+        );
+        let mut state = OrchestrationState::new_for_plan(&plan);
+        super::skip_dependents(&plan, &mut state, "a");
+        assert_eq!(state.workers["b"].status, WorkerStatus::Skipped);
+        assert_eq!(state.workers["c"].status, WorkerStatus::Skipped);
+        assert_eq!(state.workers["d"].status, WorkerStatus::Pending);
+    }
+
+    #[test]
+    fn skip_dependents_preserves_already_succeeded() {
+        let plan = plan_from(
+            r#"{
+                "version": 1,
+                "session": "s",
+                "workers": [
+                    { "id": "a", "command": ["x"] },
+                    { "id": "b", "command": ["y"], "depends_on": ["a"] }
+                ]
+            }"#,
+        );
+        let mut state = OrchestrationState::new_for_plan(&plan);
+        state.workers.get_mut("b").unwrap().status = WorkerStatus::Succeeded;
+        super::skip_dependents(&plan, &mut state, "a");
+        assert_eq!(state.workers["b"].status, WorkerStatus::Succeeded);
     }
 }
