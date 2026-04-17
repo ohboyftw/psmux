@@ -26,6 +26,7 @@ mod style;
 mod tree;
 mod types;
 mod util;
+mod wait_for;
 mod window_ops;
 
 #[allow(unused)]
@@ -2672,6 +2673,10 @@ fn run_main() -> io::Result<()> {
             let mut unlock = false;
             let mut channel: Option<String> = None;
             let mut file_path: Option<String> = None;
+            let mut exit_pid: Option<String> = None;
+            let mut output_pat: Option<String> = None;
+            let mut ready_mode = false;
+            let mut json_mode = false;
             let mut timeout: Option<String> = None;
             let mut target: Option<String> = None;
             let mut i = 1;
@@ -2681,6 +2686,8 @@ fn run_main() -> io::Result<()> {
                     "-L" => lock = true,
                     "-S" => signal = true,
                     "-U" => unlock = true,
+                    "--json" => json_mode = true,
+                    "--ready" => ready_mode = true,
                     "-t" => {
                         if let Some(t) = cmd_args.get(i + 1) {
                             target = Some(t.to_string());
@@ -2690,6 +2697,18 @@ fn run_main() -> io::Result<()> {
                     "--file" => {
                         if let Some(f) = cmd_args.get(i + 1) {
                             file_path = Some(f.to_string());
+                            i += 1;
+                        }
+                    }
+                    "--exit" => {
+                        if let Some(p) = cmd_args.get(i + 1) {
+                            exit_pid = Some(p.to_string());
+                            i += 1;
+                        }
+                    }
+                    "--output" => {
+                        if let Some(p) = cmd_args.get(i + 1) {
+                            output_pat = Some(p.to_string());
                             i += 1;
                         }
                     }
@@ -2707,26 +2726,61 @@ fn run_main() -> io::Result<()> {
                 i += 1;
             }
 
-            if let Some(ref fp) = file_path {
-                // File-watching mode
+            let use_executor =
+                file_path.is_some() || exit_pid.is_some() || output_pat.is_some() || ready_mode;
+
+            if use_executor {
                 let mut cmd = "wait-for".to_string();
                 if let Some(ref t) = target {
                     cmd.push_str(&format!(" -t {}", t));
                 }
-                cmd.push_str(&format!(" --file {}", fp));
+                if let Some(ref fp) = file_path {
+                    cmd.push_str(&format!(" --file {}", fp));
+                }
+                if let Some(ref pid) = exit_pid {
+                    cmd.push_str(&format!(" --exit {}", pid));
+                }
+                if let Some(ref pat) = output_pat {
+                    // Wrap in quotes so the server sees it as one token.
+                    cmd.push_str(&format!(" --output \"{}\"", pat));
+                }
+                if ready_mode {
+                    cmd.push_str(" --ready");
+                }
+                if json_mode {
+                    cmd.push_str(" --json");
+                }
                 if let Some(ref to) = timeout {
                     cmd.push_str(&format!(" --timeout {}", to));
                 }
                 cmd.push('\n');
                 let resp = send_control_with_response(cmd)?;
                 let trimmed = resp.trim();
-                if trimmed == "TIMEOUT" {
-                    eprintln!("wait-for: timed out waiting for file: {}", fp);
-                    std::process::exit(1);
-                }
-                if !resp.is_empty() {
+                // Exit-code mapping: success=0, timeout=1, error=2.
+                let exit_code = if json_mode {
+                    // Parse WaitOutcome JSON.
+                    match serde_json::from_str::<serde_json::Value>(trimmed) {
+                        Ok(v) => match v.get("kind").and_then(|k| k.as_str()) {
+                            Some("success") | Some("exit_success") => 0,
+                            Some("timeout") => 1,
+                            _ => 2,
+                        },
+                        Err(_) => 2,
+                    }
+                } else if trimmed == "TIMEOUT" {
+                    1
+                } else if trimmed.starts_with("ERROR") {
+                    eprintln!("{}", trimmed);
+                    2
+                } else {
+                    0
+                };
+                if json_mode {
+                    println!("{}", trimmed);
+                } else if !resp.is_empty() && exit_code != 2 {
                     print!("{}", resp);
                 }
+                std::process::exit(exit_code);
             } else if let Some(ch) = channel {
                 if signal {
                     send_control(format!("wait-for -S {}\n", ch))?;

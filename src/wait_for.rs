@@ -94,6 +94,10 @@ pub fn wait_exit(pid: u32, timeout_ms: u64) -> WaitOutcome {
     const WAIT_FAILED: u32 = 0xFFFF_FFFF;
     const STILL_ACTIVE: u32 = 259;
 
+    // The Win32 HANDLE is a pointer, but several other modules declare these
+    // same functions using `isize`. Keep the `isize` shape here for parity with
+    // `session.rs` / `platform.rs` and silence the extern-clash lint.
+    #[allow(clashing_extern_declarations)]
     #[link(name = "kernel32")]
     extern "system" {
         fn OpenProcess(desired_access: u32, inherit_handle: i32, process_id: u32) -> isize;

@@ -1198,6 +1198,14 @@ pub enum CtrlReq {
     /// Query a pane's readiness state: returns (data_version, last_output_time_ms).
     /// Used by `wait-pane --ready` to poll until the shell prompt has appeared.
     QueryPaneReady(usize, mpsc::Sender<(u64, u64)>),
+    /// Read the pane's current screen buffer as text.
+    /// `pane_id` of `None` targets the active pane; otherwise the pane with the
+    /// given `%N` id. Used by `wait-for --output` for regex polling.
+    /// Empty string is returned if the pane is not found.
+    GetPaneContents {
+        pane_id: Option<usize>,
+        resp: mpsc::Sender<String>,
+    },
     /// Show static text in a popup overlay (title, content).
     /// Used by the persistent client command prompt for list-* commands.
     ShowTextPopup(String, String),

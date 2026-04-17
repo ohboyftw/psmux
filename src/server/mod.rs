@@ -384,6 +384,43 @@ fn get_pane_process_id(app: &AppState, pane_id: usize) -> Option<u32> {
     None
 }
 
+/// Read the current screen buffer of a pane as plaintext (newline-joined rows).
+/// `pane_id = None` targets the active pane of the active window.
+/// Returns an empty string if the pane is not found or the term lock is poisoned.
+fn read_pane_contents(app: &AppState, pane_id: Option<usize>) -> String {
+    let pane_opt: Option<&crate::types::Pane> = match pane_id {
+        Some(id) => app.windows.iter().find_map(|win| {
+            crate::tree::find_path_by_id(&win.root, id)
+                .and_then(|p| crate::tree::active_pane(&win.root, &p))
+        }),
+        None => app
+            .windows
+            .get(app.active_idx)
+            .and_then(|win| crate::tree::active_pane(&win.root, &win.active_path)),
+    };
+    let Some(p) = pane_opt else {
+        return String::new();
+    };
+    let Ok(parser) = p.term.lock() else {
+        return String::new();
+    };
+    let screen = parser.screen();
+    let mut text = String::new();
+    for r in 0..p.last_rows {
+        let mut row = String::new();
+        for c in 0..p.last_cols {
+            if let Some(cell) = screen.cell(r, c) {
+                row.push_str(cell.contents());
+            } else {
+                row.push(' ');
+            }
+        }
+        text.push_str(row.trim_end());
+        text.push('\n');
+    }
+    text
+}
+
 /// Parse a popup dimension spec: "80" (absolute) or "95%" (percentage of term_dim).
 fn parse_popup_dim(spec: &str, term_dim: u16, default: u16) -> u16 {
     if let Some(pct_str) = spec.strip_suffix('%') {
@@ -1519,6 +1556,10 @@ pub fn run_server(
                             } else {
                                 let _ = resp.send(String::new());
                             }
+                        }
+                        CtrlReq::GetPaneContents { pane_id, resp } => {
+                            let text = read_pane_contents(&app, pane_id);
+                            let _ = resp.send(text);
                         }
                         CtrlReq::FocusWindow(wid) => {
                             // wid is a display index (same as tmux window number), convert to internal array index

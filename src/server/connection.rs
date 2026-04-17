@@ -1787,59 +1787,138 @@ pub(crate) fn handle_connection(
                 let lock = args.contains(&"-L");
                 let signal = args.contains(&"-S");
                 let unlock = args.contains(&"-U");
-                // Check for --file mode: server-side file watching
+                let json_mode = args.contains(&"--json");
+                let ready_mode = args.contains(&"--ready");
+                // Condition flags: take the value following the flag.
                 let file_path: Option<String> = args
                     .windows(2)
                     .find(|w| w[0] == "--file")
+                    .map(|w| w[1].trim_matches('"').to_string());
+                let exit_pid: Option<u32> = args
+                    .windows(2)
+                    .find(|w| w[0] == "--exit")
+                    .and_then(|w| w[1].parse().ok());
+                let output_pat: Option<String> = args
+                    .windows(2)
+                    .find(|w| w[0] == "--output")
                     .map(|w| w[1].trim_matches('"').to_string());
                 let timeout_secs: u64 = args
                     .windows(2)
                     .find(|w| w[0] == "--timeout")
                     .and_then(|w| w[1].parse().ok())
                     .unwrap_or(3600); // default 1 hour
-                if let Some(file) = file_path {
-                    // File-watching mode: poll for file existence server-side
-                    // Use the pane's cwd as base if the path is relative
-                    let (cwd_tx, cwd_rx) = mpsc::channel::<String>();
-                    let _ = tx.send(CtrlReq::DisplayMessage(
-                        cwd_tx,
-                        "#{pane_current_path}".to_string(),
-                        None,
-                        false,
-                    ));
-                    let base_dir = cwd_rx
-                        .recv_timeout(Duration::from_secs(2))
-                        .unwrap_or_default();
-                    let watch_path = if std::path::Path::new(&file).is_absolute() {
-                        std::path::PathBuf::from(&file)
-                    } else if !base_dir.is_empty() {
-                        std::path::PathBuf::from(&base_dir).join(&file)
-                    } else {
-                        std::path::PathBuf::from(&file)
-                    };
-                    // Check if file already exists
-                    if watch_path.exists() {
-                        let _ = writeln!(write_stream, "OK");
-                        let _ = write_stream.flush();
-                    } else {
-                        // Poll every 250ms until file appears or timeout
-                        let deadline =
-                            std::time::Instant::now() + Duration::from_secs(timeout_secs);
-                        let mut found = false;
-                        while std::time::Instant::now() < deadline {
-                            std::thread::sleep(Duration::from_millis(250));
-                            if watch_path.exists() {
-                                found = true;
-                                break;
+                let timeout_ms = timeout_secs.saturating_mul(1000);
+
+                // If any new-style condition flag is set, use the wait_for executors.
+                let use_executor =
+                    file_path.is_some() || exit_pid.is_some() || output_pat.is_some() || ready_mode;
+
+                if use_executor {
+                    let outcome: crate::wait_for::WaitOutcome = if let Some(pid) = exit_pid {
+                        #[cfg(windows)]
+                        {
+                            crate::wait_for::wait_exit(pid, timeout_ms)
+                        }
+                        #[cfg(not(windows))]
+                        {
+                            let _ = pid;
+                            crate::wait_for::WaitOutcome::Error {
+                                reason: "wait-for --exit is only supported on Windows".into(),
                             }
                         }
-                        if found {
-                            let _ = writeln!(write_stream, "OK");
+                    } else if let Some(file) = file_path {
+                        // Resolve path relative to pane cwd (preserved from legacy --file mode).
+                        let (cwd_tx, cwd_rx) = mpsc::channel::<String>();
+                        let _ = tx.send(CtrlReq::DisplayMessage(
+                            cwd_tx,
+                            "#{pane_current_path}".to_string(),
+                            None,
+                            false,
+                        ));
+                        let base_dir = cwd_rx
+                            .recv_timeout(Duration::from_secs(2))
+                            .unwrap_or_default();
+                        let watch_path = if std::path::Path::new(&file).is_absolute() {
+                            std::path::PathBuf::from(&file)
+                        } else if !base_dir.is_empty() {
+                            std::path::PathBuf::from(&base_dir).join(&file)
                         } else {
-                            let _ = writeln!(write_stream, "TIMEOUT");
+                            std::path::PathBuf::from(&file)
+                        };
+                        crate::wait_for::wait_file(&watch_path, timeout_ms)
+                    } else if let Some(pat) = output_pat {
+                        match regex::Regex::new(&pat) {
+                            Ok(re) => {
+                                let target_pane_id = if pane_is_id { target_pane } else { None };
+                                let tx_for_closure = tx.clone();
+                                let screen_fn = || {
+                                    let (ctx, crx) = mpsc::channel::<String>();
+                                    let _ = tx_for_closure.send(CtrlReq::GetPaneContents {
+                                        pane_id: target_pane_id,
+                                        resp: ctx,
+                                    });
+                                    crx.recv_timeout(Duration::from_secs(1)).unwrap_or_default()
+                                };
+                                crate::wait_for::wait_output(&re, screen_fn, timeout_ms, 50)
+                            }
+                            Err(e) => crate::wait_for::WaitOutcome::Error {
+                                reason: format!("invalid regex: {e}"),
+                            },
                         }
-                        let _ = write_stream.flush();
+                    } else {
+                        // --ready: poll #{pane_ready} via DisplayMessage format variable.
+                        let target_pane_id = if pane_is_id { target_pane } else { None };
+                        let start = std::time::Instant::now();
+                        let deadline = start + Duration::from_millis(timeout_ms);
+                        loop {
+                            let (ptx, prx) = mpsc::channel::<String>();
+                            let _ = tx.send(CtrlReq::DisplayMessage(
+                                ptx,
+                                "#{pane_ready}".to_string(),
+                                target_pane_id,
+                                false,
+                            ));
+                            let ready = prx
+                                .recv_timeout(Duration::from_secs(1))
+                                .map(|s| s.trim() == "1")
+                                .unwrap_or(false);
+                            if ready {
+                                break crate::wait_for::WaitOutcome::Success {
+                                    elapsed_ms: start.elapsed().as_millis() as u64,
+                                };
+                            }
+                            let now = std::time::Instant::now();
+                            if now >= deadline {
+                                break crate::wait_for::WaitOutcome::Timeout {
+                                    elapsed_ms: start.elapsed().as_millis() as u64,
+                                };
+                            }
+                            let remaining = deadline - now;
+                            std::thread::sleep(remaining.min(Duration::from_millis(250)));
+                        }
+                    };
+
+                    // Emit the result. JSON mode writes WaitOutcome JSON verbatim; legacy mode
+                    // writes OK / TIMEOUT / ERROR: reason so the CLI can map to exit codes.
+                    if json_mode {
+                        let json = serde_json::to_string(&outcome)
+                            .unwrap_or_else(|_| "{\"kind\":\"error\"}".to_string());
+                        let _ = writeln!(write_stream, "{}", json);
+                    } else {
+                        match &outcome {
+                            crate::wait_for::WaitOutcome::Success { .. }
+                            | crate::wait_for::WaitOutcome::ExitSuccess { .. } => {
+                                let _ = writeln!(write_stream, "OK");
+                            }
+                            crate::wait_for::WaitOutcome::Timeout { .. } => {
+                                let _ = writeln!(write_stream, "TIMEOUT");
+                            }
+                            crate::wait_for::WaitOutcome::Error { reason } => {
+                                let _ = writeln!(write_stream, "ERROR: {}", reason);
+                            }
+                        }
                     }
+                    let _ = write_stream.flush();
                     if !persistent {
                         break;
                     }
@@ -1847,7 +1926,7 @@ pub(crate) fn handle_connection(
                     // Standard channel-based wait-for
                     let channel = args
                         .iter()
-                        .find(|a| !a.starts_with('-'))
+                        .find(|a| !a.starts_with('-') && **a != "--json")
                         .unwrap_or(&"")
                         .to_string();
                     let op = if lock {
