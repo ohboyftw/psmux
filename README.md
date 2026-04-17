@@ -224,9 +224,36 @@ See [docs/power-pack-tools.md](docs/power-pack-tools.md) for the full tool stack
 > - **`new-window -- command`** — Launch a command directly as the pane's initial process (like tmux). Supports `split-window --` too
 > - **`#{pane_exit_code}`** — Format variable exposing the exit code of dead panes. Also available as `#{pane_dead_status}`
 > - **`capture-pane --plain`** — Strips all ANSI/VT escape sequences for clean programmatic consumption
-> - **`wait-for --file`** — `psmux wait-for --file .done --timeout 60` watches for file creation server-side (250ms polling). Eliminates client-side sentinel polling
 > - **`kill-pane` fix** — Immediately removes the window when the last pane is killed (no more dead pane lingering)
 > - **Target error handling** — `list-panes -t %nonexistent` and `list-windows -t` return non-zero exit codes
+>
+> **Server-Side Wait (Phase 2):**
+> - **`wait-for --exit PID`** — Block until a process exits via `WaitForSingleObject`, returns exit code
+> - **`wait-for --file PATH`** — Block until a file appears (server-side polling). Eliminates client-side sentinel loops
+> - **`wait-for --output REGEX`** — Block until a regex matches the pane's live screen buffer (50ms polling)
+> - **`wait-for --ready`** — Block until the pane reaches an idle prompt (reuses `context_ready` signal)
+> - **`--json` output** — All wait-for modes return structured `WaitOutcome` JSON for machine consumption
+> - **JSON-RPC `wait_for`** — Same conditions available via the CustomPaneBackend named pipe
+>
+> **Mycel Event Bus (Phase 2):**
+> - **7 `psmux/*` topics** — `pane/created`, `pane/ready`, `pane/exited`, `exec/completed`, `session/created`, `session/renamed`, `session/killed`
+> - **Fire-and-forget** — Non-blocking publish to mycel server when built with `--features mycel`
+> - **Deprecation shim** — `psmux/pane/died` still published alongside `psmux/pane/exited` for one release
+>
+> **DAG Orchestration (Phase 2):**
+> - **`psmux orchestrate plan.json`** — Reads a worker DAG, provisions git worktrees, launches panes in topological order
+> - **Dependency resolution** — Workers with `depends_on` wait for predecessors to exit successfully before starting
+> - **Failure propagation** — Non-zero exit skips all transitive dependents; independent workers continue
+> - **State persistence** — `.orchestration/<session>/state.json` survives crashes; resume with re-invoke
+> - **`--cleanup`** — Removes worktrees and orchestration state after completion
+> - **`--json`** — Machine-readable final state with per-worker status, exit codes, and crash dump paths
+>
+> **Crash Diagnostics (Phase 2):**
+> - **Panic hook** — Writes crash reports with full backtrace to `%LOCALAPPDATA%/psmux/crashes/`
+> - **`psmux debug crashes list`** — List crash dumps newest-first
+> - **`psmux debug crashes show <file>`** — Print crash report contents
+> - **Auto-prune** — Keeps only the 20 newest crash files on server start
+> - **Orchestrate integration** — `crash_dump_path` recorded in worker state when pane dies without clean exit
 >
 > These features are on the [`ohboyftw/psmux`](https://github.com/ohboyftw/psmux/tree/ohboy-builds) fork and not yet merged to upstream `master`.
 
