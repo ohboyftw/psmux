@@ -76,6 +76,7 @@ Full scripting support including `send-keys`, `capture-pane`, `pipe-pane`,
 - **VT terminal state tracking** (`crates/vt100-psmux/`): Focus reporting (`?1004h`), cursor style (DECSCUSR), mouse mode/encoding — all tracked in `screen.rs` with `state_diff()` for pane switching
 - **Focus event injection** (`src/server/helpers.rs`): `send_focus_events()` sends `\x1b[I`/`\x1b[O` on pane switch when child has `?1004h` enabled
 - **Mycel event bus** (`src/mycel.rs`): Publishes `psmux/*` topics when built with `--features mycel`. Full topic list: [docs/mycel-topics.md](docs/mycel-topics.md).
+- **Server-side wait** (`src/wait_for.rs`): `psmux wait-for` blocks until a condition is met — `--exit PID` (WaitForSingleObject), `--file PATH` (filesystem poll), `--output REGEX` (live screen buffer match), `--ready` (pane idle prompt). JSON-RPC `wait_for` method in CustomPaneBackend. `--json` flag for machine-readable `WaitOutcome`. Replaces all client-side polling loops.
 
 ## Upstream Sync
 At session start, check `.claude/upstream-pulse/state.json` — if `last_check` is >3 days old,

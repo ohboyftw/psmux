@@ -57,7 +57,7 @@
 - Modify: `src/lib.rs` (add `pub mod wait_for;`)
 - Test: `tests-rs/test_wait_for_contracts.rs`
 
-- [ ] **Step 1: Write failing contract tests**
+- [x] **Step 1: Write failing contract tests**
 
 ```rust
 // tests-rs/test_wait_for_contracts.rs
@@ -89,7 +89,7 @@ fn wait_outcome_is_serializable() {
 }
 ```
 
-- [ ] **Step 2: Define types**
+- [x] **Step 2: Define types**
 
 ```rust
 // src/wait_for.rs
@@ -130,38 +130,38 @@ impl WaitCondition {
 
 ### Task 2: `WaitCondition::Exit` via `WaitForSingleObject`
 
-- [ ] **Step 1: Failing integration test** — spawn a short-lived process, call wait-for exit, assert `Success { elapsed_ms }`
-- [ ] **Step 2: Implement** using `OpenProcess` + `WaitForSingleObject` with timeout. Returns `WaitOutcome::Timeout` on `WAIT_TIMEOUT`, `Success` on `WAIT_OBJECT_0`.
-- [ ] **Step 3: Verify** — test passes, no handle leaks (Drop closes handle).
+- [x] **Step 1: Failing integration test** — spawn a short-lived process, call wait-for exit, assert `Success { elapsed_ms }`
+- [x] **Step 2: Implement** using `OpenProcess` + `WaitForSingleObject` with timeout. Returns `WaitOutcome::Timeout` on `WAIT_TIMEOUT`, `Success` on `WAIT_OBJECT_0`.
+- [x] **Step 3: Verify** — test passes, no handle leaks (Drop closes handle).
 
 ### Task 3: `WaitCondition::File` via `ReadDirectoryChangesW`
 
-- [ ] **Step 1: Failing test** — watch a temp dir, create target file from another thread, assert wake-up within 200ms.
-- [ ] **Step 2: Implement** using `ReadDirectoryChangesW` async IO on the *parent* directory. Filter events to the target filename. Guard against race: probe filesystem once before arming the watcher (file might already exist).
-- [ ] **Step 3: Verify** — test passes; pre-existing file case handled.
+- [x] **Step 1: Failing test** — watch a temp dir, create target file from another thread, assert wake-up within 200ms.
+- [x] **Step 2: Implement** using `ReadDirectoryChangesW` async IO on the *parent* directory. Filter events to the target filename. Guard against race: probe filesystem once before arming the watcher (file might already exist).
+- [x] **Step 3: Verify** — test passes; pre-existing file case handled.
 
 ### Task 4: `WaitCondition::Output` via live screen poll
 
-- [ ] **Step 1: Failing test** — prime a vt100 Screen with escape sequences, run wait-for output against a regex, assert match.
-- [ ] **Step 2: Implement** — poll pane's vt100 `Screen::contents()` every 50ms, run regex. On match, return. Timeout is first-class. **Live buffer, not scrollback** — re-reads current screen each tick.
-- [ ] **Step 3: Contract test** — regex with multiline flag works; non-matching pattern hits timeout correctly.
+- [x] **Step 1: Failing test** — prime a vt100 Screen with escape sequences, run wait-for output against a regex, assert match.
+- [x] **Step 2: Implement** — poll pane's vt100 `Screen::contents()` every 50ms, run regex. On match, return. Timeout is first-class. **Live buffer, not scrollback** — re-reads current screen each tick.
+- [x] **Step 3: Contract test** — regex with multiline flag works; non-matching pattern hits timeout correctly.
 
 ### Task 5: `WaitCondition::Ready` piggybacks on `context_ready`
 
-- [ ] **Step 1: Test** — subscribe to `context_ready` event, trigger pane readiness, assert wait-for returns.
-- [ ] **Step 2: Implement** — register a one-shot `oneshot::channel` with the backend event system keyed on `pane_id`. `context_ready` fires → wake channel. Unsubscribe on timeout/success.
+- [x] **Step 1: Test** — subscribe to `context_ready` event, trigger pane readiness, assert wait-for returns.
+- [x] **Step 2: Implement** — register a one-shot `oneshot::channel` with the backend event system keyed on `pane_id`. `context_ready` fires → wake channel. Unsubscribe on timeout/success.
 
 ### Task 6: CLI + JSON-RPC wiring
 
-- [ ] **Step 1: Add `WaitFor` `CtrlReq` variant** (`src/types.rs`) with `{condition, timeout_ms, pane_id}`.
-- [ ] **Step 2: CLI parser** (`src/server/connection.rs`): `psmux wait-for -t %N --exit PID | --file PATH | --output REGEX | --ready --timeout SECS`.
-- [ ] **Step 3: Server handler** (`src/server/mod.rs`): dispatches to `wait_for::run(cond, timeout)`, writes `WaitOutcome` as JSON to client stdout, exits with code 0 (success), 1 (timeout), 2 (error).
-- [ ] **Step 4: JSON-RPC method** (`src/backend/dispatcher.rs`): `wait_for` with same params; returns `WaitOutcome` synchronously.
-- [ ] **Step 5: End-to-end test** (`tests/test_wait_for.ps1`): spawn pane, write sentinel file after 2s, `psmux wait-for --file` returns < 3s.
+- [x] **Step 1: Add `WaitFor` `CtrlReq` variant** (`src/types.rs`) with `{condition, timeout_ms, pane_id}`.
+- [x] **Step 2: CLI parser** (`src/server/connection.rs`): `psmux wait-for -t %N --exit PID | --file PATH | --output REGEX | --ready --timeout SECS`.
+- [x] **Step 3: Server handler** (`src/server/mod.rs`): dispatches to `wait_for::run(cond, timeout)`, writes `WaitOutcome` as JSON to client stdout, exits with code 0 (success), 1 (timeout), 2 (error).
+- [x] **Step 4: JSON-RPC method** (`src/backend/dispatcher.rs`): `wait_for` with same params; returns `WaitOutcome` synchronously.
+- [x] **Step 5: End-to-end test** (`tests/test_wait_for.ps1`): spawn pane, write sentinel file after 2s, `psmux wait-for --file` returns < 3s.
 
 ### Task 7: Replace canopy's `_wait_sentinel` docs
 
-- [ ] **Step 1:** Update `docs/requirements-pi-integration.md` and `README.md` with wait-for examples. No code change in canopy (separate project).
+- [x] **Step 1:** Update `docs/requirements-pi-integration.md` and `README.md` with wait-for examples. No code change in canopy (separate project).
 
 ---
 
@@ -171,27 +171,27 @@ The bus exists; two topics are already published. Add the missing ones.
 
 ### Task 8: Add `psmux/pane/ready` publish
 
-- [ ] **Step 1: Failing test** (`tests-rs/test_mycel_topics.rs`) — capture mycel publishes, trigger `context_ready`, assert `psmux/pane/ready` payload `{pane_id, elapsed_ms}`.
-- [ ] **Step 2: Implement** — in the `context_ready` emission site (same location as backend push event), call `mycel::publish_pane_event("psmux/pane/ready", ...)` under `#[cfg(feature = "mycel")]`.
+- [x] **Step 1: Failing test** (`tests-rs/test_mycel_topics.rs`) — capture mycel publishes, trigger `context_ready`, assert `psmux/pane/ready` payload `{pane_id, elapsed_ms}`.
+- [x] **Step 2: Implement** — in the `context_ready` emission site (same location as backend push event), call `mycel::publish_pane_event("psmux/pane/ready", ...)` under `#[cfg(feature = "mycel")]`.
 
 ### Task 9: Add `psmux/exec/completed` publish
 
-- [ ] **Step 1: Failing test** — trigger `exec_completed`, assert mycel payload `{pane_id, pid, exit_code, elapsed_ms, command}`.
-- [ ] **Step 2: Implement** — in dispatcher's `exec_completed` site, co-publish to mycel.
+- [x] **Step 1: Failing test** — trigger `exec_completed`, assert mycel payload `{pane_id, pid, exit_code, elapsed_ms, command}`.
+- [x] **Step 2: Implement** — in dispatcher's `exec_completed` site, co-publish to mycel.
 
 ### Task 10: Add `psmux/session/{created,renamed,killed}` publishes
 
-- [ ] **Step 1: Failing tests** — `new-session`, `rename-session`, `kill-session` each emit the right topic with `{session_name, client_id}`.
-- [ ] **Step 2: Implement** — locate the three handlers in `src/server/mod.rs`, add publish calls.
+- [x] **Step 1: Failing tests** — `new-session`, `rename-session`, `kill-session` each emit the right topic with `{session_name, client_id}`.
+- [x] **Step 2: Implement** — locate the three handlers in `src/server/mod.rs`, add publish calls.
 
 ### Task 11: Rename `psmux/pane/died` → `psmux/pane/exited` (spec alignment)
 
-- [ ] **Step 1:** Update `src/tree.rs:564` topic string. Grep for consumers — update canopy listener docs if referenced.
-- [ ] **Step 2: Deprecation shim** (optional, 1 release): publish both topics; remove `/died` next release.
+- [x] **Step 1:** Update `src/tree.rs:564` topic string. Grep for consumers — update canopy listener docs if referenced.
+- [x] **Step 2: Deprecation shim** (optional, 1 release): publish both topics; remove `/died` next release.
 
 ### Task 12: Document topic schema
 
-- [ ] Add a `docs/mycel-topics.md` file listing every `psmux/*` topic, its payload schema, and when it fires. Reference from `CLAUDE.md`.
+- [x] Add a `docs/mycel-topics.md` file listing every `psmux/*` topic, its payload schema, and when it fires. Reference from `CLAUDE.md`.
 
 ---
 
