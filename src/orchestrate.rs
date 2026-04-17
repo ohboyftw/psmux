@@ -366,6 +366,192 @@ pub fn cleanup_worktrees(plan: &Plan) -> Result<(), String> {
     Ok(())
 }
 
+// ─── Orchestration loop ─────────────────────────────────────────────────────
+
+/// ISO-8601 timestamp helper.
+fn now_iso8601() -> String {
+    chrono::Utc::now().to_rfc3339()
+}
+
+/// Path to the psmux binary currently executing this orchestrator.
+fn psmux_exe() -> Result<PathBuf, String> {
+    std::env::current_exe().map_err(|e| format!("cannot resolve psmux binary: {e}"))
+}
+
+/// Spawn a pane for `worker` using `psmux new-window -P`. Returns pane id.
+fn spawn_worker_pane(
+    plan: &Plan,
+    plan_dir: &Path,
+    worker: &Worker,
+) -> Result<String, String> {
+    let exe = psmux_exe()?;
+    let mut cmd = std::process::Command::new(&exe);
+    cmd.args([
+        "new-window",
+        "-t",
+        &plan.session,
+        "-n",
+        &worker.id,
+        "-P",
+        "-F",
+        "#{pane_id}",
+    ]);
+    if let Some(cwd) = &worker.cwd {
+        cmd.args(["-c", &resolve_cwd(plan_dir, cwd).to_string_lossy()]);
+    }
+    if let Some(env) = &worker.env {
+        for (k, v) in env {
+            cmd.env(k, v);
+        }
+    }
+    cmd.arg("--");
+    for part in &worker.command {
+        cmd.arg(part);
+    }
+
+    let output = cmd
+        .output()
+        .map_err(|e| format!("worker {}: failed to spawn psmux: {e}", worker.id))?;
+    if !output.status.success() {
+        return Err(format!(
+            "worker {}: psmux new-window failed: {}",
+            worker.id,
+            String::from_utf8_lossy(&output.stderr).trim()
+        ));
+    }
+    let pane_id = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    if pane_id.is_empty() {
+        return Err(format!(
+            "worker {}: psmux new-window returned empty pane id",
+            worker.id
+        ));
+    }
+    Ok(pane_id)
+}
+
+/// Query a pane's dead/exit-code status via `psmux list-panes`.
+/// Returns `Ok(Some(exit_code))` if the pane is dead, `Ok(None)` if still alive.
+fn check_pane_exit(pane_id: &str) -> Result<Option<i32>, String> {
+    let exe = psmux_exe()?;
+    let output = std::process::Command::new(&exe)
+        .args([
+            "list-panes",
+            "-t",
+            pane_id,
+            "-F",
+            "#{pane_dead} #{pane_exit_code}",
+        ])
+        .output()
+        .map_err(|e| format!("list-panes failed to spawn: {e}"))?;
+    if !output.status.success() {
+        // Pane may already be gone — treat as dead with unknown exit code.
+        return Ok(Some(-1));
+    }
+    let raw = String::from_utf8_lossy(&output.stdout);
+    let line = raw.lines().next().unwrap_or("").trim();
+    if line.is_empty() {
+        return Ok(Some(-1));
+    }
+    let mut parts = line.split_whitespace();
+    let dead_flag = parts.next().unwrap_or("0");
+    let exit_raw = parts.next().unwrap_or("");
+    let dead = matches!(dead_flag, "1" | "true");
+    if !dead {
+        return Ok(None);
+    }
+    let exit_code = exit_raw.parse::<i32>().unwrap_or(-1);
+    Ok(Some(exit_code))
+}
+
+/// Main orchestration loop: spawn ready workers, poll for completion, advance
+/// dependent workers as predecessors succeed. Returns `Ok(())` once every
+/// worker has reached a terminal state.
+pub fn run_plan(
+    plan: &Plan,
+    state: &mut OrchestrationState,
+    plan_dir: &Path,
+    state_path: &Path,
+) -> Result<(), String> {
+    loop {
+        let all_terminal = plan
+            .workers
+            .iter()
+            .all(|w| state.workers.get(&w.id).is_some_and(WorkerState::is_terminal));
+        if all_terminal {
+            return Ok(());
+        }
+
+        // Launch any ready, still-pending workers.
+        let completed = state.completed_ids();
+        let ready: Vec<&Worker> = plan.ready_workers(&completed);
+        for worker in ready {
+            let ws = state
+                .workers
+                .get(&worker.id)
+                .cloned()
+                .unwrap_or_else(WorkerState::new_pending);
+            if ws.status != WorkerStatus::Pending {
+                continue;
+            }
+            match spawn_worker_pane(plan, plan_dir, worker) {
+                Ok(pane_id) => {
+                    let mut ws = ws;
+                    ws.status = WorkerStatus::Running;
+                    ws.pane_id = Some(pane_id);
+                    ws.started_at = Some(now_iso8601());
+                    state.workers.insert(worker.id.clone(), ws);
+                    state
+                        .save(state_path)
+                        .map_err(|e| format!("save state: {e}"))?;
+                }
+                Err(e) => {
+                    let mut ws = ws;
+                    ws.status = WorkerStatus::Failed;
+                    ws.exit_code = Some(-1);
+                    ws.finished_at = Some(now_iso8601());
+                    state.workers.insert(worker.id.clone(), ws);
+                    state
+                        .save(state_path)
+                        .map_err(|se| format!("save state: {se}"))?;
+                    eprintln!("psmux orchestrate: {e}");
+                }
+            }
+        }
+
+        // Poll running panes for exit.
+        let running: Vec<(String, String)> = state
+            .workers
+            .iter()
+            .filter(|(_, ws)| ws.status == WorkerStatus::Running)
+            .filter_map(|(id, ws)| ws.pane_id.as_ref().map(|p| (id.clone(), p.clone())))
+            .collect();
+
+        let mut updated = false;
+        for (worker_id, pane_id) in running {
+            let exit = check_pane_exit(&pane_id)?;
+            let Some(code) = exit else { continue };
+            if let Some(ws) = state.workers.get_mut(&worker_id) {
+                ws.exit_code = Some(code);
+                ws.finished_at = Some(now_iso8601());
+                ws.status = if code == 0 {
+                    WorkerStatus::Succeeded
+                } else {
+                    WorkerStatus::Failed
+                };
+            }
+            updated = true;
+        }
+
+        if updated {
+            state
+                .save(state_path)
+                .map_err(|e| format!("save state: {e}"))?;
+        }
+
+        std::thread::sleep(std::time::Duration::from_millis(500));
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
