@@ -1,4 +1,3 @@
-pub mod octal;
 pub mod pane_manager;
 pub mod parser;
 pub mod protocol;

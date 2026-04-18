@@ -225,7 +225,7 @@ fn parse_output(rest: &str) -> Option<ControlModeMessage> {
     let (pane_id, data_str) = split_first_token(rest)?;
     Some(ControlModeMessage::Output {
         pane_id: pane_id.to_string(),
-        data: super::octal::decode_octal(data_str),
+        data: crate::octal::decode_octal(data_str),
     })
 }
 
@@ -245,7 +245,7 @@ fn parse_extended_output(rest: &str) -> Option<ControlModeMessage> {
     Some(ControlModeMessage::ExtendedOutput {
         pane_id: pane_id.to_string(),
         lag_ms,
-        data: super::octal::decode_octal(data_str),
+        data: crate::octal::decode_octal(data_str),
     })
 }
 

@@ -35,6 +35,7 @@ mod window_ops;
 mod backend;
 #[cfg(feature = "mycel")]
 mod mycel;
+mod octal;
 #[allow(unused)]
 mod remote;
 
