@@ -602,7 +602,10 @@ pub const MIN_PANE_DIM: u16 = 2;
 
 /// Minimum rows for a split to be allowed — each resulting pane needs at
 /// least this many rows to run a shell prompt.
-const MIN_SPLIT_ROWS: u16 = 4;
+// Upstream uses 2, but ohboy's default pane-border-status="top" steals 1 row
+// per pane for the title bar, so we need one more row of headroom to leave
+// at least 2 shell-content rows per pane after the title bar.
+const MIN_SPLIT_ROWS: u16 = 3;
 /// Minimum cols for a split to be allowed.
 const MIN_SPLIT_COLS: u16 = 10;
 

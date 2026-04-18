@@ -1350,7 +1350,8 @@ pub(crate) fn handle_connection(
                 }
             }
             "respawn-pane" | "respawnp" => {
-                let _ = tx.send(CtrlReq::RespawnPane);
+                let kill = args.iter().any(|a| *a == "-k");
+                let _ = tx.send(CtrlReq::RespawnPane(kill));
             }
             "session-info" => {
                 let (rtx, rrx) = mpsc::channel::<String>();

@@ -3813,8 +3813,8 @@ pub fn run_server(
                                 }
                             }
                         }
-                        CtrlReq::RespawnPane => {
-                            respawn_active_pane(&mut app, Some(&*pty_system))?;
+                        CtrlReq::RespawnPane(kill) => {
+                            respawn_active_pane(&mut app, Some(&*pty_system), kill)?;
                             hook_event = Some("after-respawn-pane");
                         }
                         CtrlReq::BindKey(table_name, key, command, repeat) => {
@@ -4930,7 +4930,7 @@ pub fn run_server(
                         }
                         CtrlReq::RespawnWindow => {
                             // Kill all panes in the active window and respawn
-                            respawn_active_pane(&mut app, Some(&*pty_system))?;
+                            respawn_active_pane(&mut app, Some(&*pty_system), true)?;
                             state_dirty = true;
                         }
                         CtrlReq::PopupInput(data) => {

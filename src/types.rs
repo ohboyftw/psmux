@@ -1124,7 +1124,7 @@ pub enum CtrlReq {
     DisplayPaneSelect(usize),
     BreakPane,
     JoinPane(usize),
-    RespawnPane,
+    RespawnPane(bool), // kill flag (-k)
     BindKey(String, String, String, bool), // table, key, command, repeat
     UnbindKey(String),
     UnbindAllInTable(String), // table name to clear with -a
