@@ -62,6 +62,20 @@ pub fn visit_leaves_mut(node: &mut Node, f: &mut dyn FnMut(&mut Pane)) {
     }
 }
 
+/// Visit every pane in a tree node (DFS order), calling `f` on each.
+/// Read-only counterpart to [`visit_leaves_mut`]. Ported from upstream
+/// `for_each_pane` to keep naming parity for the pending control-mode port.
+pub fn for_each_pane(node: &Node, f: &mut dyn FnMut(&Pane)) {
+    match node {
+        Node::Leaf(p) => f(p),
+        Node::Split { children, .. } => {
+            for c in children {
+                for_each_pane(c, f);
+            }
+        }
+    }
+}
+
 pub fn active_pane_mut<'a>(node: &'a mut Node, path: &[usize]) -> Option<&'a mut Pane> {
     let mut cur = node;
     for &idx in path.iter() {
