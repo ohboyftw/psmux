@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 use std::sync::{mpsc, Arc, Mutex};
 use std::time::Instant;
 
@@ -748,6 +749,13 @@ pub struct AppState {
     pub hint_style: String,
     /// Hints mode timeout in milliseconds (0 = no timeout, default: 5000).
     pub hint_timeout: u64,
+
+    /// Options the user has explicitly set via `set-option` (or its aliases).
+    /// Backs `set-option -o` (only-if-unset): a key is in the set iff the user
+    /// has touched it. Options with non-empty defaults are NOT considered set
+    /// until explicitly written. `-u` (unset) removes a key; `source-file`
+    /// reload does NOT clear the set.
+    pub user_set_options: HashSet<String>,
 }
 
 impl AppState {
@@ -912,6 +920,7 @@ impl AppState {
             hint_keys: "asdfjkl;".to_string(),
             hint_style: "fg=yellow,bold".to_string(),
             hint_timeout: 5000,
+            user_set_options: HashSet::new(),
         }
     }
 
