@@ -311,8 +311,7 @@ pub(crate) fn handle_connection(
         // split-window is deliberately excluded (#71): it uses temp focus so
         // that split-window -t <target> doesn't pollute the target pane's
         // MRU rank, which would cause kill-pane to pick the wrong next pane.
-        let is_focus_cmd =
-            matches!(cmd, "select-window" | "selectw" | "select-pane" | "selectp");
+        let is_focus_cmd = matches!(cmd, "select-window" | "selectw" | "select-pane" | "selectp");
         if let Some(wid) = target_win {
             if is_focus_cmd {
                 let _ = tx.send(CtrlReq::FocusWindow(wid));
