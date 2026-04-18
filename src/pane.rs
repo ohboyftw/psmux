@@ -33,7 +33,7 @@ pub fn conpty_preemptive_dsr_response(writer: &mut dyn std::io::Write) {
 static CACHED_SHELL_PATH: std::sync::OnceLock<Option<String>> = std::sync::OnceLock::new();
 
 /// Get the cached shell path, resolving via `which` only on first call.
-fn cached_shell() -> Option<&'static str> {
+pub fn cached_shell() -> Option<&'static str> {
     CACHED_SHELL_PATH
         .get_or_init(|| {
             which::which("pwsh")

@@ -156,7 +156,15 @@ pub(crate) fn get_option_value(app: &AppState, name: &str) -> String {
                 "off".into()
             }
         }
-        "default-shell" | "default-command" => app.default_shell.clone(),
+        "default-shell" | "default-command" => {
+            if app.default_shell.is_empty() {
+                crate::pane::cached_shell()
+                    .unwrap_or("pwsh.exe")
+                    .to_string()
+            } else {
+                app.default_shell.clone()
+            }
+        }
         "default-terminal" => app.environment.get("TERM").cloned().unwrap_or_default(),
         "word-separators" => app.word_separators.clone(),
         "pane-border-style" => app.pane_border_style.clone(),
