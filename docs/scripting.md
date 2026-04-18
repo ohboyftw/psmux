@@ -62,6 +62,38 @@ psmux capture-pane
 psmux display-message "#S:#I:#W"   # Session:Window Index:Window Name
 ```
 
+## Waiting for command completion
+
+Don't poll with `sleep N; capture-pane` in a loop. psmux has server-side
+`wait-for` that tails the live VT100 screen — zero shell roundtrips, 50ms
+internal poll. Replaces the tmux-community "marker + sleep" pattern.
+
+```powershell
+# Send a command and wait for it to finish (marker pattern, server-side)
+psmux send-keys -t mypane "pytest -k fast; echo __DONE__" Enter
+psmux wait-for -t mypane --output "__DONE__" --timeout 30000
+
+# Then capture the result cleanly
+psmux capture-pane -t mypane -p | Select-String -NotMatch "__DONE__"
+```
+
+Other `wait-for` modes:
+
+```powershell
+psmux wait-for -t mypane --ready            # pane idle ≥500ms (prompt returned)
+psmux wait-for --exit 12345 --timeout 60000 # process PID exits
+psmux wait-for --file out.log --timeout 30000 # filesystem appears
+```
+
+For agents using JSON-RPC, `CustomPaneBackend.wait_for` exposes the same
+four modes. For simple "fire-and-forget-with-result", `psmux run -- cmd`
+atomically combines send + wait + capture, returning exit code.
+
+Stale-marker caveat: if the same script runs against multiple panes,
+generate a per-invocation marker (e.g. `__DONE_$([guid]::NewGuid().Guid.Substring(0,8))__`)
+rather than hardcoding `__DONE__` — otherwise a parallel pane's earlier
+output could short-circuit the wait.
+
 ## Paste Buffers
 
 ```powershell
