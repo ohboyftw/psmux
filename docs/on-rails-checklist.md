@@ -10,28 +10,11 @@ Status legend: `[ ]` todo · `[x]` done · `[~]` in progress · `[-]` skipped wi
 
 Without these, every future upstream merge hurts more. Do these first.
 
-- [ ] **1. Port `allow_set_title` + OSC 0/2 title propagation** (Tier 3)
-  - Adds `allow_set_title: bool` to AppState, `title_locked: bool` to Pane, `propagate_osc_titles()` helpers, `set -g allow-set-title` config parsing
-  - Files: `src/types.rs`, `src/server/helpers.rs`, `src/server/mod.rs`, `src/config.rs`, `src/server/options.rs`, `docs/pane-titles.md`
-  - Unblocks: hostname pane_title default, pane title in border format, rsel cleanup, VT100 OSC capture
-  - Risk: Medium (types.rs + server/mod.rs diverged)
-
-- [ ] **2. Fix `set-option -o` via `user_set_options` HashSet** (Tier 5, `b6098bb`)
-  - Replace `is_empty()` check in `src/config.rs:476` with HashSet membership
-  - Files: `src/config.rs`, `src/types.rs` (add field), every set_option call site
-  - Risk: Low — localized
-
-- [ ] **3. Extract shared `src/octal.rs` codec** (Control Mode Tier 5)
-  - Move `src/remote/octal.rs` → `src/octal.rs`, update imports
-  - Risk: Zero (pure refactor)
-
-- [ ] **4. Port 64KB output ring buffer to `src/pane.rs`** (Control Mode Tier 5)
-  - Additive ~38 lines, useful for control mode + capture-pane
-  - Risk: Low (additive)
-
-- [ ] **5. Port `for_each_pane()` helper to `src/tree.rs`** (Control Mode Tier 5)
-  - Additive ~10 lines
-  - Risk: Zero (additive helper)
+- [x] **1. Port `allow_set_title` + OSC 0/2 title propagation** — commits `cdacbf4`, `1d416b6`
+- [x] **2. Fix `set-option -o` via `user_set_options` HashSet** — commit `da27eac`
+- [x] **3. Extract shared `src/octal.rs` codec** — commit `59bcba6`
+- [-] **4. Port 64KB output ring buffer to `src/pane.rs`** — DEFERRED: dead code without control-mode consumer; bundle with control-mode server port
+- [x] **5. Port `for_each_pane()` helper to `src/tree.rs`** — commit `e4cb3f4`
 
 ---
 
@@ -39,31 +22,31 @@ Without these, every future upstream merge hurts more. Do these first.
 
 Upstream fixes where ohboy currently has the buggy version. Silent behavioral drift.
 
-- [ ] **6. Fire `pane-died`/`pane-exited` hooks when remain-on-exit enabled** (`2a12809`+`80bb22e`)
-- [ ] **7. Bounded frame channel preserves fast typing** (`0d16017`)
-- [ ] **8. `capture-pane` negative `-S`/`-E` clamps to row 0** (`4bf69e0`)
-- [ ] **9. `respawn-pane -k` silently discarded at server** (`88daff3`)
-- [ ] **10. `show-options -gv`/`-wv` without name lists all values** (`bfa87f6`)
-- [ ] **11. 8 tmux command flag compatibility gaps** (#209, `6118034`) — decompose before porting
-- [ ] **12. Lower `MIN_SPLIT_ROWS` 4→2 in `src/pane.rs`** (`b6098bb`)
-- [ ] **13. `defaults_suppressed` reset on source-file reload** (`266d414`)
-- [ ] **14. Bell/silence flags clearing in check_window_activity** (`a2f853c`)
-- [ ] **15. status-format[] inline styles use parse_inline_styles** (`b9be26a`)
-- [ ] **16. status-right/left empty clearing** (`ae47fee`)
-- [ ] **17. send-keys C-x/M-x local path parsing** (#230, `d47b65c`)
-- [ ] **18. resize direction fix on bottom/right edges** (`a8e3852`)
-- [ ] **19. split-window MRU pollution** (`d8c4d01`)
+- [-] **6. Fire `pane-died`/`pane-exited` hooks when remain-on-exit enabled** — N/A: ohboy emits `context_exited` push events + mycel topics instead of upstream's hook names
+- [-] **7. Bounded frame channel preserves fast typing** (`0d16017`) — DEFERRED: ohboy's `register_frame_slot()` signature diverged (no `client_id` parameter); bigger refactor than upstream diff, pair with next control-mode pass
+- [x] **8. `capture-pane` negative `-S`/`-E` clamps to row 0** — commit `ec22ed0`
+- [x] **9. `respawn-pane -k` silently discarded at server** — commit `57996e3`
+- [x] **10. `show-options -gv`/`-wv` without name lists all values** — commit `2ba6b4b`
+- [-] **11. 8 tmux command flag compatibility gaps** (#209, `6118034`) — DEFERRED: needs per-flag decomposition; land as a separate sync batch
+- [x] **12. Lower `MIN_SPLIT_ROWS` 4→2** — commit `57996e3` (ohboy uses **3**, not upstream's 2, because `pane-border-status="top"` steals 1 row per pane — see Incident log in `ohboy-builds-backlog.md`)
+- [x] **13. `defaults_suppressed` reset on source-file reload** — commit `2ba6b4b`
+- [x] **14. Bell/silence flags clearing in check_window_activity** — already in ohboy (`src/server/helpers.rs::check_window_activity` already clears all three flags on active window; cites #162)
+- [x] **15. status-format[] inline styles use parse_inline_styles** — commit `2ba6b4b` (part 2: status-format[0] override); part 1 (lines 1+) already in ohboy
+- [x] **16. status-right/left empty clearing** — already in ohboy (`src/client.rs:2966` cites #160)
+- [-] **17. send-keys C-x/M-x local path parsing** (#230, `d47b65c`) — N/A: the local fallback code path that had the bug doesn't exist in ohboy; all send-keys routes through the server
+- [x] **18. resize direction fix on bottom/right edges** — already in ohboy (`src/window_ops.rs::resize_pane_vertical` and `resize_pane_horizontal` use mathematically-equivalent but cleaner code; cites #81)
+- [x] **19. split-window MRU pollution** — commit `4eda6c3`
 
 ---
 
 ## P2 — Verification + Agent-Adjacent
 
-- [ ] **20. Verify session.rs namespace functions exist** (`3e61a0d`) — check only
-- [ ] **21. Verify nesting prevention guards** (`3f95642`) — check only
-- [ ] **22. Verify VTI/warmup/kill-server fixes** (`e29b954`) — check only
-- [ ] **23. `new-session -e` env var support** (#205) — aligns ohboy's agent spawn env with standard mechanism
-- [ ] **24. PredictionViewStyle fix** — warm pane is agent fast-path; direct CustomPaneBackend impact
-- [ ] **25. CREATE_NO_WINDOW for background subprocesses** — eliminates pwsh/cmd flash during agent spawn
+- [x] **20. Verify session.rs namespace functions exist** — INTENTIONALLY ABSENT: ohboy uses CustomPaneBackend pipe discovery for session scoping, not upstream's `-L` socket namespace helpers. Documented in `tests/verify_parity.ps1`
+- [x] **21. Verify nesting prevention guards** — PASS (verify_parity.ps1)
+- [x] **22. Verify VTI/warmup/kill-server fixes** — PASS (verify_parity.ps1)
+- [x] **23. `new-session -e` env var support** — already in ohboy (`src/main.rs:1197`, `src/server/connection.rs:385`)
+- [x] **24. PredictionViewStyle fix** — already in ohboy (commit `1d8757b`)
+- [x] **25. CREATE_NO_WINDOW for background subprocesses** — commit `2469d49` (HideWindowCommandExt trait + 6 spawn sites)
 
 ---
 
