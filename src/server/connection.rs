@@ -2353,10 +2353,12 @@ pub(crate) fn handle_connection(
                         false
                     } else {
                         // Try pwsh first, fall back to cmd /c
+                        use crate::platform::HideWindowCommandExt;
                         std::process::Command::new("pwsh")
                             .args(["-NoProfile", "-Command", condition])
                             .stdout(std::process::Stdio::null())
                             .stderr(std::process::Stdio::null())
+                            .hide_window()
                             .status()
                             .map(|s| s.success())
                             .unwrap_or_else(|_| {
@@ -2364,6 +2366,7 @@ pub(crate) fn handle_connection(
                                     .args(["/c", condition])
                                     .stdout(std::process::Stdio::null())
                                     .stderr(std::process::Stdio::null())
+                                    .hide_window()
                                     .status()
                                     .map(|s| s.success())
                                     .unwrap_or(false)

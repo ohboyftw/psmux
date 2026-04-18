@@ -1783,13 +1783,16 @@ fn parse_if_shell(app: &mut AppState, line: &str) {
     } else {
         #[cfg(windows)]
         {
+            use crate::platform::HideWindowCommandExt;
             std::process::Command::new("pwsh")
                 .args(["-NoProfile", "-Command", condition])
+                .hide_window()
                 .status()
                 .map(|s| s.success())
                 .unwrap_or_else(|_| {
                     std::process::Command::new("cmd")
                         .args(["/c", condition])
+                        .hide_window()
                         .status()
                         .map(|s| s.success())
                         .unwrap_or(false)

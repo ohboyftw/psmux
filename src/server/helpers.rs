@@ -63,11 +63,13 @@ fn fire_toast_notification(title: &str, body: &str) {
         title_esc, body_esc,
     );
     std::thread::spawn(move || {
+        use crate::platform::HideWindowCommandExt;
         let _ = std::process::Command::new("powershell")
             .args(["-NoProfile", "-NonInteractive", "-Command", &script])
             .stdin(std::process::Stdio::null())
             .stdout(std::process::Stdio::null())
             .stderr(std::process::Stdio::null())
+            .hide_window()
             .status();
         TOAST_IN_FLIGHT.store(false, Ordering::Release);
     });

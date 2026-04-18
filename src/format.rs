@@ -289,10 +289,12 @@ fn run_shell_command(cmd: &str, app: &AppState) -> String {
 
     // ── Spawn the command with a timeout ──
     let child = if cfg!(windows) {
+        use crate::platform::HideWindowCommandExt;
         Command::new("powershell")
             .args(["-NoProfile", "-NonInteractive", "-Command", cmd])
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::null())
+            .hide_window()
             .spawn()
     } else {
         Command::new("sh")
