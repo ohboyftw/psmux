@@ -21,6 +21,53 @@ Persistent task backlog for the ohboy-builds fork. Updated after each `/upstream
 
 ## Active Backlog
 
+### Tier 4: Uncategorized Upstream Fixes (gap audit 2026-04-18)
+
+These landed on `upstream/master` between the last two sync-pulses and weren't captured in any prior sync tag. Flagged by a post-hoc audit against `git log --since 2026-04-01 upstream/master`.
+
+- [ ] **Fire `pane-died`/`pane-exited` hooks when `remain-on-exit` enabled** `TODO`
+  - Upstream: `2a12809` + `80bb22e` — hooks were silently dropped when the pane was kept alive via remain-on-exit.
+  - Impact: agent orchestration plans depending on `pane-died` hooks miss events.
+  - Risk: Low — hook dispatch path, localized.
+
+- [ ] **Bounded frame channel preserves fast typing** `TODO`
+  - Upstream: `0d16017` / `c8f099a` — replaces single-slot frame push with bounded channel so typed keystrokes aren't coalesced when the renderer lags.
+  - Files: likely `src/client.rs` / rendering path.
+  - Risk: Medium — concurrency change, but upstream landed test coverage.
+  - REGRESSION RISK: CustomPaneBackend (rendering path).
+
+- [ ] **capture-pane negative `-S`/`-E` clamps to row 0** `TODO`
+  - Upstream: `4bf69e0` — gastown integration fix. Negative offsets used to panic/return empty; now clamp.
+  - Files: `src/commands.rs` (capture-pane handler).
+  - Risk: Low.
+
+- [ ] **respawn-pane `-k` flag silently discarded** `TODO`
+  - Upstream: `88daff3` — `-k` (kill existing process before respawn) was dropped at server boundary.
+  - Files: `src/commands.rs` + `src/server/connection.rs`.
+  - Risk: Low.
+
+- [ ] **show-options `-gv`/`-wv` without option name lists all values** `TODO` `LOW`
+  - Upstream: `bfa87f6` — behavioral completeness for show-options variants.
+  - Risk: Low.
+
+- [ ] **8 tmux command flag compatibility gaps (#209)** `TODO`
+  - Upstream: `6118034` — omnibus flag-parity fixes across multiple commands.
+  - Risk: Medium — touches multiple dispatch sites. Decompose before porting.
+
+### Tier 4: Post-finch Upstream (2026-04-18, upstream SHA 7b0fb48)
+
+Two commits landed on `upstream/master` after sync-2026-04-18-finch was cut (4162d97 → 7b0fb48):
+
+- [ ] **Lower `MIN_SPLIT_ROWS` from 4 to 2 in `src/pane.rs`** `TODO`
+  - Upstream: `b6098bb` — allows vertical splits on smaller panes (fixes `split-window -p 25` in tight layouts).
+  - Ohboy still has `const MIN_SPLIT_ROWS: u16 = 4` at `src/pane.rs:602`. One-line change + threshold usages at 625/628.
+  - Risk: Low — localized const. Verify tight-layout behavior manually before shipping.
+
+- [ ] **Port test-stabilization patches from `7b0fb48`** `TODO` `LOW`
+  - Upstream cleans up extra panes before copy-mode / capture-pane tests affected by join-pane residue.
+  - Files affected: `tests/test_features4.ps1` (join-pane cleanup), various timeout margins.
+  - Risk: None — test-only. Only port the individual tests that exist in ohboy's suite.
+
 ### Tier 2: Quick Config (sync-2026-04-18-finch) — RESOLVED
 
 - [x] **Default `allow-set-title` to off** — `WONT DO STANDALONE` (subsumed by Tier 3)
@@ -55,17 +102,14 @@ Persistent task backlog for the ohboy-builds fork. Updated after each `/upstream
   - Risk: Medium — server/mod.rs + types.rs both diverged
   - REGRESSION RISK: CustomPaneBackend, Agent Orchestration
 
-- [ ] **Window name no longer flashes to pwsh on session creation** `TODO`
-  - Upstream: `b6c7784` — `src/commands.rs` +16, `src/platform.rs` +10, `src/server/connection.rs` +14, `src/server/mod.rs` +13
-  - Value: cleaner agent spawn UX (no pwsh flash for CustomPaneBackend jobs)
-  - Risk: Medium — 4 diverged files
-  - REGRESSION RISK: CustomPaneBackend
+- [x] **Window name no longer flashes to pwsh on session creation** `DONE`
+  - Upstream: `b6c7784` — ported 2026-04-18 in e96e9cb. Only fix #2 (get_foreground_process_name returning None) applied; fix #1 (positional arg dropping) N/A because ohboy's new-session handlers short-circuit. Added `tests/test_issue229_window_name_flash.ps1` (517 lines, 9 cases).
 
-- [ ] **Fix stale .port files when pane spawn fails (#204)** `TODO`
-  - Upstream: `fd07145` — `src/server/mod.rs` (~28 lines) + new test
-  - Value: directly relevant to CustomPaneBackend pipe-discovery hygiene
-  - Risk: Medium — diverged file
-  - REGRESSION RISK: CustomPaneBackend
+- [x] **Fix stale .port files when pane spawn fails (#204)** `DONE`
+  - Upstream: `fd07145` — ported 2026-04-18 in e96e9cb. Skipped upstream's panic-hook cleanup (crash.rs already owns that path). Added `tests/test_issue204_stale_port_files.ps1` (176 lines, 6 cases).
+
+- [x] **switch-client routes to current session's server (#202)** `DONE`
+  - Upstream: `df54346` — ported 2026-04-18 in e96e9cb. Global -t parser skips setting PSMUX_TARGET_SESSION for `switch-client`/`switchc` subcommand so the TMUX env var fallback resolves the source session; PSMUX_TARGET_FULL still carries destination. Hardened beyond upstream: subcommand detection is position-aware (in global-flag scan loop) rather than whole-argv scan, avoiding false positives when `switch-client` appears as a string arg to other commands.
 
 ### Tier 5: Cross-Session join-pane via TCP Proxy — `f8fa11d` + `85cafd9`
 
@@ -114,9 +158,11 @@ transport endpoint") but via different plumbing.
   - Files: `src/commands.rs`, `src/server/connection.rs`, `src/main.rs`
   - Risk: Medium — commands.rs heavily diverged
 
-- [ ] **Port `set-option -o` (only-if-unset)** `TODO`
-  - Small addition to `src/server/options.rs` / option parsing
-  - Risk: Low — localized
+- [ ] **Fix `set-option -o` (only-if-unset) to use user_set_options HashSet** `TODO`
+  - Ohboy already has `-o` handling in `src/config.rs:476-483` but with the same bug upstream just fixed in `b6098bb`: checks `if !v.is_empty()`, which always returns true for options with defaults.
+  - Upstream fix: track explicitly-set options in a `user_set_options: HashSet<String>` on AppState/config; `-o` checks membership instead of value emptiness.
+  - Files: `src/config.rs`, `src/types.rs` (add HashSet field), option-setting sites must insert into the set.
+  - Risk: Low — localized, but touches every set_option call site.
 
 - [ ] **Cherry-pick rust test files (additive)** `TODO`
   - `tests-rs/test_flag_parity.rs` (2171 lines), `tests-rs/test_config_exhaustive.rs`
@@ -514,6 +560,9 @@ These are quality-of-life fixes for interactive tmux-compatible usage. They don'
 | CLAUDE_CODE_NO_FLICKER=1 | 2026-04-10 | Already present in dispatcher.rs |
 | Hook run-shell background (`5f8c20d`) | 2026-04-11 | Manual port — commands.rs + server/mod.rs |
 | Set-hook quoting (`f81632a` + `3bcff11`) | 2026-04-11 | Manual port — connection.rs (client-side N/A) |
+| Window name pwsh flash (#229, `b6c7784`) | 2026-04-18 | Manual port in e96e9cb — platform.rs + server/mod.rs |
+| Stale .port files on spawn fail (#204, `fd07145`) | 2026-04-18 | Manual port in e96e9cb — server/mod.rs + tests/test_issue204 |
+| switch-client routing (#202, `df54346`) | 2026-04-18 | Manual port in e96e9cb — main.rs, hardened with position-aware subcommand check |
 
 ## Won't Do
 

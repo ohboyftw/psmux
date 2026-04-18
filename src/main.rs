@@ -89,6 +89,7 @@ fn run_main() -> io::Result<()> {
     // This avoids conflict with subcommand flags (e.g. select-pane -L, resize-pane -L).
     let mut l_socket_name: Option<String> = None;
     let mut f_config_file: Option<String> = None;
+    let mut subcommand: Option<String> = None;
     {
         let mut i = 1; // skip binary name
         while i < args.len() {
@@ -104,6 +105,7 @@ fn run_main() -> io::Result<()> {
             } else if arg.starts_with('-') {
                 i += 1; // skip single global flags (e.g. -v, -V)
             } else {
+                subcommand = Some(arg.clone());
                 break; // hit the subcommand name — stop scanning for global flags
             }
         }
@@ -144,8 +146,10 @@ fn run_main() -> io::Result<()> {
             // PSMUX_TARGET_SESSION so the TMUX-based fallback below resolves
             // the current (source) session for routing. PSMUX_TARGET_FULL
             // still carries the destination for the server handler (#202).
-            let is_switch_client =
-                args.iter().any(|a| a == "switch-client" || a == "switchc");
+            let is_switch_client = matches!(
+                subcommand.as_deref(),
+                Some("switch-client") | Some("switchc")
+            );
             if has_explicit_session && !is_switch_client {
                 env::set_var("PSMUX_TARGET_SESSION", &port_file_base);
             }

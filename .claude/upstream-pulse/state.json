@@ -1,8 +1,8 @@
 {
-  "last_check": "2026-04-18T12:00:00Z",
+  "last_check": "2026-04-18T22:00:00Z",
   "tag": "sync-2026-04-18-finch",
   "codename_index": 15,
-  "upstream_sha": "4162d97",
+  "upstream_sha": "7b0fb48",
   "claude_code_version": "2.1.113",
   "pi_version": "0.67.6",
   "sources": {
