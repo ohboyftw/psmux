@@ -83,7 +83,10 @@ Document the divergence; don't port.
 
 ## Execution Notes
 
+- **BEFORE every port**, run the Porting Guardrails checklist in `docs/ohboy-builds-backlog.md` — verify the upstream invariant still holds against ohboy's N+k extensions (title bars, CustomPaneBackend, passthrough, warm pane, etc.)
 - After each P0/P1 item: `cargo fmt && cargo clippy -- -D warnings && cargo test --lib`
 - Commit each logical chunk separately with `fix(sync):` or `refactor(sync):` prefix
 - Update Completed table in `docs/ohboy-builds-backlog.md` after each landed task
+- When a port breaks an ohboy-only assumption: add a row to the **Incident log** table so future ports don't repeat the miss
+- When ohboy adds a new cardinal extension (new global option, new Pane field, new render-layer feature): add it to the **Known Ohboy-Only Extensions** table
 - Bump `.claude/upstream-pulse/state.json` when finishing a batch

@@ -19,6 +19,48 @@ Persistent task backlog for the ohboy-builds fork. Updated after each `/upstream
 
 ---
 
+## Porting Guardrails — run BEFORE every upstream cherry-pick
+
+Upstream invariants don't always hold on ohboy because ohboy has **N+k rails** (extra fields, features, consumers). A small upstream diff can encode assumptions that ohboy's extensions quietly break. This checklist catches the misses.
+
+The list grows with every cardinal change (new struct field, new global option, new render-layer feature). Add a row to **Known Ohboy-Only Extensions** when you land one — that's the diff surface every future port has to clear.
+
+### Pre-port checklist
+
+1. **Read the full commit message, not just the diff.** The message encodes the invariant ("each pane needs ≥N rows to run a shell prompt"). That's the contract; the numeric change is the encoding.
+2. **`find_referencing_symbols` on every constant, type, or field the diff touches.** Serena/Code-Graph shows downstream consumers. If any consumer is ohboy-only (see table below), the port needs ohboy-specific thinking.
+3. **Grep the hunk's neighborhood for ohboy-only identifiers.** If the touched code lives near `pane_border_status`, `passthrough_queue`, `spawn_command`, `user_set_options`, `title_locked`, `allow_set_title`, `vt_bridge_cache`, `readiness_notified`, `backend::*`, or `mycel::*` — pause and check whether the upstream invariant still holds here.
+4. **Ask: "does ohboy consume something upstream doesn't?"** Rows (title bar), bytes (DCS passthrough queue), envs (PSMUX_*, CLAUDE_PANE_BACKEND_SOCKET), ring-buffer slots, metadata fields. Any upstream "minimum N" or "exactly one of" assertions must be re-validated against the ohboy-extended consumer set.
+5. **Run adversarial review on the diff** (`py review.py` — adversarial-review skill) before committing. It catches the downstream-consumer misses that unit tests won't.
+6. **Smoke the feature manually** when the port touches rendering, input, or layout. Unit tests verify code correctness, not feature correctness under ohboy-specific configs (title bars on, CustomPaneBackend attached, warm pane present).
+
+### Known Ohboy-Only Extensions (the k in "N+k rails")
+
+Any upstream port touching code near these must reason about the extension's effect, not just the upstream invariant.
+
+| Extension | Effect on upstream assumptions | First-touched files |
+|-----------|-------------------------------|---------------------|
+| `pane_border_status` (default `"top"`) | Steals 1 row per pane when not `"off"`. Any upstream constant about "minimum rows per pane" is off-by-one. | `src/rendering.rs:348-370`, `src/types.rs:630` |
+| `CustomPaneBackend` (JSON-RPC named-pipe) | Every `Pane` construction site must supply pipe discovery + env injection. Upstream assertions like "exactly one pane" may break when an agent pane is alive. | `src/backend/`, `src/server/mod.rs` `exec`/`list`/`wait_for` arms |
+| `PassthroughQueue` on each Pane | DCS sequences bypass VT parser — any "all bytes go through vt100" upstream invariant is wrong. | `src/types.rs:220`, `src/server/helpers.rs` drain paths |
+| `mycel` event bus (feature-gated) | Hooks+state transitions publish events. Upstream "no side effects on pane death" is false when `mycel` is built. | `src/mycel.rs`, `src/tree.rs::prune_exited` |
+| Warm pane pool | There is **always** at least one pre-spawned shell. Upstream "N panes ≡ N children" is wrong by +1 while a warm shell exists. | `src/pane.rs::WarmPane`, server warm-pool logic |
+| `spawn_command` / `spawn_env` on Pane | Upstream re-spawn paths that reconstruct a Pane from scratch drop these — always thread them through. | `src/types.rs:230-235`, `src/window_ops.rs::respawn_active_pane` |
+| `user_set_options: HashSet` | `set-option -o` is NOT an `is_empty()` check. Any upstream option-default-resetting path that checks emptiness is buggy here. | `src/types.rs`, `src/config.rs`, `src/server/options.rs` |
+| `title_locked` / `allow_set_title` | OSC 0/2 title propagation is gated. Upstream "pane_title mirrors child OSC" is conditional here. | `src/server/helpers.rs::propagate_osc_titles` |
+| `readiness_notified` / `context_ready`-`context_exited` | Every pane-lifecycle path must update these. Upstream reap/respawn that just sets `dead=true` silently drops push events. | `src/tree.rs::prune_exited_inner` |
+| `PSMUX_*` env contract | Pi adapter / TeammateTool subscribers depend on `PSMUX=1`, `PSMUX_SESSION`, `PSMUX_PANE_ID`. New-session/new-window paths must inject all three. | `src/pane.rs` spawn paths, `tests-rs/test_pi_integration_contracts.rs` |
+| `VT100 focus / cursor / mouse-encoding tracking` | Pane switches must call `state_diff()` + cursor restore. Upstream "no cursor restore needed" is wrong. | `crates/vt100-psmux/`, `src/server/helpers.rs::send_focus_events` |
+| Crash diagnostics + DAG orchestrator state | Panes dying mid-orchestration must write `crash_dump_path`. Upstream reap that silently drops the exit info breaks resume. | `src/crash.rs`, `src/orchestrate.rs` |
+
+### Incident log (so we don't repeat)
+
+| Date | Port | Miss | Root-cause lesson |
+|------|------|------|-------------------|
+| 2026-04-18 | `MIN_SPLIT_ROWS 4 → 2` (`b6098bb`) | Broke minimum-viable shell in split panes: ohboy's default `pane-border-status="top"` eats 1 row per pane, leaving 1 row of shell content after the split. Corrected to `3`. | Constant-change ports must `find_referencing_symbols` — one of the consumers (`rendering.rs`) was an ohboy-only feature upstream doesn't have. |
+
+---
+
 ## Active Backlog
 
 ### Tier 4: Uncategorized Upstream Fixes (gap audit 2026-04-18)
