@@ -84,6 +84,13 @@ pub(crate) fn get_option_value(app: &AppState, name: &str) -> String {
                 "off".into()
             }
         }
+        "allow-set-title" => {
+            if app.allow_set_title {
+                "on".into()
+            } else {
+                "off".into()
+            }
+        }
         "monitor-activity" => {
             if app.monitor_activity {
                 "on".into()
@@ -451,6 +458,9 @@ pub(crate) fn apply_set_option(app: &mut AppState, option: &str, value: &str, _q
         }
         "allow-rename" => {
             app.allow_rename = matches!(value, "on" | "true" | "1");
+        }
+        "allow-set-title" => {
+            app.allow_set_title = matches!(value, "on" | "true" | "1");
         }
         "activity-action" => {
             app.activity_action = value.to_string();

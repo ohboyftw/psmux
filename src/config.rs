@@ -696,6 +696,9 @@ pub fn parse_option_value(app: &mut AppState, rest: &str, _is_global: bool) {
         "allow-rename" => {
             app.allow_rename = matches!(value, "on" | "true" | "1");
         }
+        "allow-set-title" => {
+            app.allow_set_title = matches!(value, "on" | "true" | "1");
+        }
         "terminal-overrides" => { /* tmux terminfo override — accepted for compatibility, no-op on Windows */
         }
         "default-terminal" => {

@@ -1769,6 +1769,11 @@ pub fn run_server(
                             // ── Activity / bell / silence detection ──
                             helpers::check_window_activity(&mut app);
 
+                            // ── Propagate OSC 0/2 titles to pane.title ──
+                            if helpers::propagate_osc_titles(&mut app) {
+                                state_dirty = true;
+                            }
+
                             // ── Automatic rename / allow-rename: resolve window names ──
                             {
                                 let in_copy =
@@ -2255,14 +2260,17 @@ pub fn run_server(
                             hook_event = Some("after-rename-window");
                         }
                         CtrlReq::ListWindows(resp) => {
+                            helpers::propagate_osc_titles(&mut app);
                             let json = list_windows_json(&app)?;
                             let _ = resp.send(json);
                         }
                         CtrlReq::ListWindowsTmux(resp) => {
+                            helpers::propagate_osc_titles(&mut app);
                             let text = list_windows_tmux(&app);
                             let _ = resp.send(text);
                         }
                         CtrlReq::ListWindowsFormat(resp, fmt) => {
+                            helpers::propagate_osc_titles(&mut app);
                             let text = format_list_windows(&app, &fmt);
                             let _ = resp.send(text);
                         }
@@ -2277,6 +2285,7 @@ pub fn run_server(
                             let win = &mut app.windows[app.active_idx];
                             if let Some(p) = active_pane_mut(&mut win.root, &win.active_path) {
                                 p.title = title;
+                                p.title_locked = true;
                             }
                         }
                         CtrlReq::SetPaneStyle(style) => {
@@ -3072,6 +3081,7 @@ pub fn run_server(
                             hook_event = Some("after-select-window");
                         }
                         CtrlReq::ListPanes(resp) => {
+                            helpers::propagate_osc_titles(&mut app);
                             let mut output = String::new();
                             let win = &app.windows[app.active_idx];
                             fn collect_panes(
@@ -3148,6 +3158,7 @@ pub fn run_server(
                             let _ = resp.send(output);
                         }
                         CtrlReq::ListPanesFormat(resp, fmt) => {
+                            helpers::propagate_osc_titles(&mut app);
                             let text = format_list_panes(&app, &fmt, app.active_idx);
                             let _ = resp.send(text);
                         }
@@ -3200,6 +3211,7 @@ pub fn run_server(
                             let _ = resp.send(json);
                         }
                         CtrlReq::ListPanesJson(resp, all) => {
+                            helpers::propagate_osc_titles(&mut app);
                             #[allow(clippy::type_complexity)]
                             fn collect_panes_json(
                                 node: &Node,
@@ -3262,6 +3274,7 @@ pub fn run_server(
                             let _ = resp.send(json);
                         }
                         CtrlReq::ListWindowsJson(resp) => {
+                            helpers::propagate_osc_titles(&mut app);
                             let layout_names = [
                                 "even-horizontal",
                                 "even-vertical",
@@ -3654,6 +3667,8 @@ pub fn run_server(
                             }
                         }
                         CtrlReq::DisplayMessage(resp, fmt, target_pane_idx, _) => {
+                            // Propagate OSC titles so #{pane_title} reflects latest state
+                            helpers::propagate_osc_titles(&mut app);
                             let result = if let Some(pane_idx) = target_pane_idx {
                                 // -t targeting: evaluate format for the specific pane
                                 // using PANE_POS_OVERRIDE so #{pane_active} reflects

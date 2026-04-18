@@ -150,6 +150,9 @@ pub struct Pane {
     pub last_cols: u16,
     pub id: usize,
     pub title: String,
+    /// True when the pane title was explicitly set via `select-pane -T`.
+    /// While locked, OSC 0/2 title updates from the child are ignored.
+    pub title_locked: bool,
     /// Cached child process PID for Windows console mouse injection.
     /// Lazily extracted on first mouse event.
     pub child_pid: Option<u32>,
@@ -588,6 +591,9 @@ pub struct AppState {
     pub automatic_rename: bool,
     /// allow-rename: allow programs to set window title via escape sequences
     pub allow_rename: bool,
+    /// allow-set-title: allow programs to set pane_title via OSC 0/2 sequences.
+    /// Default is off so pane_title reflects hostname instead of e.g. PowerShell's CWD.
+    pub allow_set_title: bool,
     /// monitor-activity / visual-activity: stored for compat
     pub monitor_activity: bool,
     pub visual_activity: bool,
@@ -842,6 +848,7 @@ impl AppState {
             renumber_windows: false,
             automatic_rename: true,
             allow_rename: true,
+            allow_set_title: false,
             monitor_activity: false,
             visual_activity: false,
             activity_action: "other".to_string(),

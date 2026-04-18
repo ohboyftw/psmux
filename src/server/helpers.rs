@@ -308,6 +308,48 @@ pub(crate) fn check_window_activity(app: &mut AppState) {
     }
 }
 
+/// Propagate OSC 0/2 titles from the vt100 parser to `Pane.title` for all windows.
+/// tmux updates `pane_title` immediately when the child emits an OSC 0 or OSC 2
+/// escape sequence, gated by the `allow-set-title` option. In psmux, the vt100
+/// parser stores the title but we must explicitly copy it to `Pane.title`.
+/// Returns true if any pane title changed (i.e. state is dirty).
+pub(crate) fn propagate_osc_titles(app: &mut AppState) -> bool {
+    if !app.allow_set_title {
+        return false;
+    }
+    let mut dirty = false;
+    for win in app.windows.iter_mut() {
+        propagate_osc_titles_in_tree(&mut win.root, &mut dirty);
+    }
+    dirty
+}
+
+fn propagate_osc_titles_in_tree(node: &mut Node, dirty: &mut bool) {
+    match node {
+        Node::Leaf(p) => {
+            if p.dead || p.title_locked {
+                return;
+            }
+            if let Ok(parser) = p.term.lock() {
+                let osc = parser.screen().title();
+                if !osc.is_empty() {
+                    let osc_owned = osc.to_string();
+                    drop(parser);
+                    if p.title != osc_owned {
+                        p.title = osc_owned;
+                        *dirty = true;
+                    }
+                }
+            }
+        }
+        Node::Split { children, .. } => {
+            for c in children {
+                propagate_osc_titles_in_tree(c, dirty);
+            }
+        }
+    }
+}
+
 /// Send focus events to panes when the active pane changes.
 ///
 /// If the old active pane has focus reporting enabled (?1004h), send FocusOut (\x1b[O).
