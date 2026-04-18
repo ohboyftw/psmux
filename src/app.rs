@@ -1614,6 +1614,7 @@ pub fn run(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> io::Result<
                     std::process::exit(0);
                 }
                 CtrlReq::SourceFile(path) => {
+                    app.defaults_suppressed = false;
                     crate::config::source_file(&mut app, &path);
                 }
                 // For attach mode, we just ignore the new commands - they're handled by the server

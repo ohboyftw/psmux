@@ -1492,7 +1492,7 @@ pub(crate) fn handle_connection(
                 let has_q = args.contains(&"-q");
                 let opt_name: Option<&str> =
                     args.iter().filter(|a| !a.starts_with('-')).copied().last();
-                if has_v || (opt_name.is_some() && !has_q) {
+                if (has_v && opt_name.is_some()) || (opt_name.is_some() && !has_q) {
                     // Single-option query: show-options -v <name> or show <name>
                     if let Some(name) = opt_name {
                         let (rtx, rrx) = mpsc::channel::<String>();
@@ -1521,6 +1521,33 @@ pub(crate) fn handle_connection(
                                 let _ = write_stream.flush();
                             }
                         }
+                    }
+                } else if has_v && opt_name.is_none() {
+                    // -v/-gv/-wv without option name: list all values only (bfa87f6)
+                    let (rtx, rrx) = mpsc::channel::<String>();
+                    if window_scope {
+                        let _ = tx.send(CtrlReq::ShowWindowOptions(rtx));
+                    } else {
+                        let _ = tx.send(CtrlReq::ShowOptions(rtx));
+                    }
+                    if let Ok(text) = rrx.recv() {
+                        let values_only: String = text
+                            .lines()
+                            .filter_map(|line| {
+                                let t = line.trim();
+                                if t.is_empty() {
+                                    return None;
+                                }
+                                if let Some(pos) = t.find(' ') {
+                                    Some(&t[pos + 1..])
+                                } else {
+                                    Some(t)
+                                }
+                            })
+                            .collect::<Vec<_>>()
+                            .join("\n");
+                        let _ = writeln!(write_stream, "{}", values_only);
+                        let _ = write_stream.flush();
                     }
                 } else if window_scope {
                     let (rtx, rrx) = mpsc::channel::<String>();

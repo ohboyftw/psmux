@@ -3647,6 +3647,8 @@ pub fn run_remote(
             };
             // ── Build three separate span groups: left, tabs, right ──
             use unicode_width::UnicodeWidthStr;
+            // If status-format[0] is set, it overrides the default layout for line 0 (#164).
+            let use_status_format_0 = !status_format.is_empty() && !status_format[0].is_empty();
             // Left portion: custom status_left or default [session] prefix
             let left_prefix = {
                 let base = match custom_status_left {
@@ -3789,7 +3791,24 @@ pub fn run_remote(
             f.render_widget(Clear, status_chunk);
             // Render the first status line (line 0)
             let line0_area = Rect { x: status_chunk.x, y: status_chunk.y, width: status_chunk.width, height: 1.min(status_chunk.height) };
-            f.render_widget(status_bar, line0_area);
+            if use_status_format_0 && state.status_message.is_none() {
+                // status-format[0] overrides the default left+tabs+right layout (#164)
+                let fmt0_spans = crate::rendering::parse_inline_styles(&status_format[0], sb_base);
+                let fmt0_w: usize = fmt0_spans
+                    .iter()
+                    .map(|s| UnicodeWidthStr::width(s.content.as_ref()))
+                    .sum();
+                let mut final_spans = fmt0_spans;
+                if fmt0_w < total_width {
+                    final_spans.push(Span::styled(" ".repeat(total_width - fmt0_w), sb_base));
+                } else {
+                    crate::style::truncate_spans_to_width(&mut final_spans, total_width);
+                }
+                let fmt0_widget = Paragraph::new(Line::from(final_spans)).style(sb_base);
+                f.render_widget(fmt0_widget, line0_area);
+            } else {
+                f.render_widget(status_bar, line0_area);
+            }
             // Render additional status lines (index 1+) from status_format
             for line_idx in 1..status_lines {
                 let line_y = status_chunk.y + line_idx as u16;
