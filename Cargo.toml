@@ -63,6 +63,10 @@ path = "tests-rs/test_wait_for_contracts.rs"
 name = "test_orchestrate_contracts"
 path = "tests-rs/test_orchestrate_contracts.rs"
 
+[[test]]
+name = "test_rails_smoke"
+path = "tests-rs/test_rails_smoke.rs"
+
 # Windows only
 [target.'cfg(not(windows))'.dependencies]
 [target.'cfg(windows)'.dependencies]
