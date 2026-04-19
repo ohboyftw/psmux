@@ -1594,6 +1594,7 @@ pub fn run(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> io::Result<
                     let win = &mut app.windows[app.active_idx];
                     if let Some(p) = active_pane_mut(&mut win.root, &win.active_path) {
                         p.title = title;
+                        p.title_locked = true;
                     }
                 }
                 CtrlReq::KillServer | CtrlReq::KillSession => {
@@ -1613,6 +1614,7 @@ pub fn run(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> io::Result<
                     std::process::exit(0);
                 }
                 CtrlReq::SourceFile(path) => {
+                    app.defaults_suppressed = false;
                     crate::config::source_file(&mut app, &path);
                 }
                 // For attach mode, we just ignore the new commands - they're handled by the server

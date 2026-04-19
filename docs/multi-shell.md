@@ -218,6 +218,28 @@ Here are common shells and how to configure them:
 | Python REPL | `python` | Not a shell, but works great in a pane |
 | Node.js REPL | `node` | Same, useful for quick JS testing |
 
+## `--shell` Flag
+
+`new-window` and `split-window` accept a `--shell` flag that selects the
+shell for that pane without changing the session default:
+
+```powershell
+# Open a bash window while the default shell is pwsh
+psmux new-window --shell bash
+
+# Split the current pane and run cmd.exe in the new half
+psmux split-window -h --shell cmd
+
+# Open a window with PowerShell 7 when the default is bash
+psmux new-window --shell pwsh
+```
+
+Pass a bare name (`bash`, `pwsh`, `cmd`) or any executable on `PATH`. This
+flag is a psmux extension — it is not part of the upstream tmux command set.
+
+The JSON-RPC `spawn_agent` method exposes the same capability as the `"shell"`
+field (see [custompane-backend.md](custompane-backend.md)).
+
 ## Tips
 
 - **Paths with spaces** must be wrapped in double quotes: `"C:/Program Files/..."`

@@ -41,3 +41,46 @@ A: Add `set -g warm off` to your config, or set `$env:PSMUX_NO_WARM = "1"`. See 
 
 **Q: Can I set environment variables for panes?**
 A: Yes. Use `psmux set-environment -g VARNAME value` to set env vars inherited by all new panes. Use `-gu` to unset. See [configuration.md](configuration.md) for details.
+
+---
+
+## Diagnostics
+
+**Q: Where are crash reports stored?**
+A: `%LOCALAPPDATA%\psmux\crashes\` on Windows. Falls back to `%USERPROFILE%\.psmux\crashes\` when `LOCALAPPDATA` is unset.
+
+**Q: What does a crash report contain?**
+A: Each `.crash` file is a plain-text report with:
+- PID and Unix timestamp of the crash
+- Panic message (including source file and line when available)
+- Full Rust backtrace (`RUST_BACKTRACE=full` equivalent — forced on by the hook)
+
+Filename format: `psmux-{pid}-{unix_timestamp}.crash`
+
+**Q: How do I read crash reports?**
+
+List the most recent crashes:
+```powershell
+psmux debug crashes list
+```
+
+Show the contents of a specific report (use the filename shown by `list`):
+```powershell
+psmux debug crashes show psmux-1234-1700000000.crash
+```
+
+Example `list` output:
+```
+2026-04-19 14:32:01  psmux-9812-1745066721.crash  (pid 9812)
+2026-04-18 09:11:43  psmux-4401-1744969903.crash  (pid 4401)
+```
+
+**Q: How many crash reports are kept?**
+A: psmux auto-prunes to the 20 newest `.crash` files each time the server starts. Older files are deleted.
+
+**Q: My orchestrate worker vanished without a clean exit. How do I get the crash dump?**
+A: When `psmux orchestrate` detects a worker pane that died without an exit code, it records the path to the crash dump in `crash_dump_path` inside the worker's entry in `.orchestration/{session}/state.json`. Open that file to find the dump path, then:
+```powershell
+psmux debug crashes show psmux-{pid}-{ts}.crash
+```
+Include the dump when filing a bug report.

@@ -842,11 +842,13 @@ fn pipe_text_to_command(text: &str, cmd: &str) {
     } else {
         vec!["-c", cmd]
     };
+    use crate::platform::HideWindowCommandExt;
     if let Ok(mut child) = std::process::Command::new(shell)
         .args(&args)
         .stdin(std::process::Stdio::piped())
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())
+        .hide_window()
         .spawn()
     {
         if let Some(mut stdin) = child.stdin.take() {
@@ -1403,18 +1405,19 @@ pub fn capture_active_pane_range(
         Err(_) => return Ok(None),
     };
     let screen = parser.screen();
-    // Negative values are relative to the bottom of the visible area (tmux behavior):
-    // -S -3 means "start 3 lines from the bottom", -E -1 means "1 line from bottom"
-    let bottom = p.last_rows.saturating_sub(1) as i32;
+    // Tmux semantics (cmd-capture-pane.c): negative -S/-E refer to scrollback
+    // history. Since psmux exposes only visible rows here, negative values clamp
+    // to row 0 (top of visible). Matches tmux behavior with no scrollback.
+    let last_row = p.last_rows.saturating_sub(1);
     let start = match s {
-        Some(v) if v < 0 => (bottom + v + 1).max(0) as u16,
-        Some(v) => (v as u16).min(p.last_rows.saturating_sub(1)),
+        Some(v) if v < 0 => 0u16,
+        Some(v) => (v as u16).min(last_row),
         None => 0,
     };
     let end = match e {
-        Some(v) if v < 0 => (bottom + v + 1).max(0) as u16,
-        Some(v) => (v as u16).min(p.last_rows.saturating_sub(1)),
-        None => p.last_rows.saturating_sub(1),
+        Some(v) if v < 0 => 0u16,
+        Some(v) => (v as u16).min(last_row),
+        None => last_row,
     };
     let mut text = String::new();
     for r in start..=end {
@@ -1449,16 +1452,17 @@ pub fn capture_active_pane_styled(
         Err(_) => return Ok(None),
     };
     let screen = parser.screen();
-    let bottom = p.last_rows.saturating_sub(1) as i32;
+    // Tmux semantics: negative -S/-E clamp to row 0 (no scrollback here).
+    let last_row = p.last_rows.saturating_sub(1);
     let start_row = match s {
-        Some(v) if v < 0 => (bottom + v + 1).max(0) as u16,
-        Some(v) => (v as u16).min(p.last_rows.saturating_sub(1)),
+        Some(v) if v < 0 => 0u16,
+        Some(v) => (v as u16).min(last_row),
         None => 0,
     };
     let end_row = match e {
-        Some(v) if v < 0 => (bottom + v + 1).max(0) as u16,
-        Some(v) => (v as u16).min(p.last_rows.saturating_sub(1)),
-        None => p.last_rows.saturating_sub(1),
+        Some(v) if v < 0 => 0u16,
+        Some(v) => (v as u16).min(last_row),
+        None => last_row,
     };
     let mut text = String::new();
     let mut prev_fg: Option<vt100::Color> = None;

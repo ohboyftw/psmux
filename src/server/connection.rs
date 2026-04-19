@@ -307,9 +307,11 @@ pub(crate) fn handle_connection(
             }
             filtered
         };
-        // Commands that should permanently change focus when used with -t
-        let is_focus_cmd = matches!(cmd, "select-window" | "selectw" | "select-pane" | "selectp")
-            || (matches!(cmd, "split-window" | "splitw") && !args.contains(&"-d"));
+        // Commands that should permanently change focus when used with -t.
+        // split-window is deliberately excluded (#71): it uses temp focus so
+        // that split-window -t <target> doesn't pollute the target pane's
+        // MRU rank, which would cause kill-pane to pick the wrong next pane.
+        let is_focus_cmd = matches!(cmd, "select-window" | "selectw" | "select-pane" | "selectp");
         if let Some(wid) = target_win {
             if is_focus_cmd {
                 let _ = tx.send(CtrlReq::FocusWindow(wid));
@@ -433,6 +435,47 @@ pub(crate) fn handle_connection(
                 } else {
                     let _ = tx.send(CtrlReq::NewWindow(
                         cmd_str, name, detached, start_dir, env_vars, shell_arg,
+                    ));
+                }
+            }
+            "new-window-raw" => {
+                // Raw-argv spawn: argv follows "--" as individually quoted tokens.
+                // Flags: -d (detach), -P (print), -F format, -n name, -c start_dir.
+                let name: Option<String> = args
+                    .windows(2)
+                    .find(|w| w[0] == "-n")
+                    .map(|w| w[1].trim_matches('"').to_string());
+                let start_dir: Option<String> = args
+                    .windows(2)
+                    .find(|w| w[0] == "-c")
+                    .map(|w| w[1].trim_matches('"').to_string());
+                let detached = args.contains(&"-d");
+                let print_info = args.contains(&"-P");
+                let format_str: Option<String> = args
+                    .windows(2)
+                    .find(|w| w[0] == "-F")
+                    .map(|w| w[1].trim_matches('"').to_string());
+                // Everything after "--" is the argv, already tokenized by parse_command_line.
+                let raw_argv: Vec<String> = if let Some(pos) = args.iter().position(|a| *a == "--") {
+                    args[pos + 1..].iter().map(|s| s.to_string()).collect()
+                } else {
+                    Vec::new()
+                };
+                if print_info {
+                    let (rtx, rrx) = mpsc::channel::<String>();
+                    let _ = tx.send(CtrlReq::NewWindowRawPrint(
+                        raw_argv, name, detached, start_dir, format_str, rtx,
+                    ));
+                    if let Ok(text) = rrx.recv_timeout(Duration::from_millis(2000)) {
+                        let _ = writeln!(write_stream, "{}", text);
+                        let _ = write_stream.flush();
+                    }
+                    if !persistent {
+                        break;
+                    }
+                } else {
+                    let _ = tx.send(CtrlReq::NewWindowRaw(
+                        raw_argv, name, detached, start_dir,
                     ));
                 }
             }
@@ -1056,7 +1099,8 @@ pub(crate) fn handle_connection(
             "wait-pane" | "waitp" => {
                 // Parse -t %N for target pane ID
                 let mut pane_id: Option<usize> = None;
-                let mut timeout_secs: Option<u64> = None;
+                // --timeout is milliseconds (matches wait-for semantics).
+                let mut timeout_ms: Option<u64> = None;
                 let mut wait_ready = false;
                 let mut i = 0;
                 while i < args.len() {
@@ -1070,7 +1114,7 @@ pub(crate) fn handle_connection(
                         }
                         "--timeout" => {
                             if let Some(val) = args.get(i + 1) {
-                                timeout_secs = val.parse::<u64>().ok();
+                                timeout_ms = val.parse::<u64>().ok();
                                 i += 1;
                             }
                         }
@@ -1085,8 +1129,9 @@ pub(crate) fn handle_connection(
                     if wait_ready {
                         // Poll pane readiness: output has stabilised (no new
                         // output for >=500ms after initial burst).
-                        let deadline = timeout_secs
-                            .map(|s| std::time::Instant::now() + std::time::Duration::from_secs(s));
+                        let deadline = timeout_ms.map(|ms| {
+                            std::time::Instant::now() + std::time::Duration::from_millis(ms)
+                        });
                         let (qtx, qrx) = mpsc::channel::<(u64, u64)>();
                         loop {
                             let qtx2 = qtx.clone();
@@ -1120,8 +1165,8 @@ pub(crate) fn handle_connection(
                         let (rtx, rrx) = mpsc::channel::<i32>();
                         let _ = tx.send(CtrlReq::WaitPane(pid, rtx));
                         // Block until the pane exits or timeout
-                        let exit_code = if let Some(secs) = timeout_secs {
-                            rrx.recv_timeout(std::time::Duration::from_secs(secs))
+                        let exit_code = if let Some(ms) = timeout_ms {
+                            rrx.recv_timeout(std::time::Duration::from_millis(ms))
                                 .unwrap_or(1) // timeout or recv error
                         } else {
                             rrx.recv().unwrap_or(1)
@@ -1350,7 +1395,8 @@ pub(crate) fn handle_connection(
                 }
             }
             "respawn-pane" | "respawnp" => {
-                let _ = tx.send(CtrlReq::RespawnPane);
+                let kill = args.contains(&"-k");
+                let _ = tx.send(CtrlReq::RespawnPane(kill));
             }
             "session-info" => {
                 let (rtx, rrx) = mpsc::channel::<String>();
@@ -1457,6 +1503,7 @@ pub(crate) fn handle_connection(
                 let has_a = args.contains(&"-a");
                 let has_q = args.contains(&"-q");
                 let has_p = args.contains(&"-p");
+                let has_o = args.contains(&"-o");
                 let non_flag_args: Vec<&str> = args
                     .iter()
                     .filter(|a| !a.starts_with('-'))
@@ -1475,7 +1522,7 @@ pub(crate) fn handle_connection(
                     } else if has_a {
                         let _ = tx.send(CtrlReq::SetOptionAppend(option, value));
                     } else {
-                        let _ = tx.send(CtrlReq::SetOptionQuiet(option, value, has_q));
+                        let _ = tx.send(CtrlReq::SetOptionQuiet(option, value, has_q, has_o));
                     }
                 } else if non_flag_args.len() == 1 && has_q {
                     // set -q <option> with no value — silently ignore
@@ -1491,7 +1538,7 @@ pub(crate) fn handle_connection(
                 let has_q = args.contains(&"-q");
                 let opt_name: Option<&str> =
                     args.iter().filter(|a| !a.starts_with('-')).copied().last();
-                if has_v || (opt_name.is_some() && !has_q) {
+                if (has_v && opt_name.is_some()) || (opt_name.is_some() && !has_q) {
                     // Single-option query: show-options -v <name> or show <name>
                     if let Some(name) = opt_name {
                         let (rtx, rrx) = mpsc::channel::<String>();
@@ -1520,6 +1567,33 @@ pub(crate) fn handle_connection(
                                 let _ = write_stream.flush();
                             }
                         }
+                    }
+                } else if has_v && opt_name.is_none() {
+                    // -v/-gv/-wv without option name: list all values only (bfa87f6)
+                    let (rtx, rrx) = mpsc::channel::<String>();
+                    if window_scope {
+                        let _ = tx.send(CtrlReq::ShowWindowOptions(rtx));
+                    } else {
+                        let _ = tx.send(CtrlReq::ShowOptions(rtx));
+                    }
+                    if let Ok(text) = rrx.recv() {
+                        let values_only: String = text
+                            .lines()
+                            .filter_map(|line| {
+                                let t = line.trim();
+                                if t.is_empty() {
+                                    return None;
+                                }
+                                if let Some(pos) = t.find(' ') {
+                                    Some(&t[pos + 1..])
+                                } else {
+                                    Some(t)
+                                }
+                            })
+                            .collect::<Vec<_>>()
+                            .join("\n");
+                        let _ = writeln!(write_stream, "{}", values_only);
+                        let _ = write_stream.flush();
                     }
                 } else if window_scope {
                     let (rtx, rrx) = mpsc::channel::<String>();
@@ -1802,12 +1876,12 @@ pub(crate) fn handle_connection(
                     .windows(2)
                     .find(|w| w[0] == "--output")
                     .map(|w| w[1].trim_matches('"').to_string());
-                let timeout_secs: u64 = args
+                // --timeout is milliseconds (matches docs/scripting.md and rails bench tests).
+                let timeout_ms: u64 = args
                     .windows(2)
                     .find(|w| w[0] == "--timeout")
                     .and_then(|w| w[1].parse().ok())
-                    .unwrap_or(3600); // default 1 hour
-                let timeout_ms = timeout_secs.saturating_mul(1000);
+                    .unwrap_or(3_600_000); // default 1 hour
 
                 // If any new-style condition flag is set, use the wait_for executors.
                 let use_executor =
@@ -2322,10 +2396,12 @@ pub(crate) fn handle_connection(
                         false
                     } else {
                         // Try pwsh first, fall back to cmd /c
+                        use crate::platform::HideWindowCommandExt;
                         std::process::Command::new("pwsh")
                             .args(["-NoProfile", "-Command", condition])
                             .stdout(std::process::Stdio::null())
                             .stderr(std::process::Stdio::null())
+                            .hide_window()
                             .status()
                             .map(|s| s.success())
                             .unwrap_or_else(|_| {
@@ -2333,6 +2409,7 @@ pub(crate) fn handle_connection(
                                     .args(["/c", condition])
                                     .stdout(std::process::Stdio::null())
                                     .stderr(std::process::Stdio::null())
+                                    .hide_window()
                                     .status()
                                     .map(|s| s.success())
                                     .unwrap_or(false)

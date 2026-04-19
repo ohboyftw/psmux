@@ -1196,7 +1196,28 @@ pub fn break_pane_to_window(app: &mut AppState) {
 pub fn respawn_active_pane(
     app: &mut AppState,
     pty_system_ref: Option<&dyn portable_pty::PtySystem>,
+    kill: bool,
 ) -> io::Result<()> {
+    // tmux semantics: without -k, respawn only works on dead panes.
+    // With -k, kill the running process first and respawn.
+    {
+        let win = &app.windows[app.active_idx];
+        if let Some(pane) = crate::tree::active_pane(&win.root, &win.active_path) {
+            if !pane.dead && !kill {
+                return Err(io::Error::other("pane still active"));
+            }
+        }
+    }
+    if kill {
+        let win = &mut app.windows[app.active_idx];
+        if let Some(pane) = active_pane_mut(&mut win.root, &win.active_path) {
+            if !pane.dead {
+                crate::platform::process_kill::kill_process_tree(&mut pane.child);
+                pane.dead = true;
+            }
+        }
+    }
+
     // Reuse provided PTY system or create one as fallback
     let owned_pty;
     let pty_system: &dyn portable_pty::PtySystem = if let Some(ps) = pty_system_ref {
@@ -1289,13 +1310,13 @@ pub fn respawn_active_pane(
 
     pane.master = pair.master;
     pane.writer = pty_writer;
+    pane.child_pid = crate::platform::mouse_inject::get_child_pid(&*child);
     pane.child = child;
     pane.term = term;
     pane.data_version = data_version;
     pane.last_output_time = last_output_time;
     pane.cursor_shape = cursor_shape;
     pane.bell_pending = bell_pending;
-    pane.child_pid = None;
     pane.vt_bridge_cache = None;
     pane.vti_mode_cache = None;
     pane.mouse_input_cache = None;

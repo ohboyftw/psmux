@@ -84,6 +84,13 @@ pub(crate) fn get_option_value(app: &AppState, name: &str) -> String {
                 "off".into()
             }
         }
+        "allow-set-title" => {
+            if app.allow_set_title {
+                "on".into()
+            } else {
+                "off".into()
+            }
+        }
         "monitor-activity" => {
             if app.monitor_activity {
                 "on".into()
@@ -149,7 +156,15 @@ pub(crate) fn get_option_value(app: &AppState, name: &str) -> String {
                 "off".into()
             }
         }
-        "default-shell" | "default-command" => app.default_shell.clone(),
+        "default-shell" | "default-command" => {
+            if app.default_shell.is_empty() {
+                crate::pane::cached_shell()
+                    .unwrap_or("pwsh.exe")
+                    .to_string()
+            } else {
+                app.default_shell.clone()
+            }
+        }
         "default-terminal" => app.environment.get("TERM").cloned().unwrap_or_default(),
         "word-separators" => app.word_separators.clone(),
         "pane-border-style" => app.pane_border_style.clone(),
@@ -451,6 +466,9 @@ pub(crate) fn apply_set_option(app: &mut AppState, option: &str, value: &str, _q
         }
         "allow-rename" => {
             app.allow_rename = matches!(value, "on" | "true" | "1");
+        }
+        "allow-set-title" => {
+            app.allow_set_title = matches!(value, "on" | "true" | "1");
         }
         "activity-action" => {
             app.activity_action = value.to_string();

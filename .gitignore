@@ -86,3 +86,8 @@ test-reports/
 
 # upstream-pulse state and reports (per-machine, not source)
 .claude/upstream-pulse/
+
+# Internal docs (backlogs, plans, session checkpoints, sync trackers).
+# Versioned locally as a nested git repo at .claude/internal/; never
+# pushed to the public psmux remote.
+.claude/internal/

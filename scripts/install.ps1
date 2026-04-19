@@ -29,6 +29,7 @@ Write-Host ""
 # ── Companion tools (winget-based) ──────────────────────────────────
 
 $CompanionTools = @(
+    # Core — everyone gets these
     @{ Name = "ripgrep";   WingetId = "BurntSushi.ripgrep.MSVC"; Cmd = "rg";        Desc = "Fast search (grep replacement)" }
     @{ Name = "fd";        WingetId = "sharkdp.fd";              Cmd = "fd";        Desc = "Fast find (find replacement)" }
     @{ Name = "bat";       WingetId = "sharkdp.bat";             Cmd = "bat";       Desc = "Syntax-highlighted cat" }
@@ -36,6 +37,13 @@ $CompanionTools = @(
     @{ Name = "fzf";       WingetId = "junegunn.fzf";            Cmd = "fzf";       Desc = "Fuzzy finder" }
     @{ Name = "starship";  WingetId = "Starship.Starship";       Cmd = "starship";  Desc = "Cross-shell prompt" }
     @{ Name = "fastfetch"; WingetId = "Fastfetch-cli.Fastfetch"; Cmd = "fastfetch"; Desc = "System info splash" }
+    # Extras — keep the docs/power-pack-tools.md list aligned with what the installer ships
+    @{ Name = "atuin";     WingetId = "Atuinsh.Atuin";           Cmd = "atuin";     Desc = "Cross-shell history with search" }
+    @{ Name = "eza";       WingetId = "eza-community.eza";       Cmd = "eza";       Desc = "Modern ls (color + git)" }
+    @{ Name = "jq";        WingetId = "jqlang.jq";               Cmd = "jq";        Desc = "JSON query/filter" }
+    @{ Name = "ast-grep";  WingetId = "ast-grep.ast-grep";       Cmd = "sg";        Desc = "AST-aware structural search/rewrite" }
+    @{ Name = "tokei";     WingetId = "XAMPPRocky.Tokei";        Cmd = "tokei";     Desc = "Fast LOC counter" }
+    @{ Name = "gh";        WingetId = "GitHub.cli";              Cmd = "gh";        Desc = "GitHub CLI" }
 )
 
 function Install-CompanionTools {

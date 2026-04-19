@@ -117,8 +117,10 @@ pub fn build_run_shell_command(shell_cmd: &str) -> std::process::Command {
             } else {
                 "powershell"
             };
+            use crate::platform::HideWindowCommandExt;
             let mut c = std::process::Command::new(shell);
             c.args(["-NoProfile", "-ExecutionPolicy", "Bypass", "-File"]);
+            c.hide_window();
             // Split remaining args so the .ps1 path and its arguments are separate args
             let parts = parse_command_line(trimmed);
             for p in &parts {
@@ -1182,6 +1184,7 @@ fn execute_command_string_single(app: &mut AppState, cmd: &str) -> io::Result<()
             // Always apply locally first for immediate visual feedback,
             // then forward to server for authoritative state update.
             if let Some(path) = parts.get(1) {
+                app.defaults_suppressed = false;
                 crate::config::source_file(app, path);
             }
             if let Some(port) = app.control_port {

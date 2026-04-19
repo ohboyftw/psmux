@@ -441,12 +441,32 @@ fn psmux_exe() -> Result<PathBuf, String> {
     std::env::current_exe().map_err(|e| format!("cannot resolve psmux binary: {e}"))
 }
 
+/// Enable or disable remain-on-exit for an orchestrate session so dead panes
+/// stay visible long enough for the poll loop to read their exit codes.
+fn set_remain_on_exit(exe: &Path, session: &str, on: bool) {
+    let value = if on { "on" } else { "off" };
+    // Best-effort: ignore errors — the session may be gone by the time we try
+    // to restore the option, and a spurious failure here must not abort the run.
+    let _ = std::process::Command::new(exe)
+        .args(["set-option", "-t", session, "remain-on-exit", value])
+        .output();
+}
+
+/// Kill a preserved dead pane so it doesn't accumulate in the session.
+fn kill_worker_pane(exe: &Path, pane_id: &str) {
+    // Best-effort: pane may already be gone; ignore the result.
+    let _ = std::process::Command::new(exe)
+        .args(["kill-pane", "-t", pane_id])
+        .output();
+}
+
 /// Spawn a pane for `worker` using `psmux new-window -P`. Returns pane id.
 fn spawn_worker_pane(plan: &Plan, plan_dir: &Path, worker: &Worker) -> Result<String, String> {
     let exe = psmux_exe()?;
     let mut cmd = std::process::Command::new(&exe);
     cmd.args([
         "new-window",
+        "--raw",
         "-t",
         &plan.session,
         "-n",
@@ -490,36 +510,58 @@ fn spawn_worker_pane(plan: &Plan, plan_dir: &Path, worker: &Worker) -> Result<St
 
 /// Query a pane's dead/exit-code status via `psmux list-panes`.
 /// Returns `Ok(Some(exit_code))` if the pane is dead, `Ok(None)` if still alive.
-fn check_pane_exit(pane_id: &str) -> Result<Option<i32>, String> {
+///
+/// Targets `list-panes -t <session>` (session-name routing is unambiguous — it
+/// reads `<session>.port` directly) and then filters for the requested
+/// `pane_id`. Targeting the pane id directly would go through the ambiguous
+/// reverse-mtime scan in session::resolve_server_for_command and could land on
+/// the wrong server if multiple live servers exist (common under test harnesses
+/// when the user's attached terminal shares a numeric id).
+/// Exit-code sentinels emitted by [`check_pane_exit`] when the real worker
+/// exit code isn't available. Distinguishing these from genuine worker exits
+/// matters for downstream CI: a killed session is not the same as a crash.
+pub const EXIT_PANE_GONE: i32 = -1;
+pub const EXIT_SESSION_GONE: i32 = -3;
+
+fn check_pane_exit(session: &str, pane_id: &str) -> Result<Option<i32>, String> {
     let exe = psmux_exe()?;
     let output = std::process::Command::new(&exe)
         .args([
             "list-panes",
             "-t",
-            pane_id,
+            session,
+            "-s",
             "-F",
-            "#{pane_dead} #{pane_exit_code}",
+            "#{pane_id}:#{pane_dead}:#{pane_exit_code}",
         ])
         .output()
         .map_err(|e| format!("list-panes failed to spawn: {e}"))?;
     if !output.status.success() {
-        // Pane may already be gone — treat as dead with unknown exit code.
-        return Ok(Some(-1));
+        // The whole session is gone (user killed it, or server died).
+        // Distinct from per-pane pruning so callers can tell the two apart.
+        return Ok(Some(EXIT_SESSION_GONE));
     }
     let raw = String::from_utf8_lossy(&output.stdout);
-    let line = raw.lines().next().unwrap_or("").trim();
-    if line.is_empty() {
-        return Ok(Some(-1));
+    for line in raw.lines() {
+        let line = line.trim();
+        if line.is_empty() {
+            continue;
+        }
+        let mut parts = line.split(':');
+        let reported_id = parts.next().unwrap_or("").trim();
+        if reported_id != pane_id {
+            continue;
+        }
+        let dead_flag = parts.next().unwrap_or("0").trim();
+        let exit_raw = parts.next().unwrap_or("").trim();
+        let dead = matches!(dead_flag, "1" | "true");
+        if !dead {
+            return Ok(None);
+        }
+        return Ok(Some(exit_raw.parse::<i32>().unwrap_or(EXIT_PANE_GONE)));
     }
-    let mut parts = line.split_whitespace();
-    let dead_flag = parts.next().unwrap_or("0");
-    let exit_raw = parts.next().unwrap_or("");
-    let dead = matches!(dead_flag, "1" | "true");
-    if !dead {
-        return Ok(None);
-    }
-    let exit_code = exit_raw.parse::<i32>().unwrap_or(-1);
-    Ok(Some(exit_code))
+    // Pane not found in any window of the session — pruned by the server.
+    Ok(Some(EXIT_PANE_GONE))
 }
 
 /// Main orchestration loop: spawn ready workers, poll for completion, advance
@@ -530,7 +572,17 @@ pub fn run_plan(
     state: &mut OrchestrationState,
     plan_dir: &Path,
     state_path: &Path,
+    timeout_ms: Option<u64>,
 ) -> Result<(), String> {
+    let started = std::time::Instant::now();
+    // Enable remain-on-exit for this session before any worker pane is spawned.
+    // This ensures that even a very short-lived worker (e.g. `cmd /c echo`)
+    // that exits before the next 500 ms poll tick is preserved as a dead pane
+    // whose exit code remains observable via #{pane_dead}/#{pane_exit_code}.
+    // Dead panes are explicitly killed after the poll loop reads their codes.
+    if let Ok(exe) = psmux_exe() {
+        set_remain_on_exit(&exe, &plan.session, true);
+    }
     loop {
         let all_terminal = plan.workers.iter().all(|w| {
             state
@@ -540,6 +592,24 @@ pub fn run_plan(
         });
         if all_terminal {
             return Ok(());
+        }
+        // Hard timeout: mark still-running workers as Failed with exit_code=-2
+        // ("timed out") and return. Gives CI/test harnesses a ceiling even when
+        // a worker hangs indefinitely.
+        if let Some(limit) = timeout_ms {
+            if started.elapsed().as_millis() as u64 >= limit {
+                for ws in state.workers.values_mut() {
+                    if ws.status == WorkerStatus::Running || ws.status == WorkerStatus::Pending {
+                        ws.status = WorkerStatus::Failed;
+                        ws.exit_code = Some(-2);
+                        ws.finished_at = Some(now_iso8601());
+                    }
+                }
+                state
+                    .save(state_path)
+                    .map_err(|e| format!("save state: {e}"))?;
+                return Err(format!("orchestrate timed out after {} ms", limit));
+            }
         }
 
         // Launch any ready, still-pending workers.
@@ -590,7 +660,7 @@ pub fn run_plan(
 
         let mut updated = false;
         for (worker_id, pane_id) in running {
-            let exit = check_pane_exit(&pane_id)?;
+            let exit = check_pane_exit(&plan.session, &pane_id)?;
             let Some(code) = exit else { continue };
             if let Some(ws) = state.workers.get_mut(&worker_id) {
                 ws.exit_code = Some(code);
@@ -601,8 +671,11 @@ pub fn run_plan(
                     WorkerStatus::Failed
                 };
                 // Pane vanished with no usable exit code — try to associate a
-                // psmux crash report for post-mortem inspection.
-                if code == -1 {
+                // psmux crash report for post-mortem inspection. Only do this
+                // for EXIT_PANE_GONE (worker disappeared from an otherwise live
+                // session); EXIT_SESSION_GONE means the whole session was torn
+                // down and there's no crash to attribute.
+                if code == EXIT_PANE_GONE {
                     if let Some(path) = find_crash_for(ws) {
                         ws.crash_dump_path = Some(path);
                     }
@@ -616,6 +689,15 @@ pub fn run_plan(
                 skip_dependents(plan, state, &worker_id);
             }
             updated = true;
+            // The pane exited with a real exit code (remain-on-exit kept it
+            // visible as a dead pane). Kill it now so dead panes don't
+            // accumulate in the session. EXIT_PANE_GONE means the pane was
+            // already reaped, so no kill is needed in that case.
+            if code != EXIT_PANE_GONE && code != EXIT_SESSION_GONE {
+                if let Ok(exe) = psmux_exe() {
+                    kill_worker_pane(&exe, &pane_id);
+                }
+            }
         }
 
         if updated {

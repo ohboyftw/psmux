@@ -33,7 +33,7 @@ pub fn conpty_preemptive_dsr_response(writer: &mut dyn std::io::Write) {
 static CACHED_SHELL_PATH: std::sync::OnceLock<Option<String>> = std::sync::OnceLock::new();
 
 /// Get the cached shell path, resolving via `which` only on first call.
-fn cached_shell() -> Option<&'static str> {
+pub fn cached_shell() -> Option<&'static str> {
     CACHED_SHELL_PATH
         .get_or_init(|| {
             which::which("pwsh")
@@ -128,6 +128,7 @@ pub fn create_window(
             last_cols: cols,
             id: wp.pane_id,
             title: format!("pane %{}", wp.pane_id),
+            title_locked: false,
             child_pid: wp.child_pid,
             data_version: wp.data_version,
             last_output_time: std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0)),
@@ -302,6 +303,7 @@ pub fn create_window(
         last_cols: size.cols,
         id: pane_id,
         title: format!("pane %{}", pane_id),
+        title_locked: false,
         child_pid,
         data_version,
         last_output_time,
@@ -544,6 +546,7 @@ pub fn create_window_raw(
         last_cols: size.cols,
         id: raw_pane_id,
         title: format!("pane %{}", raw_pane_id),
+        title_locked: false,
         child_pid,
         data_version,
         last_output_time,
@@ -599,7 +602,10 @@ pub const MIN_PANE_DIM: u16 = 2;
 
 /// Minimum rows for a split to be allowed — each resulting pane needs at
 /// least this many rows to run a shell prompt.
-const MIN_SPLIT_ROWS: u16 = 4;
+// Upstream uses 2, but ohboy's default pane-border-status="top" steals 1 row
+// per pane for the title bar, so we need one more row of headroom to leave
+// at least 2 shell-content rows per pane after the title bar.
+const MIN_SPLIT_ROWS: u16 = 3;
 /// Minimum cols for a split to be allowed.
 const MIN_SPLIT_COLS: u16 = 10;
 
@@ -737,6 +743,7 @@ pub fn split_active_with_command(
             last_cols: cols,
             id: new_pane_id,
             title: format!("pane %{}", new_pane_id),
+            title_locked: false,
             child_pid: wp.child_pid,
             data_version: wp.data_version,
             last_output_time: std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0)),
@@ -889,6 +896,7 @@ pub fn split_active_with_command(
         last_cols: size.cols,
         id: split_pane_id,
         title: format!("pane %{}", split_pane_id),
+        title_locked: false,
         child_pid,
         data_version,
         last_output_time,
@@ -939,6 +947,9 @@ pub fn split_active_with_command(
 fn kill_pane_at_path(win: &mut Window, path: &[usize]) {
     // Get the ID of the pane being killed (for MRU removal)
     let killed_id = crate::tree::get_active_pane_id(&win.root, path);
+    // Collect ordered pane IDs BEFORE the kill so we can fall back to
+    // previous-by-pane_index when MRU is empty (#71 tmux parity).
+    let ordered_ids_before = crate::tree::collect_pane_ids(&win.root);
     // Explicitly kill the target pane's process tree FIRST.
     // remove_node() doesn't call kill_node() when the root is a single Leaf,
     // so we must do it here to ensure no orphaned processes.
@@ -961,7 +972,27 @@ fn kill_pane_at_path(win: &mut Window, path: &[usize]) {
         .pane_mru
         .iter()
         .find_map(|&id| crate::tree::find_path_by_id(&win.root, id));
-    win.active_path = mru_target.unwrap_or_else(|| crate::tree::first_leaf_path(&win.root));
+    // When MRU is empty (no surviving panes visited), tmux picks the
+    // previous pane by pane_index, falling back to next (#71).
+    let fallback = || {
+        if let Some(kid) = killed_id {
+            if let Some(pos) = ordered_ids_before.iter().position(|&id| id == kid) {
+                let prev_id = if pos > 0 {
+                    Some(ordered_ids_before[pos - 1])
+                } else {
+                    None
+                };
+                let next_id = ordered_ids_before.get(pos + 1).copied();
+                if let Some(cid) = prev_id.or(next_id) {
+                    if let Some(p) = crate::tree::find_path_by_id(&win.root, cid) {
+                        return p;
+                    }
+                }
+            }
+        }
+        crate::tree::first_leaf_path(&win.root)
+    };
+    win.active_path = mru_target.unwrap_or_else(fallback);
 }
 
 pub fn kill_active_pane(app: &mut AppState) -> io::Result<()> {
@@ -1508,8 +1539,29 @@ pub fn build_raw_command(raw_args: &[String], session_name: &str) -> CommandBuil
     builder.env("PSMUX_SESSION", session_name);
     builder.env("PSMUX", "1");
     if raw_args.len() > 1 {
-        let args: Vec<&str> = raw_args[1..].iter().map(|s| s.as_str()).collect();
-        builder.args(args);
+        // Special-case cmd.exe: its /c argument is a command string parsed by
+        // cmd's own parser, not the CRT argv parser.  portable_pty's
+        // append_quoted would double-escape inner '"' as '\"', producing a
+        // command line like: cmd.exe /c "echo > \"path\"" where cmd.exe sees
+        // backslash-quote as a literal and breaks the redirect.  Instead, join
+        // argv[1..] into one string and strip embedded '"' so cmd.exe receives
+        // "echo A > path" (outer quotes from append_quoted, no inner escapes).
+        let prog_name = std::path::Path::new(program)
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or(program)
+            .to_ascii_lowercase();
+        if prog_name == "cmd" && raw_args.get(1).map(|a| a == "/c" || a == "/C").unwrap_or(false) {
+            // Pass /c as argv[1], then the joined+dequoted command as argv[2].
+            builder.arg("/c");
+            if raw_args.len() > 2 {
+                let cmd_str: String = raw_args[2..].join(" ").replace('"', "");
+                builder.arg(cmd_str);
+            }
+        } else {
+            let args: Vec<&str> = raw_args[1..].iter().map(|s| s.as_str()).collect();
+            builder.args(args);
+        }
     }
     builder
 }

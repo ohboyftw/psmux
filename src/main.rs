@@ -35,6 +35,7 @@ mod window_ops;
 mod backend;
 #[cfg(feature = "mycel")]
 mod mycel;
+mod octal;
 #[allow(unused)]
 mod remote;
 
@@ -89,6 +90,7 @@ fn run_main() -> io::Result<()> {
     // This avoids conflict with subcommand flags (e.g. select-pane -L, resize-pane -L).
     let mut l_socket_name: Option<String> = None;
     let mut f_config_file: Option<String> = None;
+    let mut subcommand: Option<String> = None;
     {
         let mut i = 1; // skip binary name
         while i < args.len() {
@@ -104,6 +106,7 @@ fn run_main() -> io::Result<()> {
             } else if arg.starts_with('-') {
                 i += 1; // skip single global flags (e.g. -v, -V)
             } else {
+                subcommand = Some(arg.clone());
                 break; // hit the subcommand name — stop scanning for global flags
             }
         }
@@ -144,8 +147,10 @@ fn run_main() -> io::Result<()> {
             // PSMUX_TARGET_SESSION so the TMUX-based fallback below resolves
             // the current (source) session for routing. PSMUX_TARGET_FULL
             // still carries the destination for the server handler (#202).
-            let is_switch_client =
-                args.iter().any(|a| a == "switch-client" || a == "switchc");
+            let is_switch_client = matches!(
+                subcommand.as_deref(),
+                Some("switch-client") | Some("switchc")
+            );
             if has_explicit_session && !is_switch_client {
                 env::set_var("PSMUX_TARGET_SESSION", &port_file_base);
             }
@@ -235,13 +240,14 @@ fn run_main() -> io::Result<()> {
                     found_subcommand = true;
                     // fall through to push the subcommand name
                 }
-            } else {
-                // After subcommand: strip only -t (and its value)
-                if args[i] == "-t" && i + 1 < args.len() {
-                    i += 2;
-                    continue;
-                }
             }
+            // After subcommand: pass -t <value> through unchanged so it
+            // reaches (a) the per-subcommand dispatcher, which appends it to
+            // the wire command, and (b) `send_control`'s routing, which uses
+            // it to pick the owning server for session-name or pane-id
+            // targets. The global `-t` parse at line 124 also still runs —
+            // PSMUX_TARGET_SESSION stays a valid fallback for session-name
+            // targets when the dispatcher doesn't re-forward it.
             result.push(&args[i]);
             i += 1;
         }
@@ -1161,6 +1167,7 @@ fn run_main() -> io::Result<()> {
             let mut start_dir: Option<String> = None;
             let mut env_vars: Vec<String> = Vec::new();
             let mut shell_arg: Option<String> = None;
+            let mut raw_spawn = false;
             let mut nw_positional: Vec<String> = Vec::new();
             {
                 let mut i = 1;
@@ -1210,6 +1217,9 @@ fn run_main() -> io::Result<()> {
                         "-P" => {
                             print_info = true;
                         }
+                        "--raw" => {
+                            raw_spawn = true;
+                        }
                         "-a" | "-D" | "-k" => { /* ignored for compatibility */ }
                         _ if a.starts_with('-') => { /* unknown flag, skip */ }
                         _ => {
@@ -1219,6 +1229,42 @@ fn run_main() -> io::Result<()> {
                     }
                     i += 1;
                 }
+            }
+            // --raw path: bypass shell wrapping.
+            // Emits "new-window-raw" control verb with each argv token as a
+            // double-quoted word after "--", so parse_command_line in the server
+            // tokenizes them individually (respecting spaces inside arguments).
+            if raw_spawn && !nw_positional.is_empty() {
+                let mut cmd_line = "new-window-raw".to_string();
+                if detached {
+                    cmd_line.push_str(" -d");
+                }
+                if print_info {
+                    cmd_line.push_str(" -P");
+                }
+                if let Some(ref fmt) = format_str {
+                    cmd_line.push_str(&format!(" -F \"{}\"", fmt.replace("\"", "\\\"")));
+                }
+                if let Some(name) = &name_arg {
+                    cmd_line.push_str(&format!(" -n \"{}\"", name.replace("\"", "\\\"")));
+                }
+                if let Some(dir) = &start_dir {
+                    cmd_line.push_str(&format!(" -c \"{}\"", dir.replace("\"", "\\\"")));
+                }
+                // Each argv token is double-quoted so the server tokenizer keeps
+                // them as separate, intact arguments even when they contain spaces.
+                cmd_line.push_str(" --");
+                for part in &nw_positional {
+                    cmd_line.push_str(&format!(" \"{}\"", part.replace('\\', "\\\\").replace('"', "\\\"")));
+                }
+                cmd_line.push('\n');
+                if print_info {
+                    let resp = send_control_with_response(cmd_line)?;
+                    print!("{}", resp);
+                } else {
+                    send_control(cmd_line)?;
+                }
+                return Ok(());
             }
             let cmd_arg = nw_positional.join(" ");
             let cmd_arg = cmd_arg.as_str();
@@ -2765,7 +2811,16 @@ fn run_main() -> io::Result<()> {
                     cmd.push_str(&format!(" --timeout {}", to));
                 }
                 cmd.push('\n');
-                let resp = send_control_with_response(cmd)?;
+                // Size the CLI socket read_timeout from the user's --timeout plus headroom,
+                // so the server has time to emit its response (and any "TIMEOUT" signal)
+                // before the client socket gives up. Without this the CLI bails at a fixed
+                // 2s even when the user asked for --timeout 30000.
+                let timeout_ms: u64 = timeout
+                    .as_ref()
+                    .and_then(|t| t.parse().ok())
+                    .unwrap_or(3_600_000);
+                let read_timeout = std::time::Duration::from_millis(timeout_ms.saturating_add(5_000));
+                let resp = send_control_with_response_timeout(cmd, Some(read_timeout))?;
                 let trimmed = resp.trim();
                 // Exit-code mapping: success=0, timeout=1, error=2.
                 let exit_code = if json_mode {
@@ -2874,6 +2929,7 @@ fn run_main() -> io::Result<()> {
             let mut session_override: Option<String> = None;
             let mut cleanup = false;
             let mut json_mode = false;
+            let mut timeout_ms: Option<u64> = None;
             let mut i = 1;
             while i < cmd_args.len() {
                 match cmd_args[i].as_str() {
@@ -2885,6 +2941,25 @@ fn run_main() -> io::Result<()> {
                     }
                     "--cleanup" => cleanup = true,
                     "--json" => json_mode = true,
+                    "--timeout" => {
+                        match cmd_args.get(i + 1) {
+                            Some(t) => match t.parse::<u64>() {
+                                Ok(n) => timeout_ms = Some(n),
+                                Err(_) => {
+                                    eprintln!(
+                                        "psmux orchestrate: --timeout '{}' is not a non-negative integer (ms); ignoring",
+                                        t
+                                    );
+                                }
+                            },
+                            None => {
+                                eprintln!(
+                                    "psmux orchestrate: --timeout requires a value in milliseconds; ignoring"
+                                );
+                            }
+                        }
+                        i += 1;
+                    }
                     s if !s.starts_with('-') && plan_path.is_none() => {
                         plan_path = Some(s.to_string());
                     }
@@ -2922,7 +2997,10 @@ fn run_main() -> io::Result<()> {
                 std::process::exit(2);
             }
 
-            let state_dir = std::path::PathBuf::from(".orchestration").join(&plan.session);
+            // State lives alongside the plan file so callers always know where to
+            // find it regardless of the working directory from which orchestrate is
+            // invoked.
+            let state_dir = plan_dir.join(".orchestration").join(&plan.session);
             let state_path = state_dir.join("state.json");
 
             if cleanup {
@@ -2957,10 +3035,22 @@ fn run_main() -> io::Result<()> {
                 .save(&state_path)
                 .map_err(|e| io::Error::other(format!("cannot write initial state: {e}")))?;
 
-            if let Err(e) = crate::orchestrate::run_plan(&plan, &mut state, &plan_dir, &state_path)
-            {
+            let mut timed_out = false;
+            if let Err(e) = crate::orchestrate::run_plan(
+                &plan,
+                &mut state,
+                &plan_dir,
+                &state_path,
+                timeout_ms,
+            ) {
                 eprintln!("psmux orchestrate: {e}");
-                std::process::exit(2);
+                // Continue to summary/exit so state.json is written and --json
+                // emits results even when the timeout fires.
+                if e.starts_with("orchestrate timed out") {
+                    timed_out = true;
+                } else {
+                    std::process::exit(2);
+                }
             }
 
             use crate::orchestrate::WorkerStatus;
@@ -3004,13 +3094,24 @@ fn run_main() -> io::Result<()> {
                 }
             }
 
-            let exit_code = if failed > 0 || skipped > 0 { 1 } else { 0 };
+            // Distinct exit codes:
+            //   0 — all workers succeeded
+            //   1 — one or more workers failed or were skipped
+            //   3 — the --timeout ceiling fired before all workers finished
+            let exit_code = if timed_out {
+                3
+            } else if failed > 0 || skipped > 0 {
+                1
+            } else {
+                0
+            };
             std::process::exit(exit_code);
         }
         // wait-pane - Wait for a pane's child process to exit
         "wait-pane" | "waitp" => {
             let mut target: Option<String> = None;
-            let mut timeout_secs: Option<u64> = None;
+            // --timeout is milliseconds (matches wait-for).
+            let mut timeout_ms: Option<u64> = None;
             let mut wait_ready = false;
             let mut i = 1;
 
@@ -3024,7 +3125,7 @@ fn run_main() -> io::Result<()> {
                     }
                     "--timeout" => {
                         if let Some(v) = cmd_args.get(i + 1) {
-                            timeout_secs = v.parse::<u64>().ok();
+                            timeout_ms = v.parse::<u64>().ok();
                             i += 1;
                         }
                     }
@@ -3041,8 +3142,8 @@ fn run_main() -> io::Result<()> {
                 if wait_ready {
                     cmd.push_str(" --ready");
                 }
-                if let Some(secs) = timeout_secs {
-                    cmd.push_str(&format!(" --timeout {}", secs));
+                if let Some(ms) = timeout_ms {
+                    cmd.push_str(&format!(" --timeout {}", ms));
                 }
                 cmd.push('\n');
                 let resp = send_control_with_response_timeout(cmd, None)?;

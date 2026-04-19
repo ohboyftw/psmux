@@ -84,6 +84,26 @@ Full scripting support including `send-keys`, `capture-pane`, `pipe-pane`,
 At session start, check `.claude/upstream-pulse/state.json` — if `last_check` is >3 days old,
 nudge: "Run `/upstream-pulse` to check for upstream changes."
 
+## Internal Docs (`.claude/internal/`)
+
+Sync trackers, planning docs, session checkpoints, internal requirements, and
+the Porting Guardrails / Known Ohboy-Only Extensions / Incident-log tables live
+in **`.claude/internal/`** as a **nested private git repo**, not in `docs/`.
+
+- Outer psmux repo has `.claude/internal/` in `.gitignore` — these files never
+  leak to the public GitHub.
+- The nested repo has its own `git log`, branches, and (optionally) a private
+  remote. Commit changes from inside the directory:
+  `cd .claude/internal && git add FILE && git commit -m "..."`.
+- Do **NOT** `git add` internal docs from the outer repo — it's ignored and has no effect.
+- Claude Code reads `.claude/internal/*.md` exactly like any other file — fully visible in-session.
+- Key files to consult at sync time:
+  - `.claude/internal/ohboy-builds-backlog.md` — upstream sync ledger + Porting Guardrails + Known Ohboy-Only Extensions table + Incident log
+  - `.claude/internal/on-rails-checklist.md` — current rails-sync status
+  - `.claude/internal/session-checkpoint-*.md` — session-compaction handoffs
+
+Only user- and developer-facing docs live in `docs/` and ship with the public release.
+
 ## Swarm Backend Context
 psmux can serve as the tmux spawn backend for Claude Code's TeammateTool on Windows.
 See `.claude/skills/swarm-orchestrator/` for multi-agent patterns and

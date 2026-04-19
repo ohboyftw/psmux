@@ -220,24 +220,199 @@ pub fn send_auth_cmd_response(addr: &str, key: &str, cmd: &[u8]) -> io::Result<S
     Ok(buf)
 }
 
-pub fn send_control(line: String) -> io::Result<()> {
-    let home = env::var("USERPROFILE")
-        .or_else(|_| env::var("HOME"))
-        .unwrap_or_default();
+/// Parse `-t <target>` from a control command line.
+/// Handles `-t FOO`, `-t "FOO"`, and targets with `:window[.pane]` suffix.
+fn parse_target_from_line(line: &str) -> Option<String> {
+    let mut iter = line.split_whitespace();
+    while let Some(tok) = iter.next() {
+        if tok == "-t" {
+            if let Some(val) = iter.next() {
+                return Some(val.trim_matches('"').to_string());
+            }
+        }
+    }
+    None
+}
+
+/// Ask a server whether it owns the pane-id or window-id. Returns true on match.
+/// Short per-connection timeouts keep scans cheap (< 50 ms total per server).
+fn server_owns_id(port: u16, key: &str, target_id: &str) -> bool {
+    let debug = env::var("PSMUX_DEBUG_ROUTING").is_ok();
+    let addr_s = format!("127.0.0.1:{}", port);
+    let Ok(addr) = addr_s.parse::<std::net::SocketAddr>() else {
+        return false;
+    };
+    let Ok(mut stream) = std::net::TcpStream::connect_timeout(&addr, Duration::from_millis(300))
+    else {
+        if debug {
+            eprintln!("[route] connect {}:{} failed", addr_s, port);
+        }
+        return false;
+    };
+    let _ = stream.set_nodelay(true);
+    let _ = stream.set_read_timeout(Some(Duration::from_millis(500)));
+    let _ = writeln!(stream, "AUTH {}", key);
+    let query = if target_id.starts_with('%') {
+        "list-panes -a -F #{pane_id}\n"
+    } else {
+        "list-windows -a -F #{window_id}\n"
+    };
+    let _ = write!(stream, "{}", query);
+    let _ = stream.flush();
+    let mut buf = Vec::new();
+    let mut tmp = [0u8; 2048];
+    loop {
+        match std::io::Read::read(&mut stream, &mut tmp) {
+            Ok(0) => break,
+            Ok(n) => buf.extend_from_slice(&tmp[..n]),
+            Err(_) => break,
+        }
+    }
+    let text = String::from_utf8_lossy(&buf);
+    let owns = text.lines().any(|l| l.trim() == target_id);
+    if debug {
+        eprintln!(
+            "[route] port={} target={} owns={} resp_bytes={} resp={:?}",
+            port,
+            target_id,
+            owns,
+            buf.len(),
+            text
+        );
+    }
+    owns
+}
+
+/// Scan every live `.port` file and find which server owns the pane-id/window-id.
+/// Iterates in reverse-mtime order (newest first) so fresh sessions win over
+/// long-running terminals that happen to have a pane with the same numeric id.
+fn scan_servers_for_id(home: &str, target_id: &str) -> Option<(String, u16, String)> {
+    // Bias toward the caller's own server when scripting from inside a psmux
+    // pane: PSMUX_SESSION names the server that owns this process, so pane-ids
+    // it mints are guaranteed to belong to it (unambiguous). Fall back to
+    // reverse-mtime across all live servers otherwise.
+    let own_session = env::var("PSMUX_SESSION")
+        .ok()
+        .filter(|s| !s.is_empty() && !is_warm_session(s));
+    let dir = format!("{}\\.psmux", home);
+    let mut candidates: Vec<(String, std::time::SystemTime)> = Vec::new();
+    if let Ok(rd) = std::fs::read_dir(&dir) {
+        for entry in rd.flatten() {
+            let fname = entry.file_name();
+            let fname = fname.to_string_lossy();
+            let Some(name) = fname.strip_suffix(".port") else {
+                continue;
+            };
+            if is_warm_session(name) {
+                continue;
+            }
+            let mtime = entry
+                .metadata()
+                .ok()
+                .and_then(|m| m.modified().ok())
+                .unwrap_or(std::time::SystemTime::UNIX_EPOCH);
+            candidates.push((name.to_string(), mtime));
+        }
+    }
+    candidates.sort_by(|a, b| {
+        // Own session wins outright, regardless of mtime.
+        let a_own = own_session.as_deref() == Some(a.0.as_str());
+        let b_own = own_session.as_deref() == Some(b.0.as_str());
+        b_own.cmp(&a_own).then_with(|| b.1.cmp(&a.1))
+    });
+    for (name, _) in candidates {
+        let path = format!("{}\\.psmux\\{}.port", home, name);
+        let Some(port) = std::fs::read_to_string(&path)
+            .ok()
+            .and_then(|s| s.trim().parse::<u16>().ok())
+        else {
+            continue;
+        };
+        let key = read_session_key(&name).unwrap_or_default();
+        if server_owns_id(port, &key, target_id) {
+            return Some((name, port, key));
+        }
+    }
+    None
+}
+
+/// Resolve which server (name, port, session-key) a control command should be
+/// sent to. Priority: (1) `-t <target>` parsed from the line — routes a session
+/// name to `<name>.port` directly, and scans live servers for `%pane` / `@window`
+/// ids. (2) `PSMUX_TARGET_SESSION` env var. (3) `resolve_last_session_name`
+/// fallback when env is unset or points to a warm server.
+fn resolve_server_for_command(home: &str, line: &str) -> io::Result<(String, u16, String)> {
+    let debug = env::var("PSMUX_DEBUG_ROUTING").is_ok();
+    if debug {
+        eprintln!("[route] resolve for line={:?}", line);
+    }
+    // (1) target hint from `-t`
+    if let Some(raw) = parse_target_from_line(line) {
+        if debug {
+            eprintln!("[route] -t target parsed: {:?}", raw);
+        }
+        if raw.starts_with('%') || raw.starts_with('@') {
+            if debug {
+                eprintln!("[route] scanning servers for id {}", raw);
+            }
+            if let Some(r) = scan_servers_for_id(home, &raw) {
+                if debug {
+                    eprintln!("[route] scan hit: session={} port={}", r.0, r.1);
+                }
+                return Ok(r);
+            }
+            if debug {
+                eprintln!("[route] scan miss");
+            }
+            // fall through — no live server owns that id; use env fallback so
+            // the server's own error message (or downstream command) surfaces.
+        } else {
+            // Session name; strip `:window[.pane]` suffix.
+            let name = raw.split(':').next().unwrap_or(&raw);
+            if !name.is_empty() && !is_warm_session(name) {
+                let path = format!("{}\\.psmux\\{}.port", home, name);
+                if let Some(port) = std::fs::read_to_string(&path)
+                    .ok()
+                    .and_then(|s| s.trim().parse::<u16>().ok())
+                {
+                    let key = read_session_key(name).unwrap_or_default();
+                    return Ok((name.to_string(), port, key));
+                }
+            }
+        }
+    }
+    // (2,3) env + warm fallback — preserves historical behaviour.
     let mut target = env::var("PSMUX_TARGET_SESSION")
         .ok()
+        .filter(|s| !s.is_empty())
         .unwrap_or_else(|| "default".to_string());
-    // Never target a warm (standby) session — resolve to a real session instead
+    if debug {
+        eprintln!("[route] env fallback: PSMUX_TARGET_SESSION -> {:?}", target);
+    }
     if is_warm_session(&target) {
         target = resolve_last_session_name().unwrap_or_else(|| "default".to_string());
+        if debug {
+            eprintln!("[route] warm resolved to {:?}", target);
+        }
     }
-    let full_target = env::var("PSMUX_TARGET_FULL").ok();
     let path = format!("{}\\.psmux\\{}.port", home, target);
     let port = std::fs::read_to_string(&path)
         .ok()
         .and_then(|s| s.trim().parse::<u16>().ok())
         .ok_or_else(|| io::Error::other(format!("no server running on session '{}'", target)))?;
-    let session_key = read_session_key(&target).unwrap_or_default();
+    let key = read_session_key(&target).unwrap_or_default();
+    if debug {
+        eprintln!("[route] env path: session={} port={}", target, port);
+    }
+    Ok((target, port, key))
+}
+
+pub fn send_control(line: String) -> io::Result<()> {
+    let home = env::var("USERPROFILE")
+        .or_else(|_| env::var("HOME"))
+        .unwrap_or_default();
+    let (_target, port, session_key) = resolve_server_for_command(&home, &line)?;
+    let full_target = env::var("PSMUX_TARGET_FULL").ok();
     let addr: std::net::SocketAddr = format!("127.0.0.1:{}", port).parse().unwrap();
     let mut stream = std::net::TcpStream::connect_timeout(&addr, Duration::from_millis(100))?;
     let _ = stream.set_nodelay(true);
@@ -260,20 +435,8 @@ pub fn send_control_with_response(line: String) -> io::Result<String> {
     let home = env::var("USERPROFILE")
         .or_else(|_| env::var("HOME"))
         .unwrap_or_default();
-    let mut target = env::var("PSMUX_TARGET_SESSION")
-        .ok()
-        .unwrap_or_else(|| "default".to_string());
-    // Never target a warm (standby) session — resolve to a real session instead
-    if is_warm_session(&target) {
-        target = resolve_last_session_name().unwrap_or_else(|| "default".to_string());
-    }
+    let (_target, port, session_key) = resolve_server_for_command(&home, &line)?;
     let full_target = env::var("PSMUX_TARGET_FULL").ok();
-    let path = format!("{}\\.psmux\\{}.port", home, target);
-    let port = std::fs::read_to_string(&path)
-        .ok()
-        .and_then(|s| s.trim().parse::<u16>().ok())
-        .ok_or_else(|| io::Error::other(format!("no server running on session '{}'", target)))?;
-    let session_key = read_session_key(&target).unwrap_or_default();
     let addr = format!("127.0.0.1:{}", port);
     let mut stream = std::net::TcpStream::connect(&addr)?;
     let _ = stream.set_nodelay(true);
@@ -324,20 +487,8 @@ pub fn send_control_with_response_timeout(
     let home = env::var("USERPROFILE")
         .or_else(|_| env::var("HOME"))
         .unwrap_or_default();
-    let mut target = env::var("PSMUX_TARGET_SESSION")
-        .ok()
-        .unwrap_or_else(|| "default".to_string());
-    // Never target a warm (standby) session — resolve to a real session instead
-    if is_warm_session(&target) {
-        target = resolve_last_session_name().unwrap_or_else(|| "default".to_string());
-    }
+    let (_target, port, session_key) = resolve_server_for_command(&home, &line)?;
     let full_target = env::var("PSMUX_TARGET_FULL").ok();
-    let path = format!("{}\\.psmux\\{}.port", home, target);
-    let port = std::fs::read_to_string(&path)
-        .ok()
-        .and_then(|s| s.trim().parse::<u16>().ok())
-        .ok_or_else(|| io::Error::other(format!("no server running on session '{}'", target)))?;
-    let session_key = read_session_key(&target).unwrap_or_default();
     let addr = format!("127.0.0.1:{}", port);
     let mut stream = std::net::TcpStream::connect(&addr)?;
     let _ = stream.set_nodelay(true);

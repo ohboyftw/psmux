@@ -466,20 +466,21 @@ fn parse_set_option(app: &mut AppState, line: &str) {
         String::new()
     };
 
-    // Handle -u (unset): reset option to empty
+    // Handle -u (unset): reset option to empty and drop from user_set_options
     if unset_mode {
+        app.user_set_options.remove(key);
         parse_option_value(app, &format!("{} ", key), is_global);
         return;
     }
 
-    // Handle -o (only set if not currently set)
-    if only_if_unset {
-        let current = crate::format::lookup_option_pub(key, app);
-        if let Some(ref v) = current {
-            if !v.is_empty() {
-                return;
-            }
-        }
+    // Handle -o (only set if the user hasn't explicitly set it before).
+    //
+    // Membership in `user_set_options` is the source of truth — checking
+    // `!value.is_empty()` (the previous approach) would always return true
+    // for options with non-empty defaults (status-bg, status-style, etc.),
+    // making `-o` a silent no-op for ~90% of options. Upstream b6098bb fix.
+    if only_if_unset && app.user_set_options.contains(key) {
+        return;
     }
 
     // Expand format strings in the value if -F flag is set
@@ -501,6 +502,9 @@ fn parse_set_option(app: &mut AppState, line: &str) {
 
     let rest = format!("{} {}", key, final_value);
     parse_option_value(app, &rest, is_global);
+    // Record that the user has explicitly touched this option so future
+    // `set-option -o` calls short-circuit correctly.
+    app.user_set_options.insert(key.to_string());
 }
 
 pub fn parse_option_value(app: &mut AppState, rest: &str, _is_global: bool) {
@@ -691,6 +695,9 @@ pub fn parse_option_value(app: &mut AppState, rest: &str, _is_global: bool) {
         }
         "allow-rename" => {
             app.allow_rename = matches!(value, "on" | "true" | "1");
+        }
+        "allow-set-title" => {
+            app.allow_set_title = matches!(value, "on" | "true" | "1");
         }
         "terminal-overrides" => { /* tmux terminfo override — accepted for compatibility, no-op on Windows */
         }
@@ -1776,13 +1783,16 @@ fn parse_if_shell(app: &mut AppState, line: &str) {
     } else {
         #[cfg(windows)]
         {
+            use crate::platform::HideWindowCommandExt;
             std::process::Command::new("pwsh")
                 .args(["-NoProfile", "-Command", condition])
+                .hide_window()
                 .status()
                 .map(|s| s.success())
                 .unwrap_or_else(|_| {
                     std::process::Command::new("cmd")
                         .args(["/c", condition])
+                        .hide_window()
                         .status()
                         .map(|s| s.success())
                         .unwrap_or(false)
@@ -1888,6 +1898,49 @@ mod tests {
         // Should not panic when removing a hook that doesn't exist
         parse_config_line(&mut app, "set-hook -gu nonexistent-hook");
         assert!(!app.hooks.contains_key("nonexistent-hook"));
+    }
+
+    // ── set-option -o (only-if-unset) — upstream b6098bb fix ──────────────
+
+    #[test]
+    fn set_option_o_sets_value_when_unset() {
+        let mut app = AppState::new("test".to_string());
+        parse_config_line(&mut app, "set-option -og status-left 'first'");
+        assert_eq!(app.status_left, "first");
+        assert!(app.user_set_options.contains("status-left"));
+    }
+
+    #[test]
+    fn set_option_o_noop_when_previously_set() {
+        let mut app = AppState::new("test".to_string());
+        parse_config_line(&mut app, "set-option -g status-left 'original'");
+        parse_config_line(&mut app, "set-option -og status-left 'override'");
+        assert_eq!(app.status_left, "original");
+    }
+
+    #[test]
+    fn set_option_o_works_for_options_with_nonempty_defaults() {
+        // The exact bug upstream b6098bb fixes: status-left has a default of "[#S] "
+        // so the old `!v.is_empty()` check made `-o` a silent no-op.
+        let mut app = AppState::new("test".to_string());
+        // Default should be non-empty but NOT in user_set_options.
+        assert!(!app.status_left.is_empty(), "status-left has a default");
+        assert!(!app.user_set_options.contains("status-left"));
+        // -o should still apply the user's value.
+        parse_config_line(&mut app, "set-option -og status-left 'user-value'");
+        assert_eq!(app.status_left, "user-value");
+    }
+
+    #[test]
+    fn set_option_u_removes_from_user_set_options() {
+        let mut app = AppState::new("test".to_string());
+        parse_config_line(&mut app, "set-option -g status-left 'x'");
+        assert!(app.user_set_options.contains("status-left"));
+        parse_config_line(&mut app, "set-option -gu status-left");
+        assert!(!app.user_set_options.contains("status-left"));
+        // After -u, -o should once again accept a new value.
+        parse_config_line(&mut app, "set-option -og status-left 'after-unset'");
+        assert_eq!(app.status_left, "after-unset");
     }
 }
 

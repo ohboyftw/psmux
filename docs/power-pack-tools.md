@@ -291,3 +291,103 @@ psmux attach -t work
 | Split pane vertical | — | Ctrl+b " |
 | Detach session | — | Ctrl+b d |
 | System info | `fastfetch` | (auto on shell start) |
+
+---
+
+## Power Pack Extras
+
+Tools installed alongside the core stack. Each solves a narrower pain point than the main eight, but earns its place in the daily-use rotation.
+
+### atuin — shell history with real search
+
+**Replaces:** the default `.bash_history` / PSReadLine buffer.
+
+**Pain:** `Ctrl+R` only searches the current shell's in-memory history. History is lost when the terminal closes. No way to share it between bash/pwsh/zsh.
+
+**What it does:** Syncs command history to a local SQLite store across every shell, with full-text search, timestamps, exit codes, and optional end-to-end encrypted sync between machines.
+
+```bash
+atuin search deploy     # find every `deploy` command ever run
+atuin stats             # top commands, most-used directories
+# Ctrl+R is rebound to atuin's TUI picker after `eval "$(atuin init bash)"`
+```
+
+### eza — modern `ls`
+
+**Replaces:** `ls`, `dir`, `Get-ChildItem`.
+
+**Pain:** `ls -la` has no color, no git awareness, no tree mode.
+
+**What it does:** Colorized listings with icons (font permitting), git status per file, tree view, and sensible human sizes.
+
+```bash
+eza -l --git           # long listing + git status column
+eza -T -L 2            # tree, 2 levels deep
+eza --sort=modified    # most recent last
+```
+
+### jq — JSON on the command line
+
+**Replaces:** manually eyeballing JSON, ad-hoc Python one-liners.
+
+**Pain:** Piping JSON through `grep` is painful and fragile. PowerShell's `ConvertFrom-Json` is verbose.
+
+**What it does:** Slice, filter, map, transform JSON with a concise expression language.
+
+```bash
+psmux list-sessions --json | jq '.[].name'
+gh pr list --json number,title | jq -r '.[] | "#\(.number) \(.title)"'
+cat plan.json | jq '.workers[] | select(.depends_on | length > 0)'
+```
+
+### ast-grep (`sg`) — structural code search and rewrite
+
+**Replaces:** regex-based refactoring when regexes can't express the pattern.
+
+**Pain:** "Find all `match` expressions with a `_ =>` arm that returns `Ok(())`" can't be written as a regex — the Rust grammar isn't regular.
+
+**What it does:** AST-aware matching across 20+ languages. Patterns look like code, not regex. Supports rewrites with captures.
+
+```bash
+sg --pattern 'unwrap()' --lang rust src/
+sg --pattern 'fn $NAME($$$) { $$$ }' --lang rust src/
+sg --pattern 'foo($X)' --rewrite 'bar($X)' --lang rust --update-all
+```
+
+### tokei — project line counts
+
+**Replaces:** `cloc`, ad-hoc `wc -l` shell pipelines.
+
+**Pain:** "How big is this Rust project?" needs to skip vendored code, target/, tests.
+
+**What it does:** Fast LOC breakdown by language, respects `.gitignore`.
+
+```bash
+tokei                  # run in the repo root
+tokei src/ tests/      # restrict to specific dirs
+tokei --output json    # machine-readable
+```
+
+### gh — GitHub from the terminal
+
+**Replaces:** the GitHub web UI for PR/issue/release workflows.
+
+**Pain:** Context-switching to a browser breaks flow. URLs are long. Authentication state is fragile.
+
+**What it does:** First-class CLI for PRs, issues, releases, checks, workflows. Scriptable via `--json` + `jq`.
+
+```bash
+gh pr list --state open
+gh pr create --fill
+gh issue view 1234 --comments
+gh workflow run deploy.yml
+gh run watch           # follow the current run until it finishes
+```
+
+### Also useful (not bundled)
+
+These round out the stack for git-heavy workflows or dedicated editing. Install manually if you want them — `scripts/install.ps1` doesn't ship them by default:
+
+- **delta** — side-by-side git diff with syntax highlighting
+- **direnv** — per-directory environment overlays
+- **lazygit** — TUI for staging, committing, branching

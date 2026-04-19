@@ -144,6 +144,7 @@
 **new-window** (`neww`) — `"abc:de:F:kn:PSt:"`
 - Boolean: `-a` (after current), `-b` (before current), `-d` (don't switch), `-k` (kill if exists), `-P` (print info), `-S` (select if exists)
 - Value: `-c` (start-dir), `-e` (environment), `-F` (format), `-n` (window-name), `-t` (target-window)
+- **psmux extension**: `--shell bash|pwsh|cmd` — override the shell used for this window only (does not change `default-shell`)
 
 **kill-window** (`killw`) — `"at:"`
 - Boolean: `-a` (kill all other)
@@ -200,6 +201,7 @@
 **split-window** (`splitw`) — `"bc:de:fF:hIl:p:Pt:vZ"`
 - Boolean: `-b` (before), `-d` (don't switch), `-f` (full width/height), `-h` (horizontal), `-I` (stdin forward), `-P` (print info), `-v` (vertical), `-Z` (zoom)
 - Value: `-c` (start-dir), `-e` (environment), `-F` (format), `-l` (size), `-p` (percentage), `-t` (target-pane)
+- **psmux extension**: `--shell bash|pwsh|cmd` — override the shell used for this pane only
 
 **select-pane** (`selectp`) — `"DdegLlMmP:RT:t:UZ"`
 - Boolean: `-D` (down), `-d` (disable input), `-e` (enable input), `-g` (show style), `-L` (left), `-l` (last), `-M` (clear marked), `-m` (mark), `-R` (right), `-U` (up), `-Z` (keep zoomed)

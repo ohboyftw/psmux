@@ -164,6 +164,58 @@ psmux split-window -- "C:/Program Files/Git/bin/bash.exe"
 | `window-status-activity-style` | Str | `reverse` | Activity tab style |
 | `window-status-bell-style` | Str | `reverse` | Bell tab style |
 | `window-status-last-style` | Str | | Last-active tab style |
+| `status-unfocused-style` | Str | `fg=brightblack` | Desaturated status bar when the window has no focus (psmux extension; set to empty to disable) |
+
+### `status-format` array-index syntax
+
+`status-format` is an array option. Individual lines of the status bar can be
+addressed by index using bracket notation:
+
+```tmux
+# Override line 0 of the status bar with a custom template
+set -g "status-format[0]" "#[fg=green]#S #[fg=default]#W"
+
+# Style directives (#[...]) are accepted in the value
+set -g "status-format[0]" "#[fg=red,bold]ALERT: #S"
+```
+
+The key form is `"status-format[N]"` where `N` is the zero-based line index.
+Quoting the key is required because the `[` and `]` characters must be passed
+as a literal string to `set-option`. The set is accepted without error even if
+the option is not yet rendered by an attached client (not validated headless).
+
+### Guarded option setting (`-o`, `-u`)
+
+`set-option -o` is a guarded set: if the option is already present in the
+server's `user_set_options` registry, the write is silently skipped. If the
+option is not yet set, the value is written and the key is added to the
+registry.
+
+`set-option -u` removes the key from the `user_set_options` registry (and
+clears the value). After a `-u`, a subsequent `-o` can write the option again.
+
+```tmux
+# Initialization pattern — set a default that does not override a user's
+# earlier explicit set:
+set -g -o status-left "[#S] "      # applies only if not already set by user
+
+# A later explicit set (no -o) always wins:
+set -g status-left ">> #S <<"      # marks key as user-set; future -o calls skip it
+
+# Reset to "unset" so a plugin's -o can take effect again:
+set -g -u status-left
+set -g -o status-left "[plugin] "  # now applies
+```
+
+Use cases:
+- **Plugin / rc-snippet defaults**: write `set -g -o <key> <default>` so a
+  user's `~/.psmux.conf` line that runs first wins without the plugin
+  overriding it.
+- **Layered configs**: load a base config with `-o` defaults, then load a user
+  overlay with plain `set` overrides. Order doesn't matter — `-o` will skip
+  whichever option the other file already wrote.
+
+Works on any option key including `@user-options`.
 
 ### psmux Extensions (Windows-specific)
 

@@ -57,3 +57,25 @@ jobs:
         run: cargo test --test passthrough_tests
       - name: Unit tests
         run: cargo test
+
+  rails-bench:
+    name: Rails Bench (ps1)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Build release binary
+        run: cargo build --release
+      - name: Install psmux onto PATH
+        shell: pwsh
+        run: |
+          $dest = Join-Path $env:LOCALAPPDATA 'psmux'
+          New-Item -ItemType Directory -Path $dest -Force | Out-Null
+          Copy-Item target/release/psmux.exe $dest/
+          "$dest" | Out-File -Append -Encoding ascii $env:GITHUB_PATH
+      - name: Verify static parity
+        shell: pwsh
+        run: pwsh tests/verify_parity.ps1
+      - name: Run rails bench
+        shell: pwsh
+        run: pwsh tests/run_rails_bench.ps1

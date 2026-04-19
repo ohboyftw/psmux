@@ -279,7 +279,7 @@ Critical fixes for production use with Claude Code and agent swarms:
 
 These fixes compound: the DCS buffer growth caused memory pressure, which slowed child processes, which filled ConPTY input buffers, which blocked the event loop, which buffered all keybindings for minutes.
 
-**Upstream sync** (`sync-2026-04-18-finch`): the last three rows above were ported from upstream `psmux/psmux` as part of the automated `/upstream-pulse` workflow. See `.claude/upstream-pulse/reports/sync-2026-04-18-finch.md` and `docs/ohboy-builds-backlog.md` for the full 47-commit triage, decomposition rationale, and queued work.
+**Upstream sync** (`sync-2026-04-18-finch`): the last three rows above were ported from upstream `psmux/psmux` as part of the automated `/upstream-pulse` workflow.
 
 ## Television Integration
 
@@ -313,12 +313,15 @@ tv psmux-keys        # Browse key bindings
 | **[Compatibility](docs/compatibility.md)** | tmux command/config compatibility matrix |
 | **[Performance](docs/performance.md)** | Benchmarks and optimization details |
 | **[Key Bindings](docs/keybindings.md)** | Default keys and customization |
-| **[Scripting](docs/scripting.md)** | 92 commands, hooks, targets, pipe-pane |
+| **[Scripting](docs/scripting.md)** | 92 commands, hooks, targets, pipe-pane, exec, wait-for, wait-pane |
+| **[Orchestrate](docs/orchestrate.md)** | DAG worker runner — plan.json schema, exit codes, state.json, recovery |
 | **[Configuration](docs/configuration.md)** | Config files, options, environment variables |
 | **[Plugins & Themes](docs/plugins.md)** | Plugin ecosystem — Catppuccin, Dracula, Nord, and more |
 | **[Mouse Over SSH](docs/mouse-ssh.md)** | SSH mouse support and Windows version requirements |
 | **[Claude Code](docs/claude-code.md)** | Agent teams integration guide |
-| **[FAQ](docs/faq.md)** | Common questions and answers |
+| **[CustomPaneBackend](docs/custompane-backend.md)** | JSON-RPC protocol reference — methods, schemas, push events |
+| **[Remote tmux](docs/remote-tmux.md)** | Connect to remote tmux sessions over SSH |
+| **[FAQ](docs/faq.md)** | Common questions, answers, and crash diagnostics |
 
 ## Related Projects
 

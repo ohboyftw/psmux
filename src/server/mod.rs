@@ -482,8 +482,13 @@ fn drain_plugin_req(
                 }
             }
         }
-        CtrlReq::SetOptionQuiet(option, value, quiet) => {
-            apply_set_option(app, &option, &value, quiet);
+        CtrlReq::SetOptionQuiet(option, value, quiet, only_if_unset) => {
+            if only_if_unset && app.user_set_options.contains(&option) {
+                // -o: no-op when the option was already set by the user
+            } else {
+                apply_set_option(app, &option, &value, quiet);
+                app.user_set_options.insert(option.clone());
+            }
             if option == "command-alias" {
                 if let Ok(mut map) = shared_aliases.write() {
                     *map = app.command_aliases.clone();
@@ -505,6 +510,7 @@ fn drain_plugin_req(
             }
         }
         CtrlReq::SetOptionUnset(option) => {
+            app.user_set_options.remove(&option);
             if option.starts_with('@') {
                 app.user_options.remove(&option);
             }
@@ -545,6 +551,7 @@ fn drain_plugin_req(
             }
         }
         CtrlReq::SourceFile(path) => {
+            app.defaults_suppressed = false;
             crate::config::source_file(app, &path);
         }
         // Ignore other request types during plugin drain
@@ -1075,6 +1082,7 @@ pub fn run_server(
                         CtrlReq::FocusPaneTemp(_) => "FocusPaneTemp",
                         CtrlReq::FocusPaneTempCheck(..) => "FocusPaneTempCheck",
                         CtrlReq::NewWindow(..) => "NewWindow",
+                        CtrlReq::NewWindowRaw(..) => "NewWindowRaw",
                         CtrlReq::KillWindow => "KillWindow",
                         CtrlReq::KillPane => "KillPane",
                         CtrlReq::KillPaneById(_) => "KillPaneById",
@@ -1233,6 +1241,78 @@ pub fn run_server(
                                     app.warm_pane = Some(wp);
                                 }
                             }
+                            resize_all_panes(&mut app);
+                            meta_dirty = true;
+                            hook_event = Some("after-new-window");
+                        }
+                        CtrlReq::NewWindowRaw(argv, name, detached, start_dir) => {
+                            let prev_idx = app.active_idx;
+                            let start_dir = start_dir
+                                .map(|d| expand_format(&d, &app))
+                                .filter(|d: &String| !d.is_empty());
+                            let saved_dir = if start_dir.is_some() {
+                                env::current_dir().ok()
+                            } else {
+                                None
+                            };
+                            if let Some(dir) = &start_dir {
+                                env::set_current_dir(dir).ok();
+                            }
+                            let stashed_warm = app.warm_pane.take();
+                            if let Err(e) = create_window_raw(&*pty_system, &mut app, &argv) {
+                                eprintln!("psmux: new-window-raw error: {e}");
+                            }
+                            app.warm_pane = stashed_warm;
+                            if let Some(prev) = saved_dir {
+                                env::set_current_dir(prev).ok();
+                            }
+                            if let Some(n) = name {
+                                if let Some(w) = app.windows.last_mut() {
+                                    w.name = n;
+                                    w.manual_rename = true;
+                                }
+                            }
+                            if detached {
+                                app.active_idx = prev_idx;
+                            }
+                            resize_all_panes(&mut app);
+                            meta_dirty = true;
+                            hook_event = Some("after-new-window");
+                        }
+                        CtrlReq::NewWindowRawPrint(argv, name, detached, start_dir, format_str, resp) => {
+                            let prev_idx = app.active_idx;
+                            let start_dir = start_dir
+                                .map(|d| expand_format(&d, &app))
+                                .filter(|d: &String| !d.is_empty());
+                            let saved_dir = if start_dir.is_some() {
+                                env::current_dir().ok()
+                            } else {
+                                None
+                            };
+                            if let Some(dir) = &start_dir {
+                                env::set_current_dir(dir).ok();
+                            }
+                            let stashed_warm = app.warm_pane.take();
+                            if let Err(e) = create_window_raw(&*pty_system, &mut app, &argv) {
+                                eprintln!("psmux: new-window-raw error: {e}");
+                            }
+                            app.warm_pane = stashed_warm;
+                            if let Some(prev) = saved_dir {
+                                env::set_current_dir(prev).ok();
+                            }
+                            if let Some(n) = name {
+                                if let Some(w) = app.windows.last_mut() {
+                                    w.name = n;
+                                    w.manual_rename = true;
+                                }
+                            }
+                            let new_win_idx = app.windows.len() - 1;
+                            let fmt = format_str.as_deref().unwrap_or("#{session_name}:#{window_index}");
+                            let pane_info = crate::format::expand_format_for_window(fmt, &app, new_win_idx);
+                            if detached {
+                                app.active_idx = prev_idx;
+                            }
+                            let _ = resp.send(pane_info);
                             resize_all_panes(&mut app);
                             meta_dirty = true;
                             hook_event = Some("after-new-window");
@@ -1769,6 +1849,11 @@ pub fn run_server(
                             // ── Activity / bell / silence detection ──
                             helpers::check_window_activity(&mut app);
 
+                            // ── Propagate OSC 0/2 titles to pane.title ──
+                            if helpers::propagate_osc_titles(&mut app) {
+                                state_dirty = true;
+                            }
+
                             // ── Automatic rename / allow-rename: resolve window names ──
                             {
                                 let in_copy =
@@ -2255,14 +2340,17 @@ pub fn run_server(
                             hook_event = Some("after-rename-window");
                         }
                         CtrlReq::ListWindows(resp) => {
+                            helpers::propagate_osc_titles(&mut app);
                             let json = list_windows_json(&app)?;
                             let _ = resp.send(json);
                         }
                         CtrlReq::ListWindowsTmux(resp) => {
+                            helpers::propagate_osc_titles(&mut app);
                             let text = list_windows_tmux(&app);
                             let _ = resp.send(text);
                         }
                         CtrlReq::ListWindowsFormat(resp, fmt) => {
+                            helpers::propagate_osc_titles(&mut app);
                             let text = format_list_windows(&app, &fmt);
                             let _ = resp.send(text);
                         }
@@ -2277,6 +2365,7 @@ pub fn run_server(
                             let win = &mut app.windows[app.active_idx];
                             if let Some(p) = active_pane_mut(&mut win.root, &win.active_path) {
                                 p.title = title;
+                                p.title_locked = true;
                             }
                         }
                         CtrlReq::SetPaneStyle(style) => {
@@ -3072,6 +3161,7 @@ pub fn run_server(
                             hook_event = Some("after-select-window");
                         }
                         CtrlReq::ListPanes(resp) => {
+                            helpers::propagate_osc_titles(&mut app);
                             let mut output = String::new();
                             let win = &app.windows[app.active_idx];
                             fn collect_panes(
@@ -3148,6 +3238,7 @@ pub fn run_server(
                             let _ = resp.send(output);
                         }
                         CtrlReq::ListPanesFormat(resp, fmt) => {
+                            helpers::propagate_osc_titles(&mut app);
                             let text = format_list_panes(&app, &fmt, app.active_idx);
                             let _ = resp.send(text);
                         }
@@ -3200,6 +3291,7 @@ pub fn run_server(
                             let _ = resp.send(json);
                         }
                         CtrlReq::ListPanesJson(resp, all) => {
+                            helpers::propagate_osc_titles(&mut app);
                             #[allow(clippy::type_complexity)]
                             fn collect_panes_json(
                                 node: &Node,
@@ -3262,6 +3354,7 @@ pub fn run_server(
                             let _ = resp.send(json);
                         }
                         CtrlReq::ListWindowsJson(resp) => {
+                            helpers::propagate_osc_titles(&mut app);
                             let layout_names = [
                                 "even-horizontal",
                                 "even-vertical",
@@ -3654,6 +3747,8 @@ pub fn run_server(
                             }
                         }
                         CtrlReq::DisplayMessage(resp, fmt, target_pane_idx, _) => {
+                            // Propagate OSC titles so #{pane_title} reflects latest state
+                            helpers::propagate_osc_titles(&mut app);
                             let result = if let Some(pane_idx) = target_pane_idx {
                                 // -t targeting: evaluate format for the specific pane
                                 // using PANE_POS_OVERRIDE so #{pane_active} reflects
@@ -3798,9 +3893,17 @@ pub fn run_server(
                                 }
                             }
                         }
-                        CtrlReq::RespawnPane => {
-                            respawn_active_pane(&mut app, Some(&*pty_system))?;
-                            hook_event = Some("after-respawn-pane");
+                        CtrlReq::RespawnPane(kill) => {
+                            // Failure here (e.g. "pane still active" without -k)
+                            // must not tear down the server — log and continue.
+                            match respawn_active_pane(&mut app, Some(&*pty_system), kill) {
+                                Ok(()) => {
+                                    hook_event = Some("after-respawn-pane");
+                                }
+                                Err(e) => {
+                                    eprintln!("psmux respawn-pane: {}", e);
+                                }
+                            }
                         }
                         CtrlReq::BindKey(table_name, key, command, repeat) => {
                             if let Some(kc) = parse_key_string(&key) {
@@ -3868,9 +3971,16 @@ pub fn run_server(
                             meta_dirty = true;
                             state_dirty = true;
                         }
-                        CtrlReq::SetOptionQuiet(option, value, quiet) => {
+                        CtrlReq::SetOptionQuiet(option, value, quiet, only_if_unset) => {
+                            if only_if_unset && app.user_set_options.contains(&option) {
+                                // -o on already-set option: no-op (P0.2)
+                                meta_dirty = true;
+                                state_dirty = true;
+                                continue;
+                            }
                             let old_shell = app.default_shell.clone();
                             apply_set_option(&mut app, &option, &value, quiet);
+                            app.user_set_options.insert(option.clone());
                             // If default-shell changed, kill the warm pane so the next
                             // new-window spawns the correct shell (fixes #99).
                             if app.default_shell != old_shell {
@@ -3888,6 +3998,8 @@ pub fn run_server(
                             state_dirty = true;
                         }
                         CtrlReq::SetOptionUnset(option) => {
+                            // Remove from user_set_options so a subsequent -o can set again (P0.2).
+                            app.user_set_options.remove(&option);
                             // Reset option to default or remove @user-option
                             if option.starts_with('@') {
                                 app.user_options.remove(&option);
@@ -4233,6 +4345,10 @@ pub fn run_server(
                             let _ = resp.send(output);
                         }
                         CtrlReq::SourceFile(path) => {
+                            // Reset defaults_suppressed so the flag reflects the
+                            // CURRENT config. If the reloaded config still has
+                            // unbind-key -a, parsing will set it back to true.
+                            app.defaults_suppressed = false;
                             // Use config helper for standard source-file behavior (-F support,
                             // nested parse context). Keep direct glob handling for wildcard sources.
                             let is_format_expand =
@@ -4915,7 +5031,7 @@ pub fn run_server(
                         }
                         CtrlReq::RespawnWindow => {
                             // Kill all panes in the active window and respawn
-                            respawn_active_pane(&mut app, Some(&*pty_system))?;
+                            respawn_active_pane(&mut app, Some(&*pty_system), true)?;
                             state_dirty = true;
                         }
                         CtrlReq::PopupInput(data) => {
