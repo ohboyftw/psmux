@@ -186,7 +186,7 @@ Agent logs are saved as `~/.psmux/agent-logs/YYYYMMDD-HHMMSS_<session>_<pane>.lo
 | **Declarative layouts** | `--layout file.json` | Define multi-pane workspaces in JSON, apply with `source-file` |
 | **Zoxide picker** | `Ctrl+b z` | Frecency-ranked directory popup via zoxide + fzf |
 
-See [docs/power-pack-tools.md](docs/power-pack-tools.md) for the full tool stack guide (ripgrep, fd, bat, zoxide, fzf, starship, fastfetch).
+See [docs/power-pack-tools.md](docs/power-pack-tools.md) for the full tool stack guide. `scripts/install.ps1` bundles 13 tools: the core 7 (ripgrep, fd, bat, zoxide, fzf, starship, fastfetch) plus 6 extras (atuin, eza, jq, ast-grep, tokei, gh).
 
 > **[`ohboy-builds` branch](https://github.com/ohboyftw/psmux/tree/ohboy-builds)** adds production-grade agent orchestration on top of `master`:
 >
@@ -222,8 +222,10 @@ See [docs/power-pack-tools.md](docs/power-pack-tools.md) for the full tool stack
 > **Programmatic Execution (v3.3.0):**
 > - **`exec`** — `psmux exec -t %N -- command args...` runs a process in the pane's cwd/env and returns JSON `{"exit_code", "stdout", "stderr"}`. Replaces fragile `send-keys` for programmatic use
 > - **`new-window -- command`** — Launch a command directly as the pane's initial process (like tmux). Supports `split-window --` too
+> - **`new-window --raw --`** — Bypass the default-shell wrapper and spawn `argv[0]` directly with the rest as arguments. Avoids pwsh intercepting `>` / `|` / `&&` before cmd/bash sees them. Used by orchestrate for every worker
 > - **`#{pane_exit_code}`** — Format variable exposing the exit code of dead panes. Also available as `#{pane_dead_status}`
 > - **`capture-pane --plain`** — Strips all ANSI/VT escape sequences for clean programmatic consumption
+> - **`capture-pane -S/-E` negative-index clamp** — Negative scrollback offsets clamp to row 0 instead of panicking
 > - **`kill-pane` fix** — Immediately removes the window when the last pane is killed (no more dead pane lingering)
 > - **Target error handling** — `list-panes -t %nonexistent` and `list-windows -t` return non-zero exit codes
 >
@@ -232,6 +234,7 @@ See [docs/power-pack-tools.md](docs/power-pack-tools.md) for the full tool stack
 > - **`wait-for --file PATH`** — Block until a file appears (server-side polling). Eliminates client-side sentinel loops
 > - **`wait-for --output REGEX`** — Block until a regex matches the pane's live screen buffer (50ms polling)
 > - **`wait-for --ready`** — Block until the pane reaches an idle prompt (reuses `context_ready` signal)
+> - **`--timeout <ms>`** — Milliseconds on both `wait-for` and `wait-pane`. CLI socket read-timeout sizes from it plus headroom; exit codes `0` success, `1` timeout, `2` error
 > - **`--json` output** — All wait-for modes return structured `WaitOutcome` JSON for machine consumption
 > - **JSON-RPC `wait_for`** — Same conditions available via the CustomPaneBackend named pipe
 >
@@ -241,12 +244,15 @@ See [docs/power-pack-tools.md](docs/power-pack-tools.md) for the full tool stack
 > - **Deprecation shim** — `psmux/pane/died` still published alongside `psmux/pane/exited` for one release
 >
 > **DAG Orchestration:**
-> - **`psmux orchestrate plan.json`** — Reads a worker DAG, provisions git worktrees, launches panes in topological order
+> - **`psmux orchestrate plan.json`** — Reads a worker DAG, provisions git worktrees, launches panes in topological order via `new-window --raw` (no shell wrapping — plans can use `["cmd","/c","echo A > path"]` safely)
 > - **Dependency resolution** — Workers with `depends_on` wait for predecessors to exit successfully before starting
 > - **Failure propagation** — Non-zero exit skips all transitive dependents; independent workers continue
-> - **State persistence** — `.orchestration/<session>/state.json` survives crashes; resume with re-invoke
+> - **Exit-code recovery** — Sets `remain-on-exit on` at session level before spawning so dead panes survive the 500ms poll tick; explicitly kills them after exit code is observed. Real exit codes land in `state.json` instead of the old `EXIT_PANE_GONE (-1)` fallback
+> - **State persistence** — `<plan_dir>/.orchestration/<session>/state.json` (next to the plan, not CWD) survives crashes; resume with re-invoke
+> - **`--timeout <ms>`** — Hard wall-clock ceiling. Still-running workers get `exit_code = -2`; CLI exits with code `3` (distinct from `1` for real worker failure)
 > - **`--cleanup`** — Removes worktrees and orchestration state after completion
 > - **`--json`** — Machine-readable final state with per-worker status, exit codes, and crash dump paths
+> - **Guide:** [docs/orchestrate.md](docs/orchestrate.md) — full plan.json schema, worker lifecycle, recovery
 >
 > **Crash Diagnostics:**
 > - **Panic hook** — Writes crash reports with full backtrace to `%LOCALAPPDATA%/psmux/crashes/`
