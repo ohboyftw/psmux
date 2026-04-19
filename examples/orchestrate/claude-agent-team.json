@@ -1,0 +1,47 @@
+{
+  "version": 1,
+  "session": "orc-agents",
+  "workers": [
+    {
+      "id": "researcher",
+      "cwd": "./worktrees/researcher",
+      "command": [
+        "claude", "-p",
+        "Read the repo and write a one-page summary of the auth module in docs/auth-summary.md. Commit when done."
+      ],
+      "worktree": {
+        "repo": ".",
+        "branch": "agent/researcher",
+        "base": "ohboy-builds"
+      }
+    },
+    {
+      "id": "coder",
+      "cwd": "./worktrees/coder",
+      "command": [
+        "claude", "-p",
+        "Read docs/auth-summary.md from branch agent/researcher. Refactor src/auth.rs to match the summary's recommendations. Commit when done."
+      ],
+      "depends_on": ["researcher"],
+      "worktree": {
+        "repo": ".",
+        "branch": "agent/coder",
+        "base": "agent/researcher"
+      }
+    },
+    {
+      "id": "reviewer",
+      "cwd": "./worktrees/reviewer",
+      "command": [
+        "claude", "-p",
+        "Review the diff on branch agent/coder against ohboy-builds. Write findings to docs/review.md. Approve or reject with reasons."
+      ],
+      "depends_on": ["coder"],
+      "worktree": {
+        "repo": ".",
+        "branch": "agent/reviewer",
+        "base": "agent/coder"
+      }
+    }
+  ]
+}

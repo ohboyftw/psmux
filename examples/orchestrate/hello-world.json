@@ -1,0 +1,19 @@
+{
+  "version": 1,
+  "session": "orc-hello",
+  "workers": [
+    {
+      "id": "greeter",
+      "command": ["cmd", "/c", "echo Hello from worker A && timeout /t 1 /nobreak > NUL"]
+    },
+    {
+      "id": "responder",
+      "command": ["cmd", "/c", "echo Hello from worker B"],
+      "depends_on": ["greeter"]
+    },
+    {
+      "id": "independent",
+      "command": ["cmd", "/c", "echo Worker C runs in parallel with A"]
+    }
+  ]
+}

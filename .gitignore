@@ -91,3 +91,4 @@ test-reports/
 # Versioned locally as a nested git repo at .claude/internal/; never
 # pushed to the public psmux remote.
 .claude/internal/
+.orchestration/

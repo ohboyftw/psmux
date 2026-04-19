@@ -12,6 +12,14 @@ psmux new-session -d -s build
 psmux orchestrate ./plan.json --timeout 300000 --json
 ```
 
+Runnable examples live in [`examples/orchestrate/`](../examples/orchestrate/):
+
+- [`hello-world.json`](../examples/orchestrate/hello-world.json) — smoke test with three trivial workers, one dependency edge. Finishes in ~6s, no external tools required.
+- [`cargo-pipeline.json`](../examples/orchestrate/cargo-pipeline.json) — `compile` → `test` sequential, plus parallel `lint` and `fmt-check`. CI-on-your-terminal.
+- [`claude-agent-team.json`](../examples/orchestrate/claude-agent-team.json) — three Claude Code agents (researcher → coder → reviewer), each in its own git worktree.
+
+See [examples/orchestrate/README.md](../examples/orchestrate/README.md) for run instructions.
+
 Exit codes:
 
 | Code | Meaning |

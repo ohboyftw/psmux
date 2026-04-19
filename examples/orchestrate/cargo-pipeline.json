@@ -1,0 +1,27 @@
+{
+  "version": 1,
+  "session": "orc-cargo",
+  "workers": [
+    {
+      "id": "compile",
+      "cwd": ".",
+      "command": ["cargo", "build", "--release"]
+    },
+    {
+      "id": "test",
+      "cwd": ".",
+      "command": ["cargo", "test", "--lib"],
+      "depends_on": ["compile"]
+    },
+    {
+      "id": "lint",
+      "cwd": ".",
+      "command": ["cargo", "clippy", "--", "-D", "warnings"]
+    },
+    {
+      "id": "fmt-check",
+      "cwd": ".",
+      "command": ["cargo", "fmt", "--check"]
+    }
+  ]
+}
