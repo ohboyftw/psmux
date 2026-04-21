@@ -5942,6 +5942,11 @@ pub fn run_server(
                         ),
                     );
                 }
+                // Mark state dirty so the next loop iteration pushes a fresh
+                // frame with re-expanded strftime codes (%H:%M:%S, %r, etc.)
+                // in status-left / status-right.  Without this, the status
+                // bar clock never updates for persistent (TUI) clients.
+                state_dirty = true;
             }
         }
         // ── Memory diagnostics (every 5s when enabled) ──
