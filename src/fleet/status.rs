@@ -32,7 +32,6 @@ pub fn run(args: &[String]) -> io::Result<()> {
     let workspace = match table.find(&parsed.id) {
         Some(w) => w,
         None => {
-            eprintln!("psmux fleet status: WORKSPACE_NOT_FOUND: {}", parsed.id);
             return Err(io::Error::other(format!(
                 "WORKSPACE_NOT_FOUND: {}",
                 parsed.id

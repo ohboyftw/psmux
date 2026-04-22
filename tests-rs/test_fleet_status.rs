@@ -63,10 +63,20 @@ fn fleet_status_unknown_id_errors() {
         .env_remove("PSMUX_SESSION")
         .output()
         .unwrap();
-    assert!(!out.status.success());
+    assert_eq!(
+        out.status.code(),
+        Some(1),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
     let stderr = String::from_utf8_lossy(&out.stderr);
     assert!(
-        stderr.contains("WORKSPACE_NOT_FOUND") || stderr.contains("nonexistent"),
+        stderr.contains("WORKSPACE_NOT_FOUND") && stderr.contains("nonexistent"),
         "stderr was: {stderr}"
+    );
+    assert_eq!(
+        stderr.matches("WORKSPACE_NOT_FOUND").count(),
+        1,
+        "expected exactly one WORKSPACE_NOT_FOUND line, got: {stderr}"
     );
 }
