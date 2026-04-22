@@ -13,12 +13,14 @@ fn unique_dir() -> PathBuf {
 }
 
 fn rand_suffix() -> String {
+    use rand::Rng;
     use std::time::{SystemTime, UNIX_EPOCH};
     let nanos = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap()
         .as_nanos();
-    format!("{nanos:x}")
+    let r: u64 = rand::thread_rng().gen();
+    format!("{nanos:x}-{r:x}")
 }
 
 fn seed(dir: &std::path::Path, version: u64) -> PathBuf {

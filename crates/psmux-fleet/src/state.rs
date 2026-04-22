@@ -11,6 +11,16 @@ use fs2::FileExt;
 use psmux::orchestrate::{OrchestrationState, WorkerState, WorkerStatus};
 use std::path::{Path, PathBuf};
 
+/// RAII guard that releases the advisory file lock on drop. Private to this
+/// module; used by [`try_cas_commit`] to guarantee the lock is released on
+/// every path (happy, early-return mismatch, `?`-propagated error, panic).
+struct UnlockGuard<'a>(&'a std::fs::File);
+impl Drop for UnlockGuard<'_> {
+    fn drop(&mut self) {
+        let _ = self.0.unlock();
+    }
+}
+
 /// Reads state.json and projects orchestrate's `WorkerState` into FleetView's
 /// `Workspace` model.
 pub struct StateReader {
@@ -93,6 +103,16 @@ fn parse_ts(s: &str) -> Option<DateTime<Utc>> {
 /// so operators can tune the retry budget from real traffic. v1 is
 /// log-scraping only; v2 will wire this into a metrics exporter.
 ///
+/// # Closure semantics
+///
+/// The `mutate` closure may be invoked up to 3 times (once per attempt).
+/// Each invocation receives a **freshly re-read** `OrchestrationState` from
+/// disk — changes applied to `state` on a prior attempt are discarded on
+/// retry. The closure MUST be idempotent: applying it N times with the same
+/// logical intent must converge on the same mutation. For example,
+/// `workers.insert(id, state)` is safe; `list.push(item)` is NOT — it would
+/// double-append on retry.
+///
 /// # Concurrency model
 ///
 /// The CAS commit step (re-read + rename) is guarded by an OS-level
@@ -157,14 +177,6 @@ fn try_cas_commit(
         .truncate(false)
         .open(&lock_path)?;
     lock_file.lock_exclusive().map_err(FleetError::Io)?;
-    // Scope guard for unlock-on-drop: ensures unlock happens on every path
-    // (happy, early-return mismatch, and any `?`-propagated error below).
-    struct UnlockGuard<'a>(&'a std::fs::File);
-    impl Drop for UnlockGuard<'_> {
-        fn drop(&mut self) {
-            let _ = self.0.unlock();
-        }
-    }
     let _guard = UnlockGuard(&lock_file);
 
     // Re-read under the lock.
