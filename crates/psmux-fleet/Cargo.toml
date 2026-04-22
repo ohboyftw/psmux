@@ -4,6 +4,10 @@ version = "0.1.0"
 edition = "2021"
 license = "MIT"
 description = "Aggregator library over psmux fleet primitives — state, detectors, operations"
+repository = "https://github.com/psmux/psmux"
+readme = "README.md"
+keywords = ["psmux", "terminal", "multiplexer", "fleet", "orchestration"]
+categories = ["command-line-utilities"]
 
 [dependencies]
 serde = { version = "1", features = ["derive"] }
