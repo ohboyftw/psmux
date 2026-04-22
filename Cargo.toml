@@ -120,6 +120,9 @@ psmux-fleet = { path = "crates/psmux-fleet" }
 mycel-client = { path = "../mycel/clients/rust", optional = true }
 tokio = { version = "1", features = ["rt", "net", "io-util", "time", "sync"], optional = true }
 
+[dev-dependencies]
+tempfile = "3"
+
 [features]
 default = []
 mycel = ["dep:mycel-client", "dep:tokio"]

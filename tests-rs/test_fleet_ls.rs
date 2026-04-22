@@ -1,33 +1,17 @@
 //! Integration test for `psmux fleet ls --json`.
-//! Seeds a fake state.json, invokes the compiled binary, parses JSON output.
 
 use std::fs;
 use std::process::Command;
+use tempfile::TempDir;
 
 fn psmux_bin() -> &'static str {
     env!("CARGO_BIN_EXE_psmux")
 }
 
-fn unique_dir() -> std::path::PathBuf {
-    let base = std::env::temp_dir().join(format!("fleetview-cli-ls-{}", std::process::id()));
-    let dir = base.join(rand_suffix());
-    fs::create_dir_all(&dir).unwrap();
-    dir
-}
-
-fn rand_suffix() -> String {
-    use std::time::{SystemTime, UNIX_EPOCH};
-    let nanos = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap()
-        .as_nanos();
-    format!("{nanos:x}")
-}
-
 #[test]
 fn fleet_ls_json_reads_state_and_emits_workspaces() {
-    let dir = unique_dir();
-    let state_path = dir.join("state.json");
+    let td = TempDir::new().expect("create tempdir");
+    let state_path = td.path().join("state.json");
     fs::write(
         &state_path,
         include_str!("../crates/psmux-fleet/fixtures/state_healthy.json"),
@@ -50,7 +34,9 @@ fn fleet_ls_json_reads_state_and_emits_workspaces() {
         "stderr: {}",
         String::from_utf8_lossy(&out.stderr)
     );
-    let parsed: serde_json::Value = serde_json::from_slice(&out.stdout).expect("parse JSON output");
+
+    let parsed: serde_json::Value =
+        serde_json::from_slice(&out.stdout).expect("parse JSON output");
     let workspaces = parsed
         .get("workspaces")
         .and_then(|v| v.as_array())
@@ -58,5 +44,15 @@ fn fleet_ls_json_reads_state_and_emits_workspaces() {
     assert_eq!(workspaces.len(), 3);
     assert_eq!(parsed.get("total").and_then(|v| v.as_u64()), Some(3));
 
-    let _ = fs::remove_dir_all(&dir);
+    // Also verify projection correctness — not just count. Catches bugs where
+    // the right number of rows ship with wrong content.
+    let ids: Vec<&str> = workspaces
+        .iter()
+        .filter_map(|w| w.get("id").and_then(|v| v.as_str()))
+        .collect();
+    assert!(ids.contains(&"fix-auth"), "expected fix-auth id; got {ids:?}");
+    assert!(ids.contains(&"lint-docs"));
+    assert!(ids.contains(&"dead-worker"));
+
+    // TempDir drops here, cleaning up on success or panic.
 }
