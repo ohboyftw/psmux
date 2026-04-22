@@ -9,9 +9,14 @@ use std::path::Path;
 
 /// Collection of workspaces with query helpers.
 ///
+/// Tables are stateless snapshots — consumers call [`Self::hydrate_cold`] fresh
+/// per invocation (spec §3). The table holds no reference to `state.json`
+/// and will not observe on-disk updates.
+///
 /// Hydration modes:
 /// - [`Self::hydrate_cold`] — state.json only.
 /// - `hydrate_warm` (C2) — state.json + backend pipe + mycel.
+#[derive(Debug)]
 pub struct WorkspaceTable {
     workspaces: Vec<Workspace>,
 }
