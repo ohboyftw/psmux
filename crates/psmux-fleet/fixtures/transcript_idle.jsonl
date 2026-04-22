@@ -1,0 +1,3 @@
+{"type":"user","role":"user","content":"help me edit foo.py"}
+{"type":"assistant","tool_use":{"id":"tu_001","name":"Edit","input":{"path":"foo.py"}}}
+{"type":"tool_result","tool_use_id":"tu_001","content":"ok"}

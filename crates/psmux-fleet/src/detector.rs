@@ -92,3 +92,78 @@ impl AwaitingDetector for RegexDetector {
         None
     }
 }
+
+#[cfg(feature = "fleet-claude-transcript")]
+pub use transcript::ClaudeTranscriptDetector;
+
+#[cfg(feature = "fleet-claude-transcript")]
+mod transcript {
+    use std::collections::HashSet;
+    use std::path::Path;
+
+    /// Booster that parses Claude's private JSONL transcript format
+    /// (`~/.claude/projects/<proj>/<session>.jsonl`) to produce a precise
+    /// `awaiting_reason` string.
+    ///
+    /// # Contract
+    ///
+    /// This is a **refinement only** path (spec §8.2). It never flips a
+    /// workspace to `Awaiting` on its own — the `RegexDetector` holds that
+    /// responsibility. When this returns `None` (parse failure, missing
+    /// file, all tool_use entries matched), the regex verdict stands.
+    ///
+    /// # Stability
+    ///
+    /// Claude Code's JSONL format is undocumented and subject to change.
+    /// Any parse error silently downgrades to `None` rather than
+    /// propagating — a broken Claude release degrades `awaiting_reason`
+    /// quality but cannot take FleetView down.
+    pub struct ClaudeTranscriptDetector;
+
+    impl ClaudeTranscriptDetector {
+        /// Constructs a new detector. Stateless — no configuration required.
+        pub fn new() -> Self {
+            Self
+        }
+
+        /// Parses the transcript at `path`. Returns `Some("Tool approval: <name>")`
+        /// iff the last `tool_use` event has no matching `tool_result`.
+        /// Silent `None` on any parse or I/O failure.
+        pub fn boost_reason(&self, path: &Path) -> Option<String> {
+            let text = std::fs::read_to_string(path).ok()?;
+            let mut last_tool_use: Option<(String, String)> = None; // (id, name)
+            let mut matched: HashSet<String> = HashSet::new();
+            for line in text.lines() {
+                let v: serde_json::Value = match serde_json::from_str(line) {
+                    Ok(v) => v,
+                    Err(_) => continue,
+                };
+                if let Some(tu) = v.get("tool_use") {
+                    if let (Some(id), Some(name)) = (
+                        tu.get("id").and_then(|s| s.as_str()),
+                        tu.get("name").and_then(|s| s.as_str()),
+                    ) {
+                        last_tool_use = Some((id.to_string(), name.to_string()));
+                    }
+                }
+                if v.get("type").and_then(|s| s.as_str()) == Some("tool_result") {
+                    if let Some(id) = v.get("tool_use_id").and_then(|s| s.as_str()) {
+                        matched.insert(id.to_string());
+                    }
+                }
+            }
+            let (id, name) = last_tool_use?;
+            if matched.contains(&id) {
+                None
+            } else {
+                Some(format!("Tool approval: {name}"))
+            }
+        }
+    }
+
+    impl Default for ClaudeTranscriptDetector {
+        fn default() -> Self {
+            Self::new()
+        }
+    }
+}
