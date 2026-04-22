@@ -15,8 +15,7 @@ fn unmatched_tool_use_returns_reason() {
     let reason = d
         .boost_reason(&fixture("transcript_awaiting.jsonl"))
         .unwrap();
-    assert!(reason.contains("Edit"));
-    assert!(reason.to_lowercase().contains("tool"));
+    assert_eq!(reason, "Tool approval: Edit");
 }
 
 #[test]
