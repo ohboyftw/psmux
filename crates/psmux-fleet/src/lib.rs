@@ -6,4 +6,4 @@ pub mod state;
 pub use error::{ConflictKind, FleetError};
 pub use model::{AgentKind, Workspace, WorkspaceStatus};
 pub use session::SessionResolver;
-pub use state::StateReader;
+pub use state::{update_state, StateReader};
