@@ -1,3 +1,10 @@
+//! Pure data types for the FleetView model.
+//!
+//! No behavior lives here — detectors, state readers, and operations live in
+//! their own modules. The permissive serde contract (no `deny_unknown_fields`,
+//! `#[serde(default)]` on `metadata`) is deliberate: state.json from older
+//! orchestrate versions must still deserialize cleanly.
+
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -40,7 +47,7 @@ pub enum WorkspaceStatus {
 
 /// Uniform view of a fleet workspace, regardless of spawn origin
 /// (orchestrate worker, `fleet.new` spawn, or pre-existing `@agent`-tagged pane).
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Workspace {
     /// Stable identifier within the fleet (e.g. worker id or slug).
     pub id: String,
