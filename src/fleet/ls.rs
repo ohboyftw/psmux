@@ -73,7 +73,7 @@ pub fn run(args: &[String]) -> io::Result<()> {
     Ok(())
 }
 
-fn resolve_state_path(
+pub(crate) fn resolve_state_path(
     explicit: Option<PathBuf>,
     session: Option<String>,
 ) -> Result<PathBuf, String> {

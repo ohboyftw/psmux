@@ -75,6 +75,10 @@ path = "tests-rs/test_state_version.rs"
 name = "test_fleet_ls"
 path = "tests-rs/test_fleet_ls.rs"
 
+[[test]]
+name = "test_fleet_status"
+path = "tests-rs/test_fleet_status.rs"
+
 # Windows only
 [target.'cfg(not(windows))'.dependencies]
 [target.'cfg(windows)'.dependencies]
