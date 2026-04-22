@@ -126,6 +126,7 @@ Read `references/architecture.md` for the full system design.
 | Topic | File |
 |-------|------|
 | Orchestration DAG runner | [docs/orchestrate.md](docs/orchestrate.md) |
+| FleetView (v1 — MCP + CLI over state.json) | [docs/superpowers/specs/2026-04-22-fleetview-design.md](docs/superpowers/specs/2026-04-22-fleetview-design.md) |
 | CustomPaneBackend JSON-RPC protocol | [docs/custompane-backend.md](docs/custompane-backend.md) |
 | Remote tmux control over SSH | [docs/remote-tmux.md](docs/remote-tmux.md) |
 | Scripting (exec, wait-for, wait-pane, --raw, format vars) | [docs/scripting.md](docs/scripting.md) |
