@@ -1,0 +1,27 @@
+{
+  "session": "demo",
+  "state_version": 7,
+  "workers": {
+    "fix-auth": {
+      "status": "running",
+      "pane_id": "%3",
+      "pid": 12345,
+      "started_at": "2026-04-22T12:00:00Z"
+    },
+    "lint-docs": {
+      "status": "succeeded",
+      "pane_id": "%4",
+      "pid": 12346,
+      "exit_code": 0,
+      "started_at": "2026-04-22T11:55:00Z",
+      "finished_at": "2026-04-22T12:01:00Z"
+    },
+    "dead-worker": {
+      "status": "failed",
+      "exit_code": 1,
+      "started_at": "2026-04-22T11:50:00Z",
+      "finished_at": "2026-04-22T11:52:00Z",
+      "crash_dump_path": "C:\\Users\\aravi\\AppData\\Local\\psmux\\crashes\\2026-04-22T11-52-00.json"
+    }
+  }
+}

@@ -15,6 +15,7 @@ regex = "1"
 fs2 = "0.4"
 tempfile = "3"
 rand = "0.8"
+psmux = { path = "../..", default-features = false }
 
 [features]
 default = ["fleet-claude-transcript"]
