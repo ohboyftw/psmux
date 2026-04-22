@@ -1552,6 +1552,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "psmux-fleet-mcp"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "dirs",
+ "psmux-fleet",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tokio",
+]
+
+[[package]]
 name = "quickcheck"
 version = "1.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
