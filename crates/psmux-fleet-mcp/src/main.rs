@@ -34,7 +34,10 @@ fn parse_args() -> Result<Args> {
             "-h" | "--help" => {
                 println!(
                     "psmux-fleet-mcp — stdio JSON-RPC server\n\n\
-                     USAGE: psmux-fleet-mcp [--state-path PATH] [--session NAME]"
+                     USAGE: psmux-fleet-mcp [--state-path PATH] [--session NAME]\n\n\
+                     METHODS:\n  \
+                       fleet.list     List workspaces in the session\n  \
+                       fleet.status   Detail for one workspace (params: {{\"id\": \"<id>\"}})"
                 );
                 std::process::exit(0);
             }
@@ -129,12 +132,12 @@ fn dispatch(
         "fleet.list" => {
             let p: ListParams = serde_json::from_value(params).map_err(internal_err)?;
             let r = list(state_path, p).map_err(fleet_err)?;
-            Ok(serde_json::to_value(r).unwrap())
+            Ok(serde_json::to_value(r).map_err(internal_err)?)
         }
         "fleet.status" => {
             let p: StatusParams = serde_json::from_value(params).map_err(internal_err)?;
             let r = status(state_path, p).map_err(fleet_err)?;
-            Ok(serde_json::to_value(r).unwrap())
+            Ok(serde_json::to_value(r).map_err(internal_err)?)
         }
         other => Err(ErrorEnvelope {
             code: "METHOD_NOT_FOUND".into(),
