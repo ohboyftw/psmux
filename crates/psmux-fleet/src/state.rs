@@ -8,8 +8,70 @@
 use crate::{AgentKind, FleetError, Workspace, WorkspaceStatus};
 use chrono::{DateTime, Utc};
 use fs2::FileExt;
-use psmux::orchestrate::{OrchestrationState, WorkerState, WorkerStatus};
+use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+
+// ─── Vendored orchestrate state shape ───────────────────────────────────────
+//
+// These structs mirror `psmux::orchestrate::{OrchestrationState, WorkerState,
+// WorkerStatus}` for JSON (de)serialization only. We vendor the shape here
+// rather than depend on the `psmux` crate to avoid a workspace dependency
+// cycle (`psmux` binary → `psmux-fleet` → `psmux` lib). Any field addition
+// upstream MUST be mirrored here; `#[serde(default)]` covers forward-compat
+// for optional additions.
+
+/// Persistent orchestration state for a single plan run (mirror of upstream).
+#[derive(Debug, Serialize, Deserialize)]
+pub struct OrchestrationState {
+    pub session: String,
+    pub workers: HashMap<String, WorkerState>,
+    #[serde(default)]
+    pub state_version: u64,
+}
+
+/// Per-worker runtime state (mirror of upstream).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WorkerState {
+    pub status: WorkerStatus,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pane_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pid: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub exit_code: Option<i32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub started_at: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub finished_at: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub crash_dump_path: Option<String>,
+}
+
+impl WorkerState {
+    /// Construct a pending worker with all optional fields unset.
+    pub fn new_pending() -> Self {
+        Self {
+            status: WorkerStatus::Pending,
+            pane_id: None,
+            pid: None,
+            exit_code: None,
+            started_at: None,
+            finished_at: None,
+            crash_dump_path: None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum WorkerStatus {
+    Pending,
+    Running,
+    Succeeded,
+    Failed,
+    Skipped,
+}
 
 /// RAII guard that releases the advisory file lock on drop. Private to this
 /// module; used by [`try_cas_commit`] to guarantee the lock is released on

@@ -5,6 +5,7 @@
 pub mod backend;
 pub mod crash;
 pub mod debug_log;
+pub mod fleet;
 pub mod hints;
 #[cfg(feature = "mycel")]
 pub mod mycel;

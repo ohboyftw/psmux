@@ -10,6 +10,7 @@ mod config;
 mod copy_mode;
 mod crash;
 mod debug_log;
+mod fleet;
 mod format;
 mod help;
 mod hints;
@@ -2922,6 +2923,11 @@ fn run_main() -> io::Result<()> {
                     std::process::exit(2);
                 }
             }
+        }
+        // fleet - FleetView aggregator subcommands (ls, status, ...)
+        "fleet" => {
+            let fleet_args: Vec<String> = cmd_args[1..].iter().map(|s| s.to_string()).collect();
+            return crate::fleet::dispatch(&fleet_args);
         }
         // orchestrate - Execute a plan.json DAG of workers
         "orchestrate" => {
