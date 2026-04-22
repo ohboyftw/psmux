@@ -171,6 +171,10 @@ impl Plan {
 pub struct OrchestrationState {
     pub session: String,
     pub workers: HashMap<String, WorkerState>,
+    /// Monotonic version for CAS writes (spec §6.1).
+    /// Defaults to 0 when loading pre-existing state.json files.
+    #[serde(default)]
+    pub state_version: u64,
 }
 
 /// Per-worker runtime state.
@@ -235,11 +239,14 @@ impl OrchestrationState {
         Self {
             session: plan.session.clone(),
             workers,
+            state_version: 0,
         }
     }
 
     /// Atomically write state to `path` via a sibling `.tmp` file + rename.
-    pub fn save(&self, path: &Path) -> io::Result<()> {
+    /// Increments `state_version` immediately before serializing so every
+    /// successful write moves the version monotonically (wrapping at u64).
+    pub fn save(&mut self, path: &Path) -> io::Result<()> {
         if let Some(parent) = path.parent() {
             fs::create_dir_all(parent)?;
         }
@@ -259,6 +266,7 @@ impl OrchestrationState {
         };
         tmp.set_file_name(tmp_name);
 
+        self.state_version = self.state_version.wrapping_add(1);
         let data = serde_json::to_vec_pretty(self)
             .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
         fs::write(&tmp, &data)?;
@@ -766,7 +774,7 @@ mod tests {
                 "workers": [{ "id": "a", "command": ["x"] }]
             }"#,
         );
-        let state = OrchestrationState::new_for_plan(&plan);
+        let mut state = OrchestrationState::new_for_plan(&plan);
         let dir = std::env::temp_dir().join(format!("psmux_orch_atomic_{}", std::process::id()));
         fs::create_dir_all(&dir).unwrap();
         let path = dir.join("state.json");
