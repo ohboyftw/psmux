@@ -21,6 +21,12 @@ fn maps_running_worker_to_workspace() {
     let fix_auth = workspaces.iter().find(|w| w.id == "fix-auth").unwrap();
     assert_eq!(fix_auth.status, WorkspaceStatus::Running);
     assert_eq!(fix_auth.pane_id.as_deref(), Some("%3"));
+    // Cold-path defaults — these become meaningful in C2's warm hydration.
+    assert_eq!(fix_auth.agent_kind, psmux_fleet::AgentKind::Unknown);
+    assert!(fix_auth.branch.is_none());
+    assert!(fix_auth.worktree_path.is_none());
+    assert!(fix_auth.task.is_none());
+    assert!(fix_auth.metadata.is_empty());
 }
 
 #[test]
