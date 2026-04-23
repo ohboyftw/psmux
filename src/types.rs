@@ -1309,23 +1309,52 @@ pub static PTY_DATA_READY: std::sync::atomic::AtomicBool =
 
 /// Backend event senders for pushing JSON-RPC notifications (e.g. `context_exited`)
 /// to all connected CustomPaneBackend clients via their named pipe connections.
-/// Each sender feeds a `Receiver<String>` in a backend connection's writer thread.
-static BACKEND_EVENT_SENDERS: std::sync::Mutex<Vec<mpsc::Sender<String>>> =
+/// Each entry is `(id, sender)`; the id pairs with a [`BackendEventRegistration`]
+/// guard so the sender is removed when the owning connection drops.
+static BACKEND_EVENT_SENDERS: std::sync::Mutex<Vec<(u64, mpsc::Sender<String>)>> =
     std::sync::Mutex::new(Vec::new());
 
-/// Register a backend connection's event sender so it receives push events.
-pub fn register_backend_event_sender(tx: mpsc::Sender<String>) {
-    if let Ok(mut v) = BACKEND_EVENT_SENDERS.lock() {
-        v.push(tx);
+static NEXT_BACKEND_SENDER_ID: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+/// RAII guard returned by [`register_backend_event_sender`]. Dropping the guard
+/// removes the associated sender from the global registry, which closes the
+/// channel and lets the backend writer thread exit. Without the guard, dormant
+/// sessions leak one sender + one writer thread per lifetime RPC connection.
+#[must_use = "hold the guard for the lifetime of the backend connection; \
+              dropping it unregisters the sender"]
+pub struct BackendEventRegistration {
+    id: u64,
+}
+
+impl Drop for BackendEventRegistration {
+    fn drop(&mut self) {
+        if let Ok(mut v) = BACKEND_EVENT_SENDERS.lock() {
+            v.retain(|(id, _)| *id != self.id);
+        }
     }
 }
 
+/// Register a backend connection's event sender so it receives push events.
+/// The returned guard must be held for the lifetime of the connection.
+pub fn register_backend_event_sender(tx: mpsc::Sender<String>) -> BackendEventRegistration {
+    let id = NEXT_BACKEND_SENDER_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    if let Ok(mut v) = BACKEND_EVENT_SENDERS.lock() {
+        v.push((id, tx));
+    }
+    BackendEventRegistration { id }
+}
+
 /// Push a JSON-RPC notification to all connected backend clients.
-/// Dead senders (disconnected clients) are automatically pruned.
+/// Dead senders (disconnected clients) are automatically pruned on send failure.
 pub fn push_backend_event(event_json: &str) {
     if let Ok(mut senders) = BACKEND_EVENT_SENDERS.lock() {
-        senders.retain(|tx| tx.send(event_json.to_string()).is_ok());
+        senders.retain(|(_, tx)| tx.send(event_json.to_string()).is_ok());
     }
+}
+
+#[cfg(test)]
+pub(crate) fn backend_event_sender_count() -> usize {
+    BACKEND_EVENT_SENDERS.lock().map(|v| v.len()).unwrap_or(0)
 }
 
 /// Tracked persistent client TCP streams.
@@ -1457,4 +1486,74 @@ pub struct ParsedTarget {
     pub pane: Option<usize>,
     pub pane_is_id: bool,
     pub window_is_id: bool,
+}
+
+#[cfg(test)]
+mod backend_event_registration_tests {
+    use super::*;
+    use std::sync::mpsc;
+    use std::sync::Mutex;
+    use std::time::Duration;
+
+    // Test fixture lock: BACKEND_EVENT_SENDERS is process-global, so we serialise
+    // the tests that observe its length. Channel-local assertions don't need
+    // this, but `backend_event_sender_count()` does.
+    static SERIAL: Mutex<()> = Mutex::new(());
+
+    #[test]
+    fn registration_is_removed_when_guard_drops() {
+        let _serial = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+        let baseline = backend_event_sender_count();
+        {
+            let (tx, _rx) = mpsc::channel::<String>();
+            let _reg = register_backend_event_sender(tx);
+            assert_eq!(backend_event_sender_count(), baseline + 1);
+        }
+        assert_eq!(
+            backend_event_sender_count(),
+            baseline,
+            "guard drop must remove the sender",
+        );
+    }
+
+    #[test]
+    fn dropping_guard_closes_the_receiver_channel() {
+        // Regression: the writer thread in backend/pipe.rs blocks on
+        // `event_rx.recv()`. Before the drop-guard fix, the sender was stored
+        // globally with no cleanup, so recv() blocked forever after the client
+        // disconnected, leaving one zombie thread per connection.
+        let _serial = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+        let (tx, rx) = mpsc::channel::<String>();
+        {
+            let _reg = register_backend_event_sender(tx);
+            // Sender owned solely by the registry slot bound to this guard.
+        }
+        // After the guard drops, the registry evicts the sender, which is the
+        // only `Sender` clone, so the channel closes.
+        assert!(
+            matches!(rx.recv(), Err(mpsc::RecvError)),
+            "channel must be closed once the registration is dropped",
+        );
+    }
+
+    #[test]
+    fn push_event_reaches_live_registration_but_not_dropped_one() {
+        let _serial = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+        let (tx, rx) = mpsc::channel::<String>();
+        let reg = register_backend_event_sender(tx);
+
+        push_backend_event(r#"{"method":"test","n":1}"#);
+        let got = rx
+            .recv_timeout(Duration::from_millis(200))
+            .expect("live registration should receive the event");
+        assert_eq!(got, r#"{"method":"test","n":1}"#);
+
+        drop(reg);
+
+        push_backend_event(r#"{"method":"test","n":2}"#);
+        assert!(
+            rx.try_recv().is_err(),
+            "dropped registration must not receive further events",
+        );
+    }
 }

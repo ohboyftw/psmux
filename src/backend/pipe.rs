@@ -154,11 +154,19 @@ fn handle_rpc_connection(
     let writer = Arc::new(std::sync::Mutex::new(writer));
     let writer_for_events = Arc::clone(&writer);
 
-    // Register for push events (e.g. context_exited notifications)
+    // Register for push events (e.g. context_exited notifications).
+    // The guard is bound to a local so the sender is removed from the global
+    // registry the moment this function returns (peer disconnect, I/O error).
+    // Without the guard the sender leaks, keeping the writer thread alive as a
+    // zombie until `push_backend_event` eventually fails to write — dormant
+    // sessions never get that trigger, so threads accumulate indefinitely.
     let (event_tx, event_rx) = mpsc::channel::<String>();
-    crate::types::register_backend_event_sender(event_tx);
+    let _event_reg = crate::types::register_backend_event_sender(event_tx);
 
-    // Spawn a writer thread that forwards push events to the pipe
+    // Spawn a writer thread that forwards push events to the pipe.
+    // When `_event_reg` drops on function return, the sender is removed from
+    // the global Vec and its channel closes, so this thread's `recv()` returns
+    // `Err` and the thread exits.
     thread::spawn(move || {
         while let Ok(event_json) = event_rx.recv() {
             if let Ok(mut w) = writer_for_events.lock() {
@@ -185,5 +193,7 @@ fn handle_rpc_connection(
         }
     }
 
+    // `_event_reg` drops here, unregistering the event sender and closing the
+    // channel so the writer thread exits.
     Ok(())
 }
