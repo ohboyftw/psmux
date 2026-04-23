@@ -193,13 +193,23 @@ $Binaries = @("psmux.exe", "pmux.exe", "tmux.exe")
 foreach ($bin in $Binaries) {
     $src = Join-Path $SourceDir $bin
     $dst = Join-Path $InstallDir $bin
-    
+
     if (Test-Path $src) {
         Write-Host "  Installing $bin..." -ForegroundColor Green
         Copy-Item -Path $src -Destination $dst -Force
     } else {
         Write-Host "  Warning: $bin not found" -ForegroundColor Yellow
     }
+}
+
+# Archive the PDB so future minidumps of psmux can be symbolicated.
+# Without this, the PDB lives in target/release/ and gets overwritten on
+# every `cargo build --release` — incident forensics against stale running
+# processes becomes impossible. See docs/faq.md crash-diagnostics.
+$pdbSrc = Join-Path $SourceDir "psmux.pdb"
+if (Test-Path $pdbSrc) {
+    Copy-Item -Path $pdbSrc -Destination (Join-Path $InstallDir "psmux.pdb") -Force
+    Write-Host "  Archived psmux.pdb alongside psmux.exe" -ForegroundColor DarkGray
 }
 
 # Add to PATH if not already there
