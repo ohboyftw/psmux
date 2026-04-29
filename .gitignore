@@ -92,3 +92,11 @@ test-reports/
 # pushed to the public psmux remote.
 .claude/internal/
 .orchestration/
+
+# Git worktrees for isolated feature development
+.claude/worktrees/
+
+# Per-machine Claude Code session settings (writable by the harness on
+# every worktree spawn). Keep them out of the tree to avoid the
+# tracked-file vs harness-written collision that aborted Stage 1B.
+.claude/settings.local.json
