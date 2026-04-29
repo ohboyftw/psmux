@@ -696,11 +696,23 @@ pub fn run_server(
     // Start CustomPaneBackend named pipe listener (Windows only).
     // This provides the JSON-RPC endpoint that Claude Code's TeammateTool
     // uses to spawn/capture/kill agent panes.
-    if let Err(e) = crate::backend::pipe::start_pipe_listener(
+    //
+    // SPIKE: with `--features interprocess-pipe`, route to the parallel
+    // implementation built on the `interprocess` crate instead of the
+    // hand-rolled Win32 backend. Default OFF.
+    #[cfg(all(windows, feature = "interprocess-pipe"))]
+    let pipe_result = crate::backend::pipe_interprocess::start_pipe_listener(
         &backend_session_name,
         backend_tx,
         backend_session_key,
-    ) {
+    );
+    #[cfg(not(all(windows, feature = "interprocess-pipe")))]
+    let pipe_result = crate::backend::pipe::start_pipe_listener(
+        &backend_session_name,
+        backend_tx,
+        backend_session_key,
+    );
+    if let Err(e) = pipe_result {
         eprintln!("psmux: warning: failed to start backend pipe: {}", e);
     }
 
