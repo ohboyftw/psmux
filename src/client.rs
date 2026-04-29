@@ -1879,6 +1879,14 @@ pub fn run_remote(
                                         session_selected += 1;
                                     }
                                 }
+                                // hjkl parity with tmux mode-tree (issue #259): for flat lists
+                                // tmux treats h/k as up and j/l as down. g/G map to Home/End.
+                                KeyCode::Char('k') if session_chooser => { session_selected = session_selected.saturating_sub(1); }
+                                KeyCode::Char('j') if session_chooser => { if session_selected + 1 < session_entries.len() { session_selected += 1; } }
+                                KeyCode::Char('h') if session_chooser => { session_selected = session_selected.saturating_sub(1); }
+                                KeyCode::Char('l') if session_chooser => { if session_selected + 1 < session_entries.len() { session_selected += 1; } }
+                                KeyCode::Char('g') if session_chooser => { session_selected = 0; }
+                                KeyCode::Char('G') if session_chooser => { session_selected = session_entries.len().saturating_sub(1); }
                                 KeyCode::PageUp if session_chooser => {
                                     session_selected = session_selected.saturating_sub(10);
                                 }
@@ -1968,6 +1976,14 @@ pub fn run_remote(
                                         tree_selected += 1;
                                     }
                                 }
+                                // hjkl parity with tmux mode-tree (issue #259): h/k = up, j/l = down
+                                // for flat lists. g/G map to Home/End.
+                                KeyCode::Char('k') if tree_chooser => { tree_selected = tree_selected.saturating_sub(1); }
+                                KeyCode::Char('j') if tree_chooser => { if tree_selected + 1 < tree_entries.len() { tree_selected += 1; } }
+                                KeyCode::Char('h') if tree_chooser => { tree_selected = tree_selected.saturating_sub(1); }
+                                KeyCode::Char('l') if tree_chooser => { if tree_selected + 1 < tree_entries.len() { tree_selected += 1; } }
+                                KeyCode::Char('g') if tree_chooser => { tree_selected = 0; }
+                                KeyCode::Char('G') if tree_chooser => { tree_selected = tree_entries.len().saturating_sub(1); }
                                 KeyCode::Enter if tree_chooser => {
                                     if let Some((is_win, wid, pid, _label, sess_name)) =
                                         tree_entries.get(tree_selected)
@@ -2029,6 +2045,11 @@ pub fn run_remote(
                                 KeyCode::Char('j') if keys_viewer => {
                                     keys_viewer_scroll += 1;
                                 }
+                                // hjkl parity with tmux mode-tree (issue #259): h = up, l = down, g/G = home/end
+                                KeyCode::Char('h') if keys_viewer => { keys_viewer_scroll = keys_viewer_scroll.saturating_sub(1); }
+                                KeyCode::Char('l') if keys_viewer => { keys_viewer_scroll += 1; }
+                                KeyCode::Char('g') if keys_viewer => { keys_viewer_scroll = 0; }
+                                KeyCode::Char('G') if keys_viewer => { keys_viewer_scroll = keys_viewer_lines.len().saturating_sub(1); }
                                 // --- kill confirmation: y/Y/Enter confirms, n/N/Esc cancels ---
                                 KeyCode::Char('y') | KeyCode::Char('Y') | KeyCode::Enter
                                     if confirm_cmd.is_some() =>

@@ -86,6 +86,23 @@ Default prefix: `Ctrl+b` (same as tmux). Change with `set -g prefix C-a`.
 | `Prefix + i` | Display window/pane info |
 | `Prefix + t` | Clock mode |
 
+## Picker Navigation (choose-session, choose-tree, list-keys)
+
+Once a picker is open (`Prefix + s`, `Prefix + w`, or `Prefix + ?`), the following
+keys move the selection. This matches tmux's `mode-tree` behavior, so muscle
+memory carries over.
+
+| Key | Action |
+|-----|--------|
+| `Up` / `k` / `h` | Move selection up |
+| `Down` / `j` / `l` | Move selection down |
+| `g` / `Home` | Jump to first entry |
+| `G` / `End` | Jump to last entry |
+| `PageUp` / `PageDown` | Page up / down |
+| `Enter` | Switch to / focus the selected entry |
+| `x` | Kill selected session (choose-session only) |
+| `Esc` / `q` | Close the picker |
+
 ## Copy/Scroll Mode (Vi)
 
 Enter copy mode with `Prefix + [` to scroll through terminal history with vim-style keybindings:
