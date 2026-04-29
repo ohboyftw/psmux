@@ -110,9 +110,15 @@ base64 = "0.22"
 mycel-client = { path = "../mycel/clients/rust", optional = true }
 tokio = { version = "1", features = ["rt", "net", "io-util", "time", "sync"], optional = true }
 
+# Optional: spike — interprocess crate as named-pipe abstraction
+# (replaces hand-rolled Win32 named-pipe code in src/backend/pipe.rs).
+# Behind `interprocess-pipe` feature; default OFF.
+interprocess = { version = "1.2", optional = true }
+
 [features]
 default = []
 mycel = ["dep:mycel-client", "dep:tokio"]
+interprocess-pipe = ["dep:interprocess"]
 
 [profile.release]
 opt-level = 3
