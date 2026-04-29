@@ -520,6 +520,9 @@ pub fn run_remote(
     fn default_repeat_time() -> u64 {
         500
     }
+    fn default_mouse_selection() -> bool {
+        true
+    }
 
     /// A single key binding synced from the server.
     #[derive(serde::Deserialize, Clone, Debug)]
@@ -638,6 +641,11 @@ pub fn run_remote(
         /// Whether synchronize-panes is active (input broadcast to all panes)
         #[serde(default)]
         sync_input: bool,
+        /// mouse-selection option (mirror of server-side AppState field).
+        /// When false, client suppresses its own drag-selection overlay so
+        /// in-pane apps (opencode, etc.) can do their own mouse selection.
+        #[serde(default = "default_mouse_selection")]
+        mouse_selection: bool,
         // ── Server-side overlay state ──
         /// Popup overlay active
         #[serde(default)]
@@ -2456,6 +2464,15 @@ pub fn run_remote(
                                     false
                                 };
 
+                                // mouse-selection option (issue #245): when off, suppress
+                                // client-side drag-selection overlay so in-pane apps (opencode,
+                                // nvim, etc.) can handle their own mouse selection.
+                                let mouse_selection_enabled = if !prev_dump_buf.is_empty() {
+                                    serde_json::from_str::<DumpState>(&prev_dump_buf)
+                                        .map(|s| s.mouse_selection)
+                                        .unwrap_or(true)
+                                } else { true };
+
                                 // Always forward to server for pane focus, tab clicks, border resize, copy-mode cursor positioning
                                 cmd_batch.push(format!("mouse-down {} {}\n", me.column, me.row));
 
@@ -2469,6 +2486,13 @@ pub fn run_remote(
                                     border_drag = true;
                                     rsel_start = None;
                                     rsel_end = None;
+                                    selection_changed = true;
+                                } else if !mouse_selection_enabled {
+                                    // mouse-selection off: skip client-side drag-selection overlay
+                                    border_drag = false;
+                                    rsel_start = None;
+                                    rsel_end = None;
+                                    rsel_dragged = false;
                                     selection_changed = true;
                                 } else {
                                     // Text selection mode

@@ -40,6 +40,13 @@ pub(crate) fn get_option_value(app: &AppState, name: &str) -> String {
                 "off".into()
             }
         }
+        "mouse-selection" => {
+            if app.mouse_selection {
+                "on".into()
+            } else {
+                "off".into()
+            }
+        }
         "status" => {
             if !app.status_visible {
                 "off".into()
@@ -312,6 +319,9 @@ pub(crate) fn apply_set_option(app: &mut AppState, option: &str, value: &str, _q
         }
         "mouse" => {
             app.mouse_enabled = value == "on" || value == "true" || value == "1";
+        }
+        "mouse-selection" => {
+            app.mouse_selection = matches!(value, "on" | "true" | "1");
         }
         "prefix" => {
             if let Some(kc) = parse_key_string(value) {

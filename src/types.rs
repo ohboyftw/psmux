@@ -482,6 +482,13 @@ pub struct AppState {
     pub drag: Option<DragState>,
     pub last_window_area: Rect,
     pub mouse_enabled: bool,
+    /// mouse-selection: when off, psmux disables its own client-side drag
+    /// selection overlay so applications running inside a pane (opencode,
+    /// nvim, etc.) can implement their own mouse selection without having
+    /// psmux's selection rectangle drawn on top.  Mouse events are still
+    /// forwarded to the application (click-to-focus, scroll, app-level
+    /// mouse tracking continue to work).  Default: on.  (issue #245)
+    pub mouse_selection: bool,
     pub paste_buffers: Vec<String>,
     pub status_left: String,
     pub status_right: String,
@@ -784,6 +791,7 @@ impl AppState {
             drag: None,
             last_window_area: Rect { x: 0, y: 0, width: 120, height: 30 },
             mouse_enabled: true,
+            mouse_selection: true,
             paste_buffers: Vec::new(),
             status_left: "[#S] ".to_string(),
             status_right: "#{?window_bigger,[#{window_offset_x}#,#{window_offset_y}] ,}\"#{=21:pane_title}\" %H:%M %d-%b-%y".to_string(),
