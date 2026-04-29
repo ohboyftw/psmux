@@ -333,12 +333,12 @@ pub fn create_window(
         spawn_env: Vec::new(),
         squelch_until: None,
     };
-    #[cfg(feature = "mycel")]
-    crate::mycel::publish_pane_event(
-        "psmux/pane/created",
-        &serde_json::json!({
-            "pane_id": format!("%{}", pane_id), "command": command.unwrap_or(""),
-        }),
+    crate::control::emit_lifecycle(
+        &app.control_clients,
+        &crate::control::LifecycleEvent::PaneCreated {
+            pane_id,
+            command: command.unwrap_or(""),
+        },
     );
     app.next_pane_id += 1;
     let win_name = command
@@ -926,12 +926,12 @@ pub fn split_active_with_command(
         spawn_env: Vec::new(),
         squelch_until: None,
     });
-    #[cfg(feature = "mycel")]
-    crate::mycel::publish_pane_event(
-        "psmux/pane/created",
-        &serde_json::json!({
-            "pane_id": format!("%{}", split_pane_id), "command": command.unwrap_or(""),
-        }),
+    crate::control::emit_lifecycle(
+        &app.control_clients,
+        &crate::control::LifecycleEvent::PaneCreated {
+            pane_id: split_pane_id,
+            command: command.unwrap_or(""),
+        },
     );
     app.next_pane_id += 1;
     let win = &mut app.windows[app.active_idx];

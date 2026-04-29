@@ -769,6 +769,13 @@ pub struct AppState {
     /// until explicitly written. `-u` (unset) removes a key; `source-file`
     /// reload does NOT clear the set.
     pub user_set_options: HashSet<String>,
+
+    /// Active control-mode (`-C`/`-CC`) clients. Empty until Stage 1B wires
+    /// `dispatch_control_command`. Read EXCLUSIVELY by
+    /// `crate::control::emit_lifecycle()` — see that helper's doc-comment for
+    /// the architectural invariant. Stage 1B writes (Register/Deregister) via
+    /// new `CtrlReq::Control{Register,Deregister,Subscribe}` variants.
+    pub control_clients: Vec<crate::control::ControlClient>,
 }
 
 impl AppState {
@@ -936,6 +943,7 @@ impl AppState {
             hint_style: "fg=yellow,bold".to_string(),
             hint_timeout: 5000,
             user_set_options: HashSet::new(),
+            control_clients: Vec::new(),
         }
     }
 
@@ -1307,6 +1315,29 @@ pub enum CtrlReq {
         context_id: Option<String>,
         resp: mpsc::Sender<Option<std::path::PathBuf>>,
     },
+
+    // ── Control mode (`-C`/`-CC`) — Stage 1A scaffolding (b68962b foundation port).
+    //
+    // These variants live in CtrlReq (NOT a separate enum) per design Q3:
+    // CtrlReq is non-serialized (carries mpsc::Sender<T>), so discriminant
+    // order doesn't matter, and dispatch_control_command will route to the
+    // same `run_server` match as the existing CLI dispatcher. Splitting
+    // would force duplicating that match. See
+    // `.claude/internal/design-control-mode-vs-custompanebackend.md` §3.
+    /// Register a new control-mode client. The acceptor (Stage 1B) wraps the
+    /// caller-provided ControlClient into `app.control_clients` and signals
+    /// the allocated id back via `ack`. The id is used in subsequent
+    /// `%begin`/`%end` framing and for Deregister.
+    ControlRegister {
+        client: crate::control::ControlClient,
+        ack: mpsc::Sender<u64>,
+    },
+    /// Deregister a control-mode client (called when the socket closes or
+    /// the writer task drops). Idempotent — silently no-op if the id is gone.
+    ControlDeregister { client_id: u64 },
+    /// Subscribe a registered client to a notification topic. Stage 1A
+    /// accepts opaque topic strings; Stage 1B will define the canonical set.
+    ControlSubscribe { client_id: u64, topic: String },
 }
 
 /// Global flag set by PTY reader threads when new output arrives.

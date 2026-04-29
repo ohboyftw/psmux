@@ -555,7 +555,11 @@ struct ExitedPaneInfo {
     command: Option<String>,
 }
 
-pub fn prune_exited(n: Node, remain_on_exit: bool) -> Option<Node> {
+pub fn prune_exited(
+    n: Node,
+    remain_on_exit: bool,
+    control_clients: &[crate::control::ControlClient],
+) -> Option<Node> {
     let mut exited: Vec<ExitedPaneInfo> = Vec::new();
     let result = prune_exited_inner(n, remain_on_exit, &mut exited);
     // Push context_exited events for all newly-dead panes
@@ -572,18 +576,16 @@ pub fn prune_exited(n: Node, remain_on_exit: bool) -> Option<Node> {
         if let Ok(json) = serde_json::to_string(&event) {
             crate::types::push_backend_event(&json);
         }
-        // Publish to mycel event bus (optional)
-        #[cfg(feature = "mycel")]
-        {
-            let payload = serde_json::json!({
-                "pane_id": format!("%{}", info.pane_id),
-                "exit_code": info.exit_code,
-            });
-            crate::mycel::publish_pane_event(crate::mycel::topics::PANE_EXITED, &payload);
-            // TODO(deprecate): remove psmux/pane/died in next release — kept
-            // as a shim so existing subscribers (canopy, etc.) don't break.
-            crate::mycel::publish_pane_event("psmux/pane/died", &payload);
-        }
+        // Single fan-out: routes to mycel + control-mode clients via the
+        // shared `emit_lifecycle` helper (architectural invariant — see
+        // `crate::control` doc).
+        crate::control::emit_lifecycle(
+            control_clients,
+            &crate::control::LifecycleEvent::PaneExited {
+                pane_id: info.pane_id,
+                exit_code: info.exit_code,
+            },
+        );
     }
     result
 }
@@ -1057,7 +1059,7 @@ pub fn reap_children(app: &mut AppState) -> io::Result<(bool, bool)> {
                 children: vec![],
             },
         );
-        match prune_exited(root, remain) {
+        match prune_exited(root, remain, &app.control_clients) {
             Some(new_root) => {
                 let leaves_after = count_panes(&new_root);
                 if leaves_after < leaves_before {

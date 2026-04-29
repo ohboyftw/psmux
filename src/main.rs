@@ -7,6 +7,7 @@ mod cli;
 mod client;
 mod commands;
 mod config;
+mod control;
 mod copy_mode;
 mod crash;
 mod debug_log;
