@@ -349,13 +349,18 @@ pub fn provision_worktrees(plan: &Plan, plan_dir: &Path) -> Result<(), String> {
     Ok(())
 }
 
-/// For each worker with a `worktree`, run `git worktree remove`.
-pub fn cleanup_worktrees(plan: &Plan) -> Result<(), String> {
+/// For each worker with a `worktree`, run `git worktree remove`. Paths are
+/// resolved against `plan_dir` exactly as in [`provision_worktrees`] so
+/// `--cleanup` finds the worktrees regardless of the directory orchestrate
+/// was invoked from (symmetric to the plan_dir resolution on the add path).
+pub fn cleanup_worktrees(plan: &Plan, plan_dir: &Path) -> Result<(), String> {
     for w in &plan.workers {
         let Some(spec) = &w.worktree else { continue };
         let Some(cwd) = &w.cwd else { continue };
+        let cwd = resolve_cwd(plan_dir, cwd);
+        let repo = resolve_repo(plan_dir, &spec.repo);
         let output = std::process::Command::new("git")
-            .current_dir(&spec.repo)
+            .current_dir(&repo)
             .args(["worktree", "remove", &cwd.to_string_lossy()])
             .output()
             .map_err(|e| format!("worker {}: failed to spawn git: {e}", w.id))?;

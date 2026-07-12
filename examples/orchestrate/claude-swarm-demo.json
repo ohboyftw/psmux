@@ -1,0 +1,35 @@
+{
+  "version": 1,
+  "session": "orc-claude-demo",
+  "workers": [
+    {
+      "id": "poet-ocean",
+      "cwd": "./worktrees/ocean",
+      "command": [
+        "claude", "-p",
+        "Write a two-line haiku about the ocean. Use the Write tool to save it to haiku.txt in the current directory, then use the Bash tool to run: git add haiku.txt && git commit -m 'ocean haiku'. Then stop.",
+        "--dangerously-skip-permissions"
+      ],
+      "worktree": { "repo": ".", "branch": "demo/poet-ocean", "base": "ohboy-builds" }
+    },
+    {
+      "id": "poet-forest",
+      "cwd": "./worktrees/forest",
+      "command": [
+        "claude", "-p",
+        "Write a two-line haiku about a forest. Use the Write tool to save it to haiku.txt in the current directory, then use the Bash tool to run: git add haiku.txt && git commit -m 'forest haiku'. Then stop.",
+        "--dangerously-skip-permissions"
+      ],
+      "worktree": { "repo": ".", "branch": "demo/poet-forest", "base": "ohboy-builds" }
+    },
+    {
+      "id": "assemble",
+      "cwd": ".",
+      "depends_on": ["poet-ocean", "poet-forest"],
+      "command": [
+        "C:/Program Files/Git/bin/bash.exe", "-c",
+        "set -e; { git -C worktrees/ocean show HEAD:haiku.txt; git -C worktrees/forest show HEAD:haiku.txt; } > combined-haiku.txt; echo '--- combined-haiku.txt ---'; cat combined-haiku.txt"
+      ]
+    }
+  ]
+}

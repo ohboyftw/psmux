@@ -2978,10 +2978,24 @@ fn run_main() -> io::Result<()> {
             };
 
             let plan_file = std::path::PathBuf::from(&plan_path);
+            // Resolve the plan directory to an absolute path. Downstream,
+            // `provision_worktrees` runs `git worktree add <cwd>` with
+            // `current_dir(<repo>)`; if both are plan-relative the prefix is
+            // applied twice (e.g. `examples/orchestrate/examples/orchestrate/
+            // worktrees/...`). An absolute plan_dir makes every derived path
+            // (worktree cwd, worker `-c` cwd, state dir) unambiguous regardless
+            // of the directory orchestrate was invoked from.
             let plan_dir = plan_file
                 .parent()
                 .map(std::path::Path::to_path_buf)
-                .unwrap_or_else(|| std::path::PathBuf::from("."));
+                .unwrap_or_default();
+            let plan_dir = if plan_dir.is_absolute() {
+                plan_dir
+            } else {
+                std::env::current_dir()
+                    .map(|d| d.join(&plan_dir))
+                    .unwrap_or(plan_dir)
+            };
             let raw = std::fs::read_to_string(&plan_file).map_err(|e| {
                 io::Error::other(format!(
                     "cannot read plan file {}: {e}",
@@ -3005,7 +3019,7 @@ fn run_main() -> io::Result<()> {
             let state_path = state_dir.join("state.json");
 
             if cleanup {
-                if let Err(e) = crate::orchestrate::cleanup_worktrees(&plan) {
+                if let Err(e) = crate::orchestrate::cleanup_worktrees(&plan, &plan_dir) {
                     eprintln!("psmux orchestrate --cleanup: {e}");
                     std::process::exit(2);
                 }
