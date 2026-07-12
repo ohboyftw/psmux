@@ -17,7 +17,7 @@ so your changes don't conflict with other agents working in parallel.
 3. Run `cargo test` and ensure all tests pass
 4. Every new public function needs `///` doc comments
 5. Every `unsafe` block needs a `// SAFETY:` comment
-6. When done, send your results to team-lead via Teammate write:
+6. When done, send your results to the leader via SendMessage:
    - What you implemented
    - Files changed
    - Test results
@@ -28,4 +28,4 @@ so your changes don't conflict with other agents working in parallel.
 2. Do the work
 3. Run tests
 4. Mark complete: `TaskUpdate({ taskId: "N", status: "completed" })`
-5. Message leader: `Teammate({ operation: "write", target_agent_id: "team-lead", value: "summary" })`
+5. Message leader: `SendMessage({ to: "leader", message: "summary", summary: "Task N done" })`

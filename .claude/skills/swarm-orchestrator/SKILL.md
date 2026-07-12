@@ -35,11 +35,14 @@ git worktree add .worktrees/task-2 -b agent/task-2
 git worktree add .worktrees/task-3 -b agent/task-3
 ```
 
-### Phase 3: Create Team and Tasks
+### Phase 3: Create Tasks
+
+With `CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1` set (psmux sets it automatically),
+the session already has **one implicit team** — there is no team-creation step.
+Claude Code 2.1.178 removed the `TeamCreate`/`TeamDelete` tools; spawn teammates
+directly with the `Agent` tool's `name` parameter (Phase 4).
 
 ```
-Teammate({ operation: "spawnTeam", team_name: "psmux-swarm" })
-
 TaskCreate({ subject: "Task 1 name", description: "Detailed spec", activeForm: "Working..." })
 TaskCreate({ subject: "Task 2 name", description: "Detailed spec", activeForm: "Working..." })
 TaskCreate({ subject: "Task 3 name", description: "Detailed spec", activeForm: "Working..." })
@@ -51,31 +54,32 @@ TaskUpdate({ taskId: "4", addBlockedBy: ["1", "2", "3"] })
 
 ### Phase 4: Spawn Agents into psmux Panes
 
+Spawn each teammate with the `Agent` tool. Passing a `name` makes it a visible
+teammate pane (via the tmux backend psmux provides); omit `team_name` (it is
+deprecated and ignored). Teammates report back to the leader with `SendMessage`.
+
 ```
 # Claude Code builder for complex task
-Task({
-  team_name: "psmux-swarm",
+Agent({
   name: "builder-auth",
   subagent_type: "general-purpose",
-  prompt: "cd .worktrees/task-1 && implement OAuth2. Claim task #1, mark complete when done, send summary to team-lead.",
+  prompt: "cd .worktrees/task-1 && implement OAuth2. Claim task #1, mark complete when done, then SendMessage a summary to the leader.",
   run_in_background: true
 })
 
-# Pi agent for focused task (via pi-dispatch bridge)
-Task({
-  team_name: "psmux-swarm",
+# Pi agent for focused task (Pi cannot call SendMessage — use a marker file)
+Agent({
   name: "builder-tests",
   subagent_type: "Bash",
-  prompt: "cd .worktrees/task-2 && pi -p 'Write unit tests for parse_args module. When done, write results to ~/.claude/teams/psmux-swarm/inboxes/team-lead.json'",
+  prompt: "cd .worktrees/task-2 && pi -p 'Write unit tests for parse_args module. When done, write results to .worktrees/task-2/RESULTS.json'",
   run_in_background: true
 })
 
 # Claude Code reviewer (waits for implementation to finish)
-Task({
-  team_name: "psmux-swarm",
+Agent({
   name: "reviewer",
   subagent_type: "general-purpose",
-  prompt: "Wait for task #4 to unblock. Review all diffs in .worktrees/task-*. Check for safety, correctness, test coverage. Send assessment to team-lead.",
+  prompt: "Wait for task #4 to unblock. Review all diffs in .worktrees/task-*. Check for safety, correctness, test coverage. SendMessage your assessment to the leader.",
   run_in_background: true
 })
 ```
@@ -86,11 +90,11 @@ Task({
 # Check which agents are alive
 psmux list-panes
 
-# Read inbox for results
-cat ~/.claude/teams/psmux-swarm/inboxes/team-lead.json
-
-# Check task progress
+# Check task progress (teammates' SendMessage replies arrive in your session)
 TaskList()
+
+# Pi agents report via marker files, not SendMessage:
+cat .worktrees/task-2/RESULTS.json
 ```
 
 ### Phase 6: Merge and Verify
@@ -128,12 +132,14 @@ If an agent crashes (5-minute heartbeat timeout):
 
 ### Phase 8: Shutdown
 
+Ask each teammate to shut down with `SendMessage`. There is no separate team
+`cleanup` step — the implicit team goes away with the session.
+
 ```
-Teammate({ operation: "requestShutdown", target_agent_id: "builder-auth" })
-Teammate({ operation: "requestShutdown", target_agent_id: "builder-tests" })
-Teammate({ operation: "requestShutdown", target_agent_id: "reviewer" })
-# Wait for all approvals...
-Teammate({ operation: "cleanup" })
+SendMessage({ to: "builder-auth", message: { type: "shutdown_request" } })
+SendMessage({ to: "builder-tests", message: { type: "shutdown_request" } })
+SendMessage({ to: "reviewer", message: { type: "shutdown_request" } })
+# Teammates finish current work, reply, and exit their panes.
 ```
 
 ## Agent Routing Decision

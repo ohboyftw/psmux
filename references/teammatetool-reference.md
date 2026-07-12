@@ -1,8 +1,15 @@
 # TeammateTool + Task System — Quick Reference
 
-Extracted from Claude Code v2.1.19. This is what's available natively in Claude Code
-without any external tools. Read references/claude-code-tmux-commands.md for the
-specific tmux commands the spawn backend runs through psmux.
+Reflects Claude Code 2.1.178+ (implicit-team model). This is what's available
+natively in Claude Code without any external tools. Read
+references/claude-code-tmux-commands.md for the specific tmux commands the spawn
+backend runs through psmux.
+
+> **Model change (CC 2.1.178):** the `TeamCreate` and `TeamDelete` tools were
+> removed. With `CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1` the session already has
+> one implicit team — spawn teammates directly by passing a `name` to the `Agent`
+> tool, and coordinate with `SendMessage`. The old `team_name` parameter is
+> accepted but ignored.
 
 ## Primitives
 
@@ -17,18 +24,17 @@ specific tmux commands the spawn backend runs through psmux.
 ## Lifecycle
 
 ```
-Create Team → Create Tasks → Spawn Teammates → Work → Coordinate → Shutdown → Cleanup
+Create Tasks → Spawn Teammates → Work → Coordinate → Shutdown
 ```
+
+(No team-create or team-cleanup steps — the implicit team exists for the session's
+lifetime and goes away with it.)
 
 ## Team Operations
 
 ```
-# Create team (you become leader)
-Teammate({ operation: "spawnTeam", team_name: "my-project" })
-
-# Spawn teammate into team
-Task({
-  team_name: "my-project",
+# Spawn a teammate (passing `name` makes it a visible pane via the tmux backend)
+Agent({
   name: "worker-1",
   subagent_type: "general-purpose",
   prompt: "Your instructions here",
@@ -36,16 +42,10 @@ Task({
 })
 
 # Message one teammate
-Teammate({ operation: "write", target_agent_id: "worker-1", value: "Do X next" })
-
-# Message all teammates (expensive — N messages for N teammates)
-Teammate({ operation: "broadcast", name: "leader", value: "Status check" })
+SendMessage({ to: "worker-1", message: "Do X next", summary: "Next step" })
 
 # Request teammate shutdown
-Teammate({ operation: "requestShutdown", target_agent_id: "worker-1", reason: "Done" })
-
-# Cleanup team resources (all teammates must be shut down first)
-Teammate({ operation: "cleanup" })
+SendMessage({ to: "worker-1", message: { type: "shutdown_request" } })
 ```
 
 ## Task Operations

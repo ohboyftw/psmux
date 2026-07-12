@@ -142,7 +142,7 @@ pwsh .claude/scripts/pi-swarm.ps1 -Tasks tasks.json
 Tested agent teams with psmux as the backend. Two teammates ran in parallel and delivered real findings:
 
 ```
-TeamCreate("psmux-demo")
+leader (implicit team)
   ├─ safety-auditor (Explore agent)
   │   → Found 52 unsafe blocks across 5 files, 0 have // SAFETY: comments
   │   → Completed in ~30 seconds
@@ -156,15 +156,16 @@ TeamCreate("psmux-demo")
 Both ran in parallel, reported back, shut down cleanly.
 ```
 
-### How to Spawn a Team
+### How to Spawn Teammates
+
+Claude Code 2.1.178 removed the `TeamCreate`/`TeamDelete` tools. With
+`CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1` (psmux sets it), the session has one
+implicit team — spawn teammates directly with the `Agent` tool's `name`
+parameter. `team_name` is deprecated and ignored.
 
 ```python
-# 1. Create team
-TeamCreate({ team_name: "my-project" })
-
-# 2. Spawn teammates (each gets its own pane when inside psmux)
+# 1. Spawn teammates (each gets its own pane when inside psmux)
 Agent({
-  team_name: "my-project",
   name: "researcher",
   subagent_type: "Explore",
   prompt: "Find all TODO comments in the codebase",
@@ -172,21 +173,18 @@ Agent({
 })
 
 Agent({
-  team_name: "my-project",
   name: "coder",
   subagent_type: "general-purpose",
   prompt: "Implement the auth module",
   run_in_background: true
 })
 
-# 3. Message teammates
+# 2. Message teammates
 SendMessage({ to: "coder", message: "Focus on OAuth first", summary: "Prioritize OAuth" })
 
-# 4. Shutdown when done
+# 3. Shutdown when done (no separate team-cleanup step — the implicit
+#    team goes away with the session)
 SendMessage({ to: "coder", message: { type: "shutdown_request" } })
-
-# 5. Cleanup
-TeamDelete()
 ```
 
 ## Stats

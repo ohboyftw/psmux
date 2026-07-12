@@ -37,7 +37,7 @@ Claude Code detects the `TMUX` environment variable, recognizes it's inside a tm
 
 Claude Code's standalone binary (the Bun SFE `claude.exe`) requires the agent teams feature gate to be enabled:
 
-1. **Agent teams feature gate**: The entire teammate tool-set (spawnTeam, spawnTeammate) is gated behind `CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1`. Without this env var, Claude only has the in-process "Agent" tool and never creates separate panes. psmux sets this automatically.
+1. **Agent teams feature gate**: The teammate spawn path is gated behind `CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1`. Without this env var, Claude only has the in-process "Agent" tool and never creates separate panes. psmux sets this automatically. (As of Claude Code 2.1.178 there is no separate team-creation step — the session has one implicit team and teammates are spawned by passing a `name` to the `Agent` tool. The old `TeamCreate`/`TeamDelete` tools were removed.)
 
 2. **`teammateMode` auto-detection**: Claude Code reads `teammateMode` from its own `settings.json` and auto-detects `$TMUX`. No injection from psmux is needed.
 
@@ -53,7 +53,7 @@ Claude Code has **two completely separate agent systems**. Understanding both is
 
 The **teammate system** spawns agents in visible tmux panes. This is the system psmux fully supports.
 
-- Triggered when the model passes `team_name` + `name` to the subagent tool
+- Triggered when the model passes a `name` to the subagent (`Agent`) tool
 - Gated by `CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1` (psmux sets this)
 - Controlled by `teammateMode: "tmux"` in Claude Code's `settings.json`
 - Each agent gets its own pane with full terminal visibility
@@ -77,7 +77,7 @@ Both systems are exposed through the **same subagent tool**. The model chooses w
 
 | Parameter | System | Visibility | Model preference |
 |-----------|--------|------------|-----------------|
-| `team_name` + `name` | Teammate | Visible tmux pane | Haiku, Sonnet |
+| `name` | Teammate | Visible tmux pane | Haiku, Sonnet |
 | `isolation: "worktree"` | Worktree | Invisible in-process | Opus |
 
 Opus prefers worktree agents because they provide **git-level isolation** — each agent works on its own branch and can't cause merge conflicts with other agents. The tradeoff is zero visibility.
@@ -88,7 +88,7 @@ Since the model decides which system to use, you can influence its choice via `C
 
 ```markdown
 # Agent Configuration
-When spawning subagents, always use the teammate system (team_name + name parameters)
+When spawning subagents, always use the teammate system (pass a `name` to the Agent tool)
 instead of worktree isolation. This ensures agents are visible in tmux panes.
 Do NOT use isolation: "worktree" — use teammates instead.
 ```
@@ -152,7 +152,7 @@ npm install -g @anthropic-ai/claude-code
 
 For the curious — here's what happens under the hood when Claude Code spawns a teammate:
 
-1. Claude calls `spawnTeammate` tool (available because `T8()` gate passes due to `CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1`)
+1. Claude spawns a teammate by passing a `name` to the `Agent` tool (the teammate spawn path is available because the `CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1` gate passes)
 2. `BackendRegistry.detectAndGetBackend()` checks `isInProcessEnabled`:
    - If non-interactive → true → in-process (by design)
    - If interactive → checks `teammateMode` → `"tmux"` → false → uses TmuxBackend
