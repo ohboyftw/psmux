@@ -2335,22 +2335,18 @@ fn run_main() -> io::Result<()> {
         }
         // respawn-pane - Restart the pane's process
         "respawn-pane" | "respawnp" | "resp" => {
+            let argv: Vec<&str> = cmd_args[1..].iter().map(|s| s.as_str()).collect();
+            let parsed = psmux::types::parse_respawn_pane_args(&argv);
             let mut cmd = "respawn-pane".to_string();
-            let mut i = 1;
-            while i < cmd_args.len() {
-                match cmd_args[i].as_str() {
-                    "-k" => {
-                        cmd.push_str(" -k");
-                    }
-                    "-t" => {
-                        if let Some(t) = cmd_args.get(i + 1) {
-                            cmd.push_str(&format!(" -t {}", t));
-                            i += 1;
-                        }
-                    }
-                    _ => {}
-                }
-                i += 1;
+            if parsed.kill {
+                cmd.push_str(" -k");
+            }
+            if let Some(t) = &parsed.target {
+                cmd.push_str(&format!(" -t {}", t));
+            }
+            // Forwarded as a single quoted token, matching split-window (#1406).
+            if let Some(c) = &parsed.command {
+                cmd.push_str(&format!(" \"{}\"", c.replace('"', "\\\"")));
             }
             cmd.push('\n');
             send_control(cmd)?;

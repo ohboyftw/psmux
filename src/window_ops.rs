@@ -1193,10 +1193,16 @@ pub fn break_pane_to_window(app: &mut AppState) {
     }
 }
 
+/// Respawn the active pane's process.
+///
+/// `command` is tmux's optional `shell-command` argument: when `Some`, the
+/// pane runs that command instead of the default shell. Claude Code's teammate
+/// launcher depends on this (`respawn-pane -k -t %N -- <command>`).
 pub fn respawn_active_pane(
     app: &mut AppState,
     pty_system_ref: Option<&dyn portable_pty::PtySystem>,
     kill: bool,
+    command: Option<&str>,
 ) -> io::Result<()> {
     // tmux semantics: without -k, respawn only works on dead panes.
     // With -k, kill the running process first and respawn.
@@ -1245,7 +1251,14 @@ pub fn respawn_active_pane(
     let pair = pty_system
         .openpty(size)
         .map_err(|e| io::Error::other(format!("openpty error: {e}")))?;
-    let mut shell_cmd = if !expanded_shell.is_empty() {
+    let mut shell_cmd = if command.is_some() {
+        crate::pane::build_command(
+            command,
+            app.env_shim,
+            app.allow_predictions,
+            &app.session_name,
+        )
+    } else if !expanded_shell.is_empty() {
         build_default_shell(
             &expanded_shell,
             app.env_shim,

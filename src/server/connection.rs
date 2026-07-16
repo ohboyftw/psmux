@@ -1395,8 +1395,11 @@ pub(crate) fn handle_connection(
                 }
             }
             "respawn-pane" | "respawnp" => {
-                let kill = args.contains(&"-k");
-                let _ = tx.send(CtrlReq::RespawnPane(kill));
+                // `-t` is already parsed and stripped globally above, and the
+                // target pane is temp-focused, so only -k and the optional
+                // shell-command remain to parse here.
+                let parsed = crate::types::parse_respawn_pane_args(&args);
+                let _ = tx.send(CtrlReq::RespawnPane(parsed.kill, parsed.command));
             }
             "session-info" => {
                 let (rtx, rrx) = mpsc::channel::<String>();

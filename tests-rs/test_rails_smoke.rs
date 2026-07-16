@@ -93,16 +93,24 @@ fn min_split_rows_respects_pane_border_status() {
     // referenced at pane.rs:628 (vertical) and pane.rs:641 (horizontal).
 }
 
-// ─── P1.9 — respawn-pane -k flag contract ─────────────────────────────────────
+// ─── P1.9 — respawn-pane -k flag + shell-command contract ─────────────────────
 //
-// CtrlReq::RespawnPane must carry the kill flag end-to-end.  If the enum
-// variant signature changes, this test won't compile.
+// CtrlReq::RespawnPane must carry the kill flag and the optional shell-command
+// end-to-end.  If the enum variant signature changes, this test won't compile.
 
 #[test]
 fn respawn_pane_variant_carries_kill_flag() {
     // Type-check: variant must construct with a bool payload.
-    let _ = psmux::types::CtrlReq::RespawnPane(true);
-    let _ = psmux::types::CtrlReq::RespawnPane(false);
+    let _ = psmux::types::CtrlReq::RespawnPane(true, None);
+    let _ = psmux::types::CtrlReq::RespawnPane(false, None);
+}
+
+#[test]
+fn respawn_pane_variant_carries_shell_command() {
+    // tmux's `respawn-pane [-k] [-t target] [shell-command]`. Claude Code's
+    // teammate launcher sends `respawn-pane -k -t %N -- <command>`, so the
+    // command must survive as a payload instead of being silently dropped.
+    let _ = psmux::types::CtrlReq::RespawnPane(true, Some("claude --agent-id a1".to_string()));
 }
 
 // ─── P0.5 — for_each_pane helper signature ────────────────────────────────────

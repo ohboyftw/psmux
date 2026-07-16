@@ -32,5 +32,14 @@ Test-Case "respawn-pane -k on a live pane restarts it (PID changes)" {
     $newPid -and ($newPid -match '^\d+$') -and ($oldPid -ne $newPid)
 }
 
+# tmux syntax is `respawn-pane [-k] [-t target] [shell-command]`. Claude Code's
+# teammate launcher issues `respawn-pane -k -t %N -- <command>`; dropping the
+# command silently respawned the default shell instead, so the teammate never
+# started and the leader waited on it forever.
+Test-Case "respawn-pane -k with a shell-command runs the command, not the shell" {
+    $null = psmux respawn-pane -k -t $S -- "Write-Host RAILS_RESPAWN_CMD_OK; Start-Sleep 30" 2>&1
+    Wait-ForOutput -Target $S -Pattern 'RAILS_RESPAWN_CMD_OK' -TimeoutMs 8000
+}
+
 Remove-PsmuxSession $S
 Write-Summary

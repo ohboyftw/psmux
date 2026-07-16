@@ -81,9 +81,16 @@ function Wait-ForOutput {
         [int]$TimeoutMs = 5000
     )
     # Prefer server-side wait-for; fall back to polling capture-pane if wait-for errors.
+    # WaitOutcome is serialised with `#[serde(tag = "kind", rename_all = "snake_case")]`,
+    # so the discriminant is `kind` ∈ success|exit_success|timeout|error — NOT `outcome`.
+    # Checking a non-existent `.outcome` returned $null and made this helper report
+    # failure on exactly the fast path where wait-for had succeeded.
     $result = psmux wait-for -t $Target --output $Pattern --timeout $TimeoutMs --json 2>&1
     if ($LASTEXITCODE -eq 0) {
-        try { return ($result | ConvertFrom-Json).outcome -eq 'matched' } catch { }
+        try {
+            $kind = ($result | ConvertFrom-Json).kind
+            return ($kind -eq 'success' -or $kind -eq 'exit_success')
+        } catch { }
     }
     # Fallback: 10 poll ticks
     $deadline = (Get-Date).AddMilliseconds($TimeoutMs)

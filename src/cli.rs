@@ -129,7 +129,7 @@ PANE COMMANDS:
     rotate-window, rotatew  Rotate panes in a window
     display-panes, displayp Display pane numbers
     zoom-pane               Toggle pane zoom (alias for resizep -Z)
-    respawn-pane, respawnp  Restart the pane's shell
+    respawn-pane, respawnp  Restart the pane's shell, or run [-- command]
     pipe-pane, pipep        Pipe pane output to a command
     list-panes, lsp         List panes in current window
     capture-pane, capturep  Capture pane content to buffer

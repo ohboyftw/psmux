@@ -3899,10 +3899,15 @@ pub fn run_server(
                                 }
                             }
                         }
-                        CtrlReq::RespawnPane(kill) => {
+                        CtrlReq::RespawnPane(kill, command) => {
                             // Failure here (e.g. "pane still active" without -k)
                             // must not tear down the server — log and continue.
-                            match respawn_active_pane(&mut app, Some(&*pty_system), kill) {
+                            match respawn_active_pane(
+                                &mut app,
+                                Some(&*pty_system),
+                                kill,
+                                command.as_deref(),
+                            ) {
                                 Ok(()) => {
                                     hook_event = Some("after-respawn-pane");
                                 }
@@ -5044,7 +5049,7 @@ pub fn run_server(
                         }
                         CtrlReq::RespawnWindow => {
                             // Kill all panes in the active window and respawn
-                            respawn_active_pane(&mut app, Some(&*pty_system), true)?;
+                            respawn_active_pane(&mut app, Some(&*pty_system), true, None)?;
                             state_dirty = true;
                         }
                         CtrlReq::PopupInput(data) => {

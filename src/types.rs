@@ -1151,15 +1151,15 @@ pub enum CtrlReq {
     DisplayPaneSelect(usize),
     BreakPane,
     JoinPane(usize),
-    RespawnPane(bool),                     // kill flag (-k)
+    RespawnPane(bool, Option<String>), // kill flag (-k), optional shell-command
     BindKey(String, String, String, bool), // table, key, command, repeat
     UnbindKey(String),
     UnbindAllInTable(String), // table name to clear with -a
     ListKeys(mpsc::Sender<String>),
     SetOption(String, String),
     SetOptionQuiet(String, String, bool, bool), // set-option with quiet flag, only_if_unset (-o)
-    SetOptionUnset(String),               // set-option -u
-    SetOptionAppend(String, String),      // set-option -a
+    SetOptionUnset(String),                     // set-option -u
+    SetOptionAppend(String, String),            // set-option -a
     ShowOptions(mpsc::Sender<String>),
     ShowWindowOptions(mpsc::Sender<String>),
     SourceFile(String),
@@ -1396,6 +1396,62 @@ pub(crate) fn backend_event_sender_count() -> usize {
     BACKEND_EVENT_SENDERS.lock().map(|v| v.len()).unwrap_or(0)
 }
 
+/// Parsed form of a `respawn-pane` control command.
+///
+/// tmux syntax: `respawn-pane [-k] [-t target-pane] [shell-command]`. The
+/// shell-command may follow `--`, which is the form Claude Code's teammate
+/// launcher uses (`respawn-pane -k -t %N -- <command>`).
+#[derive(Debug, Default, PartialEq, Eq)]
+pub struct RespawnPaneArgs {
+    /// `-k`: kill the running process first rather than requiring a dead pane.
+    pub kill: bool,
+    /// `-t`: target pane. `None` respawns the active pane.
+    pub target: Option<String>,
+    /// Shell-command to run instead of the default shell. `None` uses the shell.
+    pub command: Option<String>,
+}
+
+/// Parse `respawn-pane` arguments from an already-tokenized argument list.
+pub fn parse_respawn_pane_args(args: &[&str]) -> RespawnPaneArgs {
+    RespawnPaneArgs {
+        kill: args.contains(&"-k"),
+        target: args
+            .windows(2)
+            .find(|w| w[0] == "-t")
+            .map(|w| w[1].trim_matches('"').to_string()),
+        command: respawn_shell_command(args),
+    }
+}
+
+/// Extract the shell-command: everything after `--`, otherwise the first
+/// positional argument that is not the value of a preceding flag.
+fn respawn_shell_command(args: &[&str]) -> Option<String> {
+    let tokens: Vec<&str> = if let Some(pos) = args.iter().position(|a| *a == "--") {
+        args[pos + 1..].to_vec()
+    } else {
+        let mut i = 0;
+        loop {
+            match args.get(i) {
+                None => return None,
+                // Flags that consume a following value.
+                Some(&"-c") | Some(&"-e") | Some(&"-t") => i += 2,
+                Some(a) if a.starts_with('-') => i += 1,
+                Some(_) => break args[i..].to_vec(),
+            }
+        }
+    };
+    if tokens.is_empty() {
+        return None;
+    }
+    Some(
+        tokens
+            .iter()
+            .map(|s| s.trim_matches('"'))
+            .collect::<Vec<_>>()
+            .join(" "),
+    )
+}
+
 /// Tracked persistent client TCP streams.
 /// Connection handlers register clones here so the server can explicitly
 /// `shutdown()` them before `process::exit(0)`.  Without this, Windows
@@ -1594,5 +1650,63 @@ mod backend_event_registration_tests {
             rx.try_recv().is_err(),
             "dropped registration must not receive further events",
         );
+    }
+}
+
+#[cfg(test)]
+mod respawn_pane_args_tests {
+    use super::*;
+
+    #[test]
+    fn command_after_double_dash_is_captured() {
+        let parsed =
+            parse_respawn_pane_args(&["-k", "-t", "%4", "--", "claude", "--agent-id", "a1"]);
+        assert_eq!(
+            parsed.command.as_deref(),
+            Some("claude --agent-id a1"),
+            "argv after -- is the shell-command and must not be dropped",
+        );
+    }
+
+    #[test]
+    fn target_after_dash_t_is_captured() {
+        let parsed = parse_respawn_pane_args(&["-k", "-t", "%4", "--", "cat"]);
+        assert_eq!(parsed.target.as_deref(), Some("%4"));
+    }
+
+    #[test]
+    fn kill_flag_is_captured() {
+        let parsed = parse_respawn_pane_args(&["-k", "-t", "%4", "--", "cat"]);
+        assert!(parsed.kill);
+    }
+
+    #[test]
+    fn kill_flag_is_absent_without_dash_k() {
+        let parsed = parse_respawn_pane_args(&["-t", "%4"]);
+        assert!(!parsed.kill);
+    }
+
+    #[test]
+    fn command_is_none_when_no_command_given() {
+        let parsed = parse_respawn_pane_args(&["-k", "-t", "%4"]);
+        assert_eq!(parsed.command, None);
+    }
+
+    #[test]
+    fn quoted_command_tokens_are_unquoted() {
+        let parsed = parse_respawn_pane_args(&["-t", "%4", "--", "\"my cmd\"", "\"arg\""]);
+        assert_eq!(parsed.command.as_deref(), Some("my cmd arg"));
+    }
+
+    #[test]
+    fn bare_positional_command_is_captured() {
+        let parsed = parse_respawn_pane_args(&["-k", "-t", "%4", "htop"]);
+        assert_eq!(parsed.command.as_deref(), Some("htop"));
+    }
+
+    #[test]
+    fn target_value_is_not_mistaken_for_positional_command() {
+        let parsed = parse_respawn_pane_args(&["-t", "%4"]);
+        assert_eq!(parsed.command, None, "-t's value is not a command");
     }
 }
