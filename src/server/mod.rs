@@ -988,6 +988,15 @@ pub fn run_server(
     // (250ms is imperceptible to users).
     let mut last_reap = Instant::now();
 
+    // Coalesce the proactive server-push (see ~"Server-push" block below) to
+    // ~30fps during sustained autonomous output (animations / token streaming).
+    // Without this, an always-animating TUI (e.g. an agent CLI) sets state_dirty
+    // every ~1ms and forces a full 50-100KB frame serialization + push on each
+    // tick — ~25% CPU on BOTH server and client (measured).  echo_active and
+    // structural (meta_dirty) changes bypass the cap so interactive latency and
+    // layout updates are unaffected.
+    let mut last_server_push = Instant::now() - Duration::from_millis(100);
+
     // Persist temp_focus_restore across batch boundaries so that a
     // FocusWindowTemp/FocusPaneByIndexTemp in one batch plus the actual
     // command (e.g. CapturePane) in the next batch still works correctly.
@@ -4053,7 +4062,7 @@ pub fn run_server(
                                         app.renumber_windows = false;
                                     }
                                     "remain-on-exit" => {
-                                        app.remain_on_exit = false;
+                                        app.remain_on_exit = crate::types::RemainOnExit::Off;
                                     }
                                     "destroy-unattached" => {
                                         app.destroy_unattached = false;
@@ -4191,7 +4200,7 @@ pub fn run_server(
                             ));
                             output.push_str(&format!(
                                 "remain-on-exit {}\n",
-                                if app.remain_on_exit { "on" } else { "off" }
+                                app.remain_on_exit.as_str()
                             ));
                             output.push_str(&format!(
                                 "destroy-unattached {}\n",
@@ -5857,7 +5866,9 @@ pub fn run_server(
         // echo, etc.).  This gives event-driven rendering like wezterm:
         // frames arrive within 1-5ms of ConPTY output instead of waiting
         // for the next client poll cycle (up to 50ms).
-        if (state_dirty || meta_dirty) && crate::types::has_frame_receivers() {
+        let server_push_due =
+            echo_active || meta_dirty || last_server_push.elapsed() >= Duration::from_millis(33);
+        if (state_dirty || meta_dirty) && crate::types::has_frame_receivers() && server_push_due {
             // Rebuild metadata cache if structural changes happened.
             if meta_dirty {
                 cached_windows_json = list_windows_json_with_tabs(&app)?;
@@ -5953,6 +5964,7 @@ pub fn run_server(
                 }
             }
             crate::types::push_frame(&combined_buf);
+            last_server_push = Instant::now();
         }
         // ── Status-interval timer: fire hooks periodically ──
         if app.status_interval > 0 {

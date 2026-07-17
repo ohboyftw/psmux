@@ -557,7 +557,7 @@ struct ExitedPaneInfo {
 
 pub fn prune_exited(
     n: Node,
-    remain_on_exit: bool,
+    remain_on_exit: crate::types::RemainOnExit,
     control_clients: &[crate::control::ControlClient],
 ) -> Option<Node> {
     let mut exited: Vec<ExitedPaneInfo> = Vec::new();
@@ -594,7 +594,7 @@ pub fn prune_exited(
 /// pane info for push event delivery.
 fn prune_exited_inner(
     n: Node,
-    remain_on_exit: bool,
+    remain_on_exit: crate::types::RemainOnExit,
     exited: &mut Vec<ExitedPaneInfo>,
 ) -> Option<Node> {
     match n {
@@ -624,7 +624,7 @@ fn prune_exited_inner(
                     elapsed_ms: Some(p.spawn_time.elapsed().as_millis() as u64),
                     command: p.spawn_command.clone(),
                 });
-                return if remain_on_exit {
+                return if remain_on_exit.keeps(exit_code) {
                     p.dead = true;
                     Some(Node::Leaf(p))
                 } else {
@@ -647,7 +647,7 @@ fn prune_exited_inner(
                         elapsed_ms: Some(p.spawn_time.elapsed().as_millis() as u64),
                         command: p.spawn_command.clone(),
                     });
-                    if remain_on_exit {
+                    if remain_on_exit.keeps(exit_code) {
                         p.dead = true;
                         Some(Node::Leaf(p))
                     } else {

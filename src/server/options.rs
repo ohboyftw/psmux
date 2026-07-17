@@ -112,13 +112,7 @@ pub(crate) fn get_option_value(app: &AppState, name: &str) -> String {
                 "off".into()
             }
         }
-        "remain-on-exit" => {
-            if app.remain_on_exit {
-                "on".into()
-            } else {
-                "off".into()
-            }
-        }
+        "remain-on-exit" => app.remain_on_exit.as_str().into(),
         "destroy-unattached" => {
             if app.destroy_unattached {
                 "on".into()
@@ -421,7 +415,7 @@ pub(crate) fn apply_set_option(app: &mut AppState, option: &str, value: &str, _q
             app.renumber_windows = matches!(value, "on" | "true" | "1");
         }
         "remain-on-exit" => {
-            app.remain_on_exit = matches!(value, "on" | "true" | "1");
+            app.remain_on_exit = crate::types::RemainOnExit::parse(value);
         }
         "destroy-unattached" => {
             app.destroy_unattached = matches!(value, "on" | "true" | "1");

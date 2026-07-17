@@ -1042,11 +1042,7 @@ fn lookup_option(name: &str, app: &AppState) -> Option<String> {
         } else {
             "off".into()
         }),
-        "remain-on-exit" => Some(if app.remain_on_exit {
-            "on".into()
-        } else {
-            "off".into()
-        }),
+        "remain-on-exit" => Some(app.remain_on_exit.as_str().into()),
         "destroy-unattached" => Some(if app.destroy_unattached {
             "on".into()
         } else {

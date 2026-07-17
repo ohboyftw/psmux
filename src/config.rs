@@ -638,7 +638,7 @@ pub fn parse_option_value(app: &mut AppState, rest: &str, _is_global: bool) {
             app.visual_activity = matches!(value, "on" | "true" | "1");
         }
         "remain-on-exit" => {
-            app.remain_on_exit = matches!(value, "on" | "true" | "1");
+            app.remain_on_exit = crate::types::RemainOnExit::parse(value);
         }
         "destroy-unattached" => {
             app.destroy_unattached = matches!(value, "on" | "true" | "1");

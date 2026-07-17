@@ -463,6 +463,50 @@ pub enum FocusDir {
     Down,
 }
 
+/// tmux's `remain-on-exit` is tri-state, not a boolean: `off` (default), `on`,
+/// and `failed` — the last keeps a pane only when its process exited non-zero.
+/// Claude Code sets `failed` on teammate panes so a crashed agent leaves its
+/// error on screen instead of the pane vanishing without a trace.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum RemainOnExit {
+    #[default]
+    Off,
+    On,
+    Failed,
+}
+
+impl RemainOnExit {
+    /// Parse a tmux option value; unrecognised values mean `off`.
+    pub fn parse(value: &str) -> Self {
+        match value {
+            "on" | "true" | "1" => Self::On,
+            "failed" => Self::Failed,
+            _ => Self::Off,
+        }
+    }
+
+    /// Whether a pane whose process exited with `exit_code` should be kept.
+    /// An unknown exit status counts as a failure so the pane survives for
+    /// inspection rather than silently disappearing.
+    #[must_use]
+    pub fn keeps(self, exit_code: Option<i32>) -> bool {
+        match self {
+            Self::Off => false,
+            Self::On => true,
+            Self::Failed => exit_code != Some(0),
+        }
+    }
+
+    #[must_use]
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Off => "off",
+            Self::On => "on",
+            Self::Failed => "failed",
+        }
+    }
+}
+
 pub struct AppState {
     pub windows: Vec<Window>,
     pub active_idx: usize,
@@ -608,8 +652,8 @@ pub struct AppState {
     pub activity_action: String,
     /// silence-action: what to do on silence ("any", "none", "current", "other")
     pub silence_action: String,
-    /// remain-on-exit: keep panes open after process exits
-    pub remain_on_exit: bool,
+    /// remain-on-exit: keep panes open after process exits (off/on/failed)
+    pub remain_on_exit: RemainOnExit,
     /// destroy-unattached: exit server when no clients remain attached
     pub destroy_unattached: bool,
     /// exit-empty: exit server when all panes/windows are empty
@@ -868,7 +912,7 @@ impl AppState {
             visual_activity: false,
             activity_action: "other".to_string(),
             silence_action: "other".to_string(),
-            remain_on_exit: false,
+            remain_on_exit: RemainOnExit::Off,
             destroy_unattached: false,
             exit_empty: true,
             aggressive_resize: false,
@@ -1708,5 +1752,41 @@ mod respawn_pane_args_tests {
     fn target_value_is_not_mistaken_for_positional_command() {
         let parsed = parse_respawn_pane_args(&["-t", "%4"]);
         assert_eq!(parsed.command, None, "-t's value is not a command");
+    }
+}
+
+#[cfg(test)]
+mod remain_on_exit_tests {
+    use super::*;
+
+    #[test]
+    fn parses_tmux_tristate_including_failed() {
+        assert_eq!(RemainOnExit::parse("on"), RemainOnExit::On);
+        assert_eq!(RemainOnExit::parse("off"), RemainOnExit::Off);
+        assert_eq!(RemainOnExit::parse("failed"), RemainOnExit::Failed);
+        // Unrecognised values keep the previous fall-back to `off`.
+        assert_eq!(RemainOnExit::parse("bogus"), RemainOnExit::Off);
+    }
+
+    #[test]
+    fn failed_keeps_only_panes_that_exited_nonzero() {
+        // Claude Code sets `remain-on-exit failed` on teammate panes: a crashed
+        // agent must leave its pane (and its error) on screen, while a clean
+        // exit must not linger.
+        assert!(!RemainOnExit::Failed.keeps(Some(0)));
+        assert!(RemainOnExit::Failed.keeps(Some(1)));
+    }
+
+    #[test]
+    fn failed_keeps_pane_when_exit_status_is_unknown() {
+        assert!(RemainOnExit::Failed.keeps(None));
+    }
+
+    #[test]
+    fn on_and_off_ignore_the_exit_code() {
+        assert!(RemainOnExit::On.keeps(Some(0)));
+        assert!(RemainOnExit::On.keeps(Some(1)));
+        assert!(!RemainOnExit::Off.keeps(Some(0)));
+        assert!(!RemainOnExit::Off.keeps(Some(1)));
     }
 }
