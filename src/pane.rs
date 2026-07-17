@@ -204,6 +204,7 @@ pub fn create_window(
     let mut shell_cmd = if command.is_some() {
         build_command(
             command,
+            Some(expanded_shell.as_str()),
             app.env_shim,
             app.allow_predictions,
             &app.session_name,
@@ -216,7 +217,13 @@ pub fn create_window(
             &app.session_name,
         )
     } else {
-        build_command(None, app.env_shim, app.allow_predictions, &app.session_name)
+        build_command(
+            None,
+            None,
+            app.env_shim,
+            app.allow_predictions,
+            &app.session_name,
+        )
     };
     // Override CWD if -c start_dir was specified
     if let Some(dir) = start_dir {
@@ -398,7 +405,13 @@ pub fn spawn_warm_pane(
             &app.session_name,
         )
     } else {
-        build_command(None, app.env_shim, app.allow_predictions, &app.session_name)
+        build_command(
+            None,
+            None,
+            app.env_shim,
+            app.allow_predictions,
+            &app.session_name,
+        )
     };
     let pane_id = app.next_pane_id;
     app.next_pane_id += 1;
@@ -797,6 +810,7 @@ pub fn split_active_with_command(
     let mut shell_cmd = if command.is_some() {
         build_command(
             command,
+            Some(expanded_shell.as_str()),
             app.env_shim,
             app.allow_predictions,
             &app.session_name,
@@ -809,7 +823,13 @@ pub fn split_active_with_command(
             &app.session_name,
         )
     } else {
-        build_command(None, app.env_shim, app.allow_predictions, &app.session_name)
+        build_command(
+            None,
+            None,
+            app.env_shim,
+            app.allow_predictions,
+            &app.session_name,
+        )
     };
     // Override CWD if -c start_dir was specified
     if let Some(dir) = start_dir {
@@ -1051,7 +1071,7 @@ pub fn kill_pane_by_id(app: &mut AppState, pane_id: usize) -> io::Result<()> {
 }
 
 pub fn detect_shell(session_name: &str) -> CommandBuilder {
-    build_command(None, false, false, session_name)
+    build_command(None, None, false, false, session_name)
 }
 
 /// Set TMUX, TMUX_PANE, and PSMUX_SESSION environment variables on a CommandBuilder.
@@ -1201,6 +1221,22 @@ const ENV_SHIM_PS: &str = concat!(
     // $TMUX — no wrapper function needed.
 );
 
+/// Prefix a PowerShell command string with the POSIX `env` shim.
+///
+/// Panes spawned *with* a command run `pwsh -Command <cmd>` and never source
+/// the shim that [`build_psrl_init`] installs for interactive panes.  Callers
+/// driving psmux through its tmux surface emit POSIX command strings — Claude
+/// Code launches a teammate as `cd <dir> && env VAR=VAL claude --agent-id …` —
+/// so without the shim `env` is undefined and the pane dies on spawn.
+fn prepend_env_shim(cmd: &str, env_shim: bool) -> String {
+    if env_shim {
+        // ENV_SHIM_PS is self-terminating (ends in "; ").
+        format!("{ENV_SHIM_PS}{cmd}")
+    } else {
+        cmd.to_string()
+    }
+}
+
 /// PSReadLine prediction fix — disables predictions that crash with
 /// NullReferenceException in GetHistoryItems() during ConPTY startup.
 /// See https://github.com/psmux/psmux/issues/109
@@ -1314,6 +1350,7 @@ fn build_psrl_init(env_shim: bool, allow_predictions: bool) -> String {
 
 pub fn build_command(
     command: Option<&str>,
+    shell_override: Option<&str>,
     env_shim: bool,
     allow_predictions: bool,
     session_name: &str,
@@ -1322,12 +1359,24 @@ pub fn build_command(
     // (home dir) when no cwd is set on CommandBuilder, so we must set it
     // explicitly to honour the caller's working directory.
     let cwd = std::env::current_dir().ok();
+    // `--shell` / `default-shell` wins over the system shell, matching
+    // build_default_shell's resolution (quote-aware, honours trailing args
+    // such as `--login`).  Command panes previously ignored both and always
+    // fell back to cached_shell().
+    let resolved_shell: Option<(String, Vec<String>)> = match shell_override {
+        Some(s) if !s.is_empty() => {
+            let (program, extra) = resolve_shell_program(s);
+            Some((cached_which(&program), extra))
+        }
+        _ => cached_shell().map(|s| (s.to_string(), Vec::new())),
+    };
     if let Some(cmd) = command {
-        let shell = cached_shell().map(|s| s.to_string());
-
-        match shell {
-            Some(path) => {
+        match resolved_shell {
+            Some((path, extra_args)) => {
                 let mut builder = CommandBuilder::new(&path);
+                if !extra_args.is_empty() {
+                    builder.args(extra_args);
+                }
                 if let Some(ref dir) = cwd {
                     builder.cwd(dir);
                 }
@@ -1342,7 +1391,7 @@ pub fn build_command(
                     .unwrap_or("")
                     .to_lowercase();
                 if stem == "pwsh" || stem == "powershell" {
-                    builder.args(["-NoLogo", "-Command", cmd]);
+                    builder.args(["-NoLogo", "-Command", &prepend_env_shim(cmd, env_shim)]);
                 } else if matches!(
                     stem.as_str(),
                     "bash" | "sh" | "zsh" | "fish" | "dash" | "ash"
@@ -1362,12 +1411,12 @@ pub fn build_command(
                 builder.env("COLORTERM", "truecolor");
                 builder.env("PSMUX_SESSION", session_name);
                 builder.env("PSMUX", "1");
-                builder.args(["-NoLogo", "-Command", cmd]);
+                builder.args(["-NoLogo", "-Command", &prepend_env_shim(cmd, env_shim)]);
                 builder
             }
         }
     } else {
-        let shell = cached_shell().map(|s| s.to_string());
+        let shell = resolved_shell.map(|(path, _)| path);
         // PSReadLine v2.2.6+ enables PredictionSource HistoryAndPlugin by default.
         // Predictions cause display corruption in terminal multiplexers because
         // PSReadLine's VT rendering races with ConPTY output capture.
@@ -1525,7 +1574,7 @@ pub fn build_default_shell(
 /// Used when -- separator is specified in new-session.
 pub fn build_raw_command(raw_args: &[String], session_name: &str) -> CommandBuilder {
     if raw_args.is_empty() {
-        return build_command(None, true, false, session_name);
+        return build_command(None, None, true, false, session_name);
     }
     let program = &raw_args[0];
     let mut builder = CommandBuilder::new(program);
@@ -1551,7 +1600,12 @@ pub fn build_raw_command(raw_args: &[String], session_name: &str) -> CommandBuil
             .and_then(|s| s.to_str())
             .unwrap_or(program)
             .to_ascii_lowercase();
-        if prog_name == "cmd" && raw_args.get(1).map(|a| a == "/c" || a == "/C").unwrap_or(false) {
+        if prog_name == "cmd"
+            && raw_args
+                .get(1)
+                .map(|a| a == "/c" || a == "/C")
+                .unwrap_or(false)
+        {
             // Pass /c as argv[1], then the joined+dequoted command as argv[2].
             builder.arg("/c");
             if raw_args.len() > 2 {
@@ -1681,5 +1735,9 @@ pub fn spawn_reader_thread(
 #[cfg(test)]
 #[path = "../tests-rs/test_issue151_strict_mode.rs"]
 mod test_issue151_strict_mode;
+
+#[cfg(test)]
+#[path = "../tests-rs/test_posix_env_shim_command_panes.rs"]
+mod test_posix_env_shim_command_panes;
 
 // reap_children is in tree.rs

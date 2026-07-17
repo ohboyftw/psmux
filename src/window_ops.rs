@@ -1254,6 +1254,7 @@ pub fn respawn_active_pane(
     let mut shell_cmd = if command.is_some() {
         crate::pane::build_command(
             command,
+            Some(expanded_shell.as_str()),
             app.env_shim,
             app.allow_predictions,
             &app.session_name,
