@@ -249,6 +249,56 @@ fn all_panes_dead(app: &mut AppState) -> bool {
 /// Check all wait-pane waiters and notify any whose pane has exited.
 /// Waiters for panes that no longer exist in the tree are also notified
 /// with exit code 0 (pane was already reaped).
+/// Resolve respawn callers once their pane's fate is known, or once the grace
+/// period expires. A non-zero exit inside the grace window means the command
+/// never really started, so the CLI must exit non-zero; a clean exit is a
+/// legitimately short-lived command and counts as success.
+fn drain_pending_respawn_replies(app: &mut AppState) {
+    let now = std::time::Instant::now();
+    app.pending_respawn_replies
+        .retain(|(pane_id, deadline, sender)| {
+            let mut found = false;
+            for win in app.windows.iter_mut() {
+                if let Some(path) = crate::tree::find_path_by_id(&win.root, *pane_id) {
+                    found = true;
+                    if let Some(p) = crate::tree::active_pane_mut(&mut win.root, &path) {
+                        let code = p
+                            .child
+                            .try_wait()
+                            .ok()
+                            .flatten()
+                            .map(|s| s.exit_code() as i32);
+                        if let Some(code) = code {
+                            let _ = if code == 0 {
+                                sender.send(Ok(()))
+                            } else {
+                                sender.send(Err(format!(
+                                    "command exited immediately with status {}",
+                                    code
+                                )))
+                            };
+                            return false;
+                        }
+                    }
+                    break;
+                }
+            }
+            if !found {
+                // Pruned before we could read its status. That is ambiguous — a
+                // clean short-lived command is pruned exactly like a failed one —
+                // so do not claim a failure we cannot substantiate. Real failures
+                // are caught by try_wait above, which runs before reap_children.
+                let _ = sender.send(Ok(()));
+                return false;
+            }
+            if now >= *deadline {
+                let _ = sender.send(Ok(()));
+                return false;
+            }
+            true
+        });
+}
+
 fn drain_wait_pane_queue(app: &mut AppState) {
     app.wait_pane_queue.retain(|(pane_id, sender)| {
         // Search for the pane across all windows
@@ -1298,7 +1348,14 @@ pub fn run_server(
                             meta_dirty = true;
                             hook_event = Some("after-new-window");
                         }
-                        CtrlReq::NewWindowRawPrint(argv, name, detached, start_dir, format_str, resp) => {
+                        CtrlReq::NewWindowRawPrint(
+                            argv,
+                            name,
+                            detached,
+                            start_dir,
+                            format_str,
+                            resp,
+                        ) => {
                             let prev_idx = app.active_idx;
                             let start_dir = start_dir
                                 .map(|d| expand_format(&d, &app))
@@ -1326,8 +1383,11 @@ pub fn run_server(
                                 }
                             }
                             let new_win_idx = app.windows.len() - 1;
-                            let fmt = format_str.as_deref().unwrap_or("#{session_name}:#{window_index}");
-                            let pane_info = crate::format::expand_format_for_window(fmt, &app, new_win_idx);
+                            let fmt = format_str
+                                .as_deref()
+                                .unwrap_or("#{session_name}:#{window_index}");
+                            let pane_info =
+                                crate::format::expand_format_for_window(fmt, &app, new_win_idx);
                             if detached {
                                 app.active_idx = prev_idx;
                             }
@@ -3908,7 +3968,7 @@ pub fn run_server(
                                 }
                             }
                         }
-                        CtrlReq::RespawnPane(kill, command) => {
+                        CtrlReq::RespawnPane(kill, command, reply) => {
                             // Failure here (e.g. "pane still active" without -k)
                             // must not tear down the server — log and continue.
                             match respawn_active_pane(
@@ -3919,9 +3979,30 @@ pub fn run_server(
                             ) {
                                 Ok(()) => {
                                     hook_event = Some("after-respawn-pane");
+                                    // Spawning only proves the wrapper shell
+                                    // started. Hold the verdict for a short
+                                    // grace period so a payload that dies on
+                                    // startup is reported as a failure.
+                                    let pane_id = {
+                                        let win = &app.windows[app.active_idx];
+                                        crate::tree::active_pane(&win.root, &win.active_path)
+                                            .map(|p| p.id)
+                                    };
+                                    match pane_id {
+                                        Some(id) => app.pending_respawn_replies.push((
+                                            id,
+                                            std::time::Instant::now()
+                                                + std::time::Duration::from_millis(600),
+                                            reply,
+                                        )),
+                                        None => {
+                                            let _ = reply.send(Ok(()));
+                                        }
+                                    }
                                 }
                                 Err(e) => {
                                     eprintln!("psmux respawn-pane: {}", e);
+                                    let _ = reply.send(Err(e.to_string()));
                                 }
                             }
                         }
@@ -5625,7 +5706,10 @@ pub fn run_server(
                         CtrlReq::ControlDeregister { client_id } => {
                             app.control_clients.retain(|c| c.id != client_id);
                         }
-                        CtrlReq::ControlSubscribe { client_id: _, topic: _ } => {
+                        CtrlReq::ControlSubscribe {
+                            client_id: _,
+                            topic: _,
+                        } => {
                             // Stage 1B: per-client topic subscription set.
                             // Today the fan-out is unconditional in
                             // `crate::control::emit_lifecycle`, so this is a
@@ -6106,6 +6190,11 @@ pub fn run_server(
             // Check wait-pane waiters before reaping (so we can capture exit codes)
             if !app.wait_pane_queue.is_empty() {
                 drain_wait_pane_queue(&mut app);
+            }
+            // Same ordering requirement: a respawned pane that died must be read
+            // before reap_children prunes it, or its exit status is lost.
+            if !app.pending_respawn_replies.is_empty() {
+                drain_pending_respawn_replies(&mut app);
             }
             let (all_empty, any_pruned) = tree::reap_children(&mut app)?;
             if any_pruned {

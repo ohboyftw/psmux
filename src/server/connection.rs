@@ -456,7 +456,8 @@ pub(crate) fn handle_connection(
                     .find(|w| w[0] == "-F")
                     .map(|w| w[1].trim_matches('"').to_string());
                 // Everything after "--" is the argv, already tokenized by parse_command_line.
-                let raw_argv: Vec<String> = if let Some(pos) = args.iter().position(|a| *a == "--") {
+                let raw_argv: Vec<String> = if let Some(pos) = args.iter().position(|a| *a == "--")
+                {
                     args[pos + 1..].iter().map(|s| s.to_string()).collect()
                 } else {
                     Vec::new()
@@ -474,9 +475,7 @@ pub(crate) fn handle_connection(
                         break;
                     }
                 } else {
-                    let _ = tx.send(CtrlReq::NewWindowRaw(
-                        raw_argv, name, detached, start_dir,
-                    ));
+                    let _ = tx.send(CtrlReq::NewWindowRaw(raw_argv, name, detached, start_dir));
                 }
             }
             "split-window" | "splitw" => {
@@ -1399,7 +1398,23 @@ pub(crate) fn handle_connection(
                 // target pane is temp-focused, so only -k and the optional
                 // shell-command remain to parse here.
                 let parsed = crate::types::parse_respawn_pane_args(&args);
-                let _ = tx.send(CtrlReq::RespawnPane(parsed.kill, parsed.command));
+                // Reply so the CLI can exit non-zero on failure. Claude Code's
+                // teammate launcher gates on `if (code !== 0) throw`; without a
+                // response a pane that dies on spawn still reported success.
+                let (rtx, rrx) = mpsc::channel::<Result<(), String>>();
+                let _ = tx.send(CtrlReq::RespawnPane(parsed.kill, parsed.command, rtx));
+                match rrx.recv() {
+                    Ok(Ok(())) => {
+                        let _ = writeln!(write_stream, "OK");
+                    }
+                    Ok(Err(e)) => {
+                        let _ = writeln!(write_stream, "ERROR: {}", e);
+                    }
+                    Err(_) => {
+                        let _ = writeln!(write_stream, "ERROR: server did not respond");
+                    }
+                }
+                let _ = write_stream.flush();
             }
             "session-info" => {
                 let (rtx, rrx) = mpsc::channel::<String>();

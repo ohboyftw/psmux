@@ -507,6 +507,9 @@ impl RemainOnExit {
     }
 }
 
+/// A respawn caller awaiting its verdict: (pane_id, grace deadline, reply).
+pub type PendingRespawnReply = (usize, std::time::Instant, mpsc::Sender<Result<(), String>>);
+
 pub struct AppState {
     pub windows: Vec<Window>,
     pub active_idx: usize,
@@ -788,6 +791,10 @@ pub struct AppState {
     /// Checked during the reap cycle; when a pane exits, the exit code is sent
     /// and the waiter is removed.
     pub wait_pane_queue: Vec<(usize, mpsc::Sender<i32>)>,
+    /// Respawn callers awaiting a verdict. A spawn only proves the wrapper
+    /// shell started; the payload can die microseconds later. Checked on the
+    /// poll tick so the single-threaded event loop never blocks waiting.
+    pub pending_respawn_replies: Vec<PendingRespawnReply>,
     // ── Resurrection config ──
     /// Keep snapshot after clean session exit (default: false).
     pub resurrect_on_exit: bool,
@@ -980,6 +987,7 @@ impl AppState {
             warm_pool_size: 1,
             pending_plugin_scripts: Vec::new(),
             wait_pane_queue: Vec::new(),
+            pending_respawn_replies: Vec::new(),
             resurrect_on_exit: false,
             resurrect_dir: None,
             shell_cmd_cache: std::sync::Mutex::new(std::collections::HashMap::new()),
@@ -1195,7 +1203,7 @@ pub enum CtrlReq {
     DisplayPaneSelect(usize),
     BreakPane,
     JoinPane(usize),
-    RespawnPane(bool, Option<String>), // kill flag (-k), optional shell-command
+    RespawnPane(bool, Option<String>, mpsc::Sender<Result<(), String>>), // kill flag (-k), optional shell-command, result reply
     BindKey(String, String, String, bool), // table, key, command, repeat
     UnbindKey(String),
     UnbindAllInTable(String), // table name to clear with -a
@@ -1378,10 +1386,15 @@ pub enum CtrlReq {
     },
     /// Deregister a control-mode client (called when the socket closes or
     /// the writer task drops). Idempotent — silently no-op if the id is gone.
-    ControlDeregister { client_id: u64 },
+    ControlDeregister {
+        client_id: u64,
+    },
     /// Subscribe a registered client to a notification topic. Stage 1A
     /// accepts opaque topic strings; Stage 1B will define the canonical set.
-    ControlSubscribe { client_id: u64, topic: String },
+    ControlSubscribe {
+        client_id: u64,
+        topic: String,
+    },
 }
 
 /// Global flag set by PTY reader threads when new output arrives.

@@ -36,8 +36,15 @@ Test-Case "respawn-pane -k on a live pane restarts it (PID changes)" {
 # teammate launcher issues `respawn-pane -k -t %N -- <command>`; dropping the
 # command silently respawned the default shell instead, so the teammate never
 # started and the leader waited on it forever.
+# The command must be valid in BOTH pwsh and POSIX shells: since 6ba95ba,
+# command panes honour `--shell` / `default-shell`, so on a machine whose
+# default-shell is Git Bash this runs under bash. The original body used
+# `Write-Host ...; Start-Sleep 30` (pwsh-only), which bash rejects with
+# "Write-Host: command not found" — the case failed for shell reasons, not
+# because the shell-command plumbing was broken. `echo` and `sleep` exist in
+# bash and alias to Write-Output/Start-Sleep in pwsh.
 Test-Case "respawn-pane -k with a shell-command runs the command, not the shell" {
-    $null = psmux respawn-pane -k -t $S -- "Write-Host RAILS_RESPAWN_CMD_OK; Start-Sleep 30" 2>&1
+    $null = psmux respawn-pane -k -t $S -- "echo RAILS_RESPAWN_CMD_OK; sleep 30" 2>&1
     Wait-ForOutput -Target $S -Pattern 'RAILS_RESPAWN_CMD_OK' -TimeoutMs 8000
 }
 

@@ -1256,7 +1256,10 @@ fn run_main() -> io::Result<()> {
                 // them as separate, intact arguments even when they contain spaces.
                 cmd_line.push_str(" --");
                 for part in &nw_positional {
-                    cmd_line.push_str(&format!(" \"{}\"", part.replace('\\', "\\\\").replace('"', "\\\"")));
+                    cmd_line.push_str(&format!(
+                        " \"{}\"",
+                        part.replace('\\', "\\\\").replace('"', "\\\"")
+                    ));
                 }
                 cmd_line.push('\n');
                 if print_info {
@@ -2349,7 +2352,11 @@ fn run_main() -> io::Result<()> {
                 cmd.push_str(&format!(" \"{}\"", c.replace('"', "\\\"")));
             }
             cmd.push('\n');
-            send_control(cmd)?;
+            let resp = send_control_with_response(cmd)?;
+            if let Some(msg) = resp.lines().find(|l| l.starts_with("ERROR")) {
+                eprintln!("psmux respawn-pane: {}", msg.trim_start_matches("ERROR: "));
+                std::process::exit(1);
+            }
             return Ok(());
         }
         // last-window - Select last used window
@@ -2816,7 +2823,8 @@ fn run_main() -> io::Result<()> {
                     .as_ref()
                     .and_then(|t| t.parse().ok())
                     .unwrap_or(3_600_000);
-                let read_timeout = std::time::Duration::from_millis(timeout_ms.saturating_add(5_000));
+                let read_timeout =
+                    std::time::Duration::from_millis(timeout_ms.saturating_add(5_000));
                 let resp = send_control_with_response_timeout(cmd, Some(read_timeout))?;
                 let trimmed = resp.trim();
                 // Exit-code mapping: success=0, timeout=1, error=2.
@@ -3047,13 +3055,9 @@ fn run_main() -> io::Result<()> {
                 .map_err(|e| io::Error::other(format!("cannot write initial state: {e}")))?;
 
             let mut timed_out = false;
-            if let Err(e) = crate::orchestrate::run_plan(
-                &plan,
-                &mut state,
-                &plan_dir,
-                &state_path,
-                timeout_ms,
-            ) {
+            if let Err(e) =
+                crate::orchestrate::run_plan(&plan, &mut state, &plan_dir, &state_path, timeout_ms)
+            {
                 eprintln!("psmux orchestrate: {e}");
                 // Continue to summary/exit so state.json is written and --json
                 // emits results even when the timeout fires.
