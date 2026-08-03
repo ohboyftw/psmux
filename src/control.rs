@@ -477,6 +477,9 @@ mod tests {
                 elapsed_ms: 12,
             },
         );
-        assert!(rx.try_recv().is_err(), "Stage 1A: pane events do not emit CC lines yet");
+        assert!(
+            rx.try_recv().is_err(),
+            "Stage 1A: pane events do not emit CC lines yet"
+        );
     }
 }
