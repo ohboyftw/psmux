@@ -620,6 +620,8 @@ pub fn run_server(
 ) -> io::Result<()> {
     // Keep only the newest 20 crash reports across runs.
     crate::crash::prune_crashes(20);
+    // Same for resurrection snapshots, which are otherwise unbounded.
+    crate::resurrection::prune_snapshots_in(&crate::resurrection::resurrect_dir(None), 50);
     // Install console control handler to prevent termination on client detach
     install_console_ctrl_handler();
 

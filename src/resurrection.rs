@@ -103,6 +103,33 @@ pub fn load_snapshot_from(session_name: &str, dir: &Path) -> io::Result<SessionS
     serde_json::from_str(&data).map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))
 }
 
+/// Keep only the newest `keep` snapshots in `dir`, delete older ones.
+///
+/// `save_snapshot` runs on every structural change (new-window, split-window,
+/// select-layout, ...) for every session, independently of `resurrect-on-exit`,
+/// so without a bound the directory grows one file per session name forever —
+/// 150 had accumulated by 2026-08-03, all listed as `(resurrectable)`.
+/// Mirrors `crash::prune_crashes`, which bounds crash reports the same way.
+pub fn prune_snapshots_in(dir: &Path, keep: usize) {
+    let Ok(read_dir) = fs::read_dir(dir) else {
+        return;
+    };
+    let mut files: Vec<(PathBuf, std::time::SystemTime)> = read_dir
+        .filter_map(Result::ok)
+        .filter_map(|e| {
+            let path = e.path();
+            if path.extension().and_then(|s| s.to_str()) != Some("json") {
+                return None;
+            }
+            Some((path, e.metadata().ok()?.modified().ok()?))
+        })
+        .collect();
+    files.sort_by(|a, b| b.1.cmp(&a.1));
+    for (path, _) in files.into_iter().skip(keep) {
+        let _ = fs::remove_file(&path);
+    }
+}
+
 /// List session names that have a `.json` snapshot in `dir`.
 ///
 /// Returns an empty vec if the directory does not exist.
@@ -379,5 +406,61 @@ mod tests {
         assert!(list_resurrectable(&tmp).is_empty());
 
         fs::remove_dir_all(&tmp).ok();
+    }
+}
+
+#[cfg(test)]
+mod test_snapshot_pruning {
+    use super::*;
+
+    fn fresh_dir(name: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(name);
+        if dir.exists() {
+            fs::remove_dir_all(&dir).expect("clean pre-existing temp dir");
+        }
+        fs::create_dir_all(&dir).expect("create temp dir");
+        dir
+    }
+
+    /// Writes `names` in order, oldest first, with distinct modified times.
+    fn write_snapshots(dir: &Path, names: &[&str]) {
+        for name in names {
+            fs::write(dir.join(format!("{}.json", name)), "{}").expect("write snapshot");
+            thread::sleep(Duration::from_millis(20));
+        }
+    }
+
+    #[test]
+    fn keeps_the_newest_snapshots_up_to_the_limit() {
+        let dir = fresh_dir("psmux_prune_keeps_newest");
+        write_snapshots(&dir, &["oldest", "middle", "newest"]);
+
+        prune_snapshots_in(&dir, 2);
+
+        let mut kept = list_resurrectable(&dir);
+        kept.sort();
+        assert_eq!(kept, vec!["middle".to_string(), "newest".to_string()]);
+    }
+
+    #[test]
+    fn keeps_everything_when_under_the_limit() {
+        let dir = fresh_dir("psmux_prune_under_limit");
+        write_snapshots(&dir, &["a", "b"]);
+
+        prune_snapshots_in(&dir, 50);
+
+        assert_eq!(list_resurrectable(&dir).len(), 2);
+    }
+
+    #[test]
+    fn ignores_files_that_are_not_snapshots() {
+        let dir = fresh_dir("psmux_prune_ignores_non_json");
+        fs::write(dir.join("notes.txt"), "keep me").expect("write");
+        write_snapshots(&dir, &["only"]);
+
+        prune_snapshots_in(&dir, 0);
+
+        assert!(dir.join("notes.txt").exists(), "non-.json must be ignored");
+        assert!(list_resurrectable(&dir).is_empty(), "snapshots pruned to 0");
     }
 }

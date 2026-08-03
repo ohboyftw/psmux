@@ -449,9 +449,12 @@ fn run_main() -> io::Result<()> {
             return Ok(());
         }
         "resurrect" => {
-            let session_name = args
-                .first()
-                .cloned()
+            // cmd_args[0] is the subcommand; the name is at [1]. `args` still
+            // carries argv[0], so reading it here passed the psmux executable
+            // path in as the session name and never reached the default.
+            let session_name = cmd_args
+                .get(1)
+                .map(|s| s.to_string())
                 .unwrap_or_else(|| "default".to_string());
             let dir = crate::resurrection::resurrect_dir(None);
             match crate::resurrection::load_snapshot_from(&session_name, &dir) {
@@ -591,12 +594,16 @@ fn run_main() -> io::Result<()> {
         }
         "delete-resurrect" => {
             let dir = crate::resurrection::resurrect_dir(None);
-            if args.first().map(|s| s.as_str()) == Some("--all") {
+            // cmd_args[0] is the subcommand; the name/--all argument is at [1].
+            // `args` still carries argv[0], so reading it here passed the psmux
+            // executable path in as the session name.
+            let arg = cmd_args.get(1).map(|s| s.as_str());
+            if arg == Some("--all") {
                 for name in crate::resurrection::list_resurrectable(&dir) {
                     let _ = crate::resurrection::delete_snapshot(&name, &dir);
                 }
                 eprintln!("All resurrection snapshots deleted.");
-            } else if let Some(name) = args.first() {
+            } else if let Some(name) = arg {
                 match crate::resurrection::delete_snapshot(name, &dir) {
                     Ok(()) => eprintln!("Deleted resurrection snapshot for '{}'.", name),
                     Err(e) => {

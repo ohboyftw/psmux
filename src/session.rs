@@ -88,6 +88,9 @@ pub fn next_session_name(ns_prefix: Option<&str>) -> String {
     id.to_string()
 }
 
+/// Per-server files written alongside a `.port`. None may outlive their server.
+const SERVER_STATE_EXTS: [&str; 3] = ["pipe", "key", "version"];
+
 /// Clean up any stale port files (where server is not actually running)
 pub fn cleanup_stale_port_files() {
     let home = match env::var("USERPROFILE").or_else(|_| env::var("HOME")) {
@@ -95,35 +98,64 @@ pub fn cleanup_stale_port_files() {
         Err(_) => return,
     };
     let psmux_dir = format!("{}\\.psmux", home);
-    if let Ok(entries) = std::fs::read_dir(&psmux_dir) {
-        for entry in entries.flatten() {
-            let path = entry.path();
-            if path.extension().map(|e| e == "port").unwrap_or(false) {
-                if let Ok(port_str) = std::fs::read_to_string(&path) {
-                    if let Ok(port) = port_str.trim().parse::<u16>() {
-                        let addr = format!("127.0.0.1:{}", port);
-                        if std::net::TcpStream::connect_timeout(
-                            &addr.parse().unwrap(),
-                            Duration::from_millis(50),
-                        )
-                        .is_err()
-                        {
-                            let _ = std::fs::remove_file(&path);
-                            // Also remove the matching .key and .version files to
-                            // prevent orphans from accumulating (issue #136).
-                            let key_path = path.with_extension("key");
-                            let _ = std::fs::remove_file(&key_path);
-                            let ver_path = path.with_extension("version");
-                            let _ = std::fs::remove_file(&ver_path);
-                        }
-                    } else {
-                        let _ = std::fs::remove_file(&path);
-                        let key_path = path.with_extension("key");
-                        let _ = std::fs::remove_file(&key_path);
-                    }
-                }
-            }
+    cleanup_stale_state_in(std::path::Path::new(&psmux_dir));
+}
+
+/// Remove per-server state files whose server is gone (issue #136).
+///
+/// Two passes are needed.  The first is keyed on `.port` files and reaches a
+/// dead server's whole file set.  The second sweeps sidecars that have no
+/// `.port` sibling at all — a graceful exit removes the `.port` *before* the
+/// sidecars, and a killed server removes nothing, so any sidecar left behind is
+/// invisible to the first pass and would accumulate forever.  That is how 160
+/// `.pipe` files piled up against 6 `.port` files.
+///
+/// The second pass cannot race a starting server: `run_server` writes `.port`
+/// before any sidecar, so a sidecar never exists without its `.port`.
+fn cleanup_stale_state_in(dir: &std::path::Path) {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
+    let paths: Vec<std::path::PathBuf> = entries.flatten().map(|e| e.path()).collect();
+
+    for path in paths.iter().filter(|p| has_ext(p, "port")) {
+        if !port_file_is_live(path) {
+            remove_server_state(path);
         }
+    }
+
+    for path in paths
+        .iter()
+        .filter(|p| SERVER_STATE_EXTS.iter().any(|e| has_ext(p, e)))
+    {
+        if !path.with_extension("port").exists() {
+            let _ = std::fs::remove_file(path);
+        }
+    }
+}
+
+fn has_ext(path: &std::path::Path, ext: &str) -> bool {
+    path.extension().map(|e| e == ext).unwrap_or(false)
+}
+
+/// A `.port` file is live when something still answers on the port it names.
+/// An unreadable file is left alone; an unparseable one counts as dead.
+fn port_file_is_live(path: &std::path::Path) -> bool {
+    let Ok(port_str) = std::fs::read_to_string(path) else {
+        return true;
+    };
+    port_str.trim().parse::<u16>().is_ok_and(|port| {
+        let addr = format!("127.0.0.1:{}", port);
+        addr.parse()
+            .map(|a| std::net::TcpStream::connect_timeout(&a, Duration::from_millis(50)).is_ok())
+            .unwrap_or(false)
+    })
+}
+
+fn remove_server_state(port_path: &std::path::Path) {
+    let _ = std::fs::remove_file(port_path);
+    for ext in SERVER_STATE_EXTS {
+        let _ = std::fs::remove_file(port_path.with_extension(ext));
     }
 }
 
@@ -894,4 +926,83 @@ pub fn kill_remaining_server_processes() {
     let _ = std::process::Command::new("pkill")
         .args(&["-f", "psmux|pmux"])
         .status();
+}
+
+#[cfg(test)]
+mod test_stale_state_cleanup {
+    use super::*;
+    use std::net::TcpListener;
+    use std::path::{Path, PathBuf};
+
+    fn fresh_dir(name: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(name);
+        if dir.exists() {
+            std::fs::remove_dir_all(&dir).expect("clean pre-existing temp dir");
+        }
+        std::fs::create_dir_all(&dir).expect("create temp dir");
+        dir
+    }
+
+    fn write(dir: &Path, name: &str, contents: &str) -> PathBuf {
+        let p = dir.join(name);
+        std::fs::write(&p, contents).expect("write fixture");
+        p
+    }
+
+    #[test]
+    fn removes_sidecar_with_no_port_sibling() {
+        let dir = fresh_dir("psmux_cleanup_orphan_sidecar");
+        let pipe = write(&dir, "ghost.pipe", r"\.\pipe\psmux-ghost");
+
+        cleanup_stale_state_in(&dir);
+
+        assert!(!pipe.exists(), "orphan .pipe should be removed");
+    }
+
+    #[test]
+    fn keeps_sidecar_whose_port_is_still_answering() {
+        let dir = fresh_dir("psmux_cleanup_live_sidecar");
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind probe listener");
+        let port = listener.local_addr().expect("local_addr").port();
+        write(&dir, "live.port", &port.to_string());
+        let pipe = write(&dir, "live.pipe", r"\.\pipe\psmux-live");
+
+        cleanup_stale_state_in(&dir);
+
+        assert!(pipe.exists(), "sidecar of a live server must survive");
+    }
+
+    #[test]
+    fn removes_every_sidecar_when_port_is_dead() {
+        let dir = fresh_dir("psmux_cleanup_dead_server");
+        // Port 1 is not bound by anything in the test environment.
+        let port = write(&dir, "dead.port", "1");
+        let pipe = write(&dir, "dead.pipe", r"\.\pipe\psmux-dead");
+        let key = write(&dir, "dead.key", "deadbeef");
+        let version = write(&dir, "dead.version", "3.4.0");
+
+        cleanup_stale_state_in(&dir);
+
+        assert!(!port.exists(), ".port should be removed");
+        assert!(!pipe.exists(), ".pipe should be removed");
+        assert!(!key.exists(), ".key should be removed");
+        assert!(!version.exists(), ".version should be removed");
+    }
+
+    #[test]
+    fn preserves_files_that_are_not_per_server_state() {
+        let dir = fresh_dir("psmux_cleanup_preserves_globals");
+        let seq = write(&dir, "pane_id_seq", "170000");
+        let last = write(&dir, "last_session", "work");
+        let log = write(&dir, "autorename.log", "noise");
+
+        cleanup_stale_state_in(&dir);
+
+        assert!(seq.exists(), "pane_id_seq is global state, not per-server");
+        assert!(
+            last.exists(),
+            "last_session is global state, not per-server"
+        );
+        assert!(log.exists(), "logs are not per-server state");
+    }
 }
