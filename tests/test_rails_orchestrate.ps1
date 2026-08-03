@@ -7,6 +7,7 @@ $workDir = Join-Path $env:TEMP "orc-$((Get-Date).Ticks)"
 $planPath = Join-Path $workDir "plan.json"
 New-Item -ItemType Directory -Path $workDir -Force | Out-Null
 $session = "orc-$([guid]::NewGuid().Guid.Substring(0,6))"
+$session2 = "orc-fail-$([guid]::NewGuid().Guid.Substring(0,6))"
 $outA = Join-Path $workDir "a.out"
 $outB = Join-Path $workDir "b.out"
 
@@ -54,7 +55,6 @@ Test-Case "state.json records both workers' exit codes as 0" {
 Test-Case "failure propagates: dependent worker is skipped" {
     $planPath2 = Join-Path $workDir "plan-fail.json"
     $outC = Join-Path $workDir "c.out"
-    $session2 = "orc-fail-$([guid]::NewGuid().Guid.Substring(0,6))"
     psmux new-session -d -s $session2 2>&1 | Out-Null
     Start-Sleep -Milliseconds 300
     $plan2 = @{
@@ -78,5 +78,6 @@ Test-Case "failure propagates: dependent worker is skipped" {
 
 # Cleanup
 psmux kill-session -t $session 2>&1 | Out-Null
+psmux kill-session -t $session2 2>&1 | Out-Null
 Remove-Item $workDir -Recurse -Force -ErrorAction SilentlyContinue
 Write-Summary
