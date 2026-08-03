@@ -1,10 +1,10 @@
 {
-  "last_check": "2026-04-21T00:00:00Z",
-  "tag": "sync-2026-04-21-mamba",
-  "codename_index": 17,
-  "upstream_sha": "f0b94c2",
-  "claude_code_version": "2.1.116",
-  "pi_version": "0.68.0",
+  "last_check": "2026-07-12T00:00:00Z",
+  "tag": "sync-2026-07-12-tiger",
+  "codename_index": 19,
+  "upstream_sha": "f8013e7",
+  "claude_code_version": "2.1.207",
+  "pi_version": "0.73.1",
   "sources": {
     "claude_code_changelog": "https://code.claude.com/docs/en/changelog",
     "claude_code_releases": "https://github.com/anthropics/claude-code/releases",
