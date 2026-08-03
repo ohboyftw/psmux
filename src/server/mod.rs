@@ -626,6 +626,10 @@ pub fn run_server(
     let pty_system = native_pty_system();
 
     let mut app = AppState::new(session_name);
+    // Pane ids must not collide with another live server's: a bare `-t %N` is
+    // resolved by scanning live servers, so duplicate ids make the target
+    // ambiguous and a command can land in the wrong session.
+    app.next_pane_id = crate::session::reserve_pane_id_base(10_000);
     app.socket_name = socket_name;
     // Server starts detached with a reasonable default window size
     app.attached_clients = 0;

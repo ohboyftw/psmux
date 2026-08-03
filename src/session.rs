@@ -286,6 +286,56 @@ fn server_owns_id(port: u16, key: &str, target_id: &str) -> bool {
 /// Scan every live `.port` file and find which server owns the pane-id/window-id.
 /// Iterates in reverse-mtime order (newest first) so fresh sessions win over
 /// long-running terminals that happen to have a pane with the same numeric id.
+/// Reserve a block of pane ids for this server; returns the first id to hand out.
+///
+/// Every `AppState` used to start at 1, so concurrently live servers all minted
+/// `%1, %2, ...`. A bare `-t %N` is resolved by scanning live servers (biased
+/// toward the caller's own session), so colliding ids let a command aimed at one
+/// session land in another — `respawn-pane -k` then kills the wrong pane, and
+/// with `remain-on-exit=off` a single-pane session is pruned along with it.
+///
+/// Ids only have to be unambiguous among *live* servers, and a shared monotonic
+/// counter guarantees that. A block of `block` ids is taken per server start, so
+/// this bounds a single server to that many panes over its lifetime.
+pub fn reserve_pane_id_base(block: usize) -> usize {
+    let home = env::var("USERPROFILE")
+        .or_else(|_| env::var("HOME"))
+        .unwrap_or_default();
+    let dir = format!("{}\\.psmux", home);
+    let _ = std::fs::create_dir_all(&dir);
+    let seq_path = format!("{}\\pane_id_seq", dir);
+    let lock_path = format!("{}\\pane_id_seq.lock", dir);
+    for attempt in 0..50 {
+        if std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&lock_path)
+            .is_ok()
+        {
+            let cur = std::fs::read_to_string(&seq_path)
+                .ok()
+                .and_then(|s| s.trim().parse::<usize>().ok())
+                .unwrap_or(0);
+            let _ = std::fs::write(&seq_path, (cur + block).to_string());
+            let _ = std::fs::remove_file(&lock_path);
+            return cur + 1;
+        }
+        // Clear a lock orphaned by a crashed server rather than spin forever.
+        if attempt == 25 {
+            let stale = std::fs::metadata(&lock_path)
+                .ok()
+                .and_then(|m| m.modified().ok())
+                .and_then(|m| m.elapsed().ok())
+                .is_some_and(|e| e > Duration::from_secs(5));
+            if stale {
+                let _ = std::fs::remove_file(&lock_path);
+            }
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    1
+}
+
 fn scan_servers_for_id(home: &str, target_id: &str) -> Option<(String, u16, String)> {
     // Bias toward the caller's own server when scripting from inside a psmux
     // pane: PSMUX_SESSION names the server that owns this process, so pane-ids
