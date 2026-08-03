@@ -1,9 +1,9 @@
 {
-  "last_check": "2026-07-12T00:00:00Z",
-  "tag": "sync-2026-07-12-tiger",
-  "codename_index": 19,
-  "upstream_sha": "f8013e7",
-  "claude_code_version": "2.1.207",
+  "last_check": "2026-08-03T00:00:00Z",
+  "tag": "sync-2026-08-03-leopard",
+  "codename_index": 20,
+  "upstream_sha": "941a862",
+  "claude_code_version": "2.1.220",
   "pi_version": "0.73.1",
   "sources": {
     "claude_code_changelog": "https://code.claude.com/docs/en/changelog",
