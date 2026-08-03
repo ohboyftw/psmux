@@ -98,7 +98,7 @@ pub fn cleanup_stale_port_files() {
         Err(_) => return,
     };
     let psmux_dir = format!("{}\\.psmux", home);
-    cleanup_stale_state_in(std::path::Path::new(&psmux_dir));
+    cleanup_stale_state_in(std::path::Path::new(&psmux_dir), SIDECAR_GRACE);
 }
 
 /// Remove per-server state files whose server is gone (issue #136).
@@ -110,9 +110,11 @@ pub fn cleanup_stale_port_files() {
 /// invisible to the first pass and would accumulate forever.  That is how 160
 /// `.pipe` files piled up against 6 `.port` files.
 ///
-/// The second pass cannot race a starting server: `run_server` writes `.port`
-/// before any sidecar, so a sidecar never exists without its `.port`.
-fn cleanup_stale_state_in(dir: &std::path::Path) {
+/// The second pass only removes sidecars older than `sidecar_grace`.  A server
+/// writes its state files non-atomically, both at startup and during
+/// [`migrate_server_state`], so a sidecar that is briefly unparented is normal
+/// and must not be reaped — doing so cost a session its `.key` permanently.
+fn cleanup_stale_state_in(dir: &std::path::Path, sidecar_grace: Duration) {
     let Ok(entries) = std::fs::read_dir(dir) else {
         return;
     };
@@ -128,14 +130,78 @@ fn cleanup_stale_state_in(dir: &std::path::Path) {
         .iter()
         .filter(|p| SERVER_STATE_EXTS.iter().any(|e| has_ext(p, e)))
     {
-        if !path.with_extension("port").exists() {
+        if !path.with_extension("port").exists() && !is_within_grace(path, sidecar_grace) {
             let _ = std::fs::remove_file(path);
         }
     }
 }
 
+/// Move a server's state files from `old_base` to `new_base`.
+///
+/// The ordering here is load-bearing. [`cleanup_stale_state_in`] removes
+/// sidecars that have no `.port` sibling, so the old `.port` must outlive the
+/// old sidecars, and the new `.port` must be written only once the new sidecars
+/// are in place. Unlinking the old `.port` first — as the rename and claim paths
+/// used to — let a concurrent psmux invocation delete the `.key` mid-move, after
+/// which it was never re-written: the session ended up with a valid `.port` and
+/// no credential, unauthenticatable for the rest of its life. The freshly
+/// written sidecars are unparented until the new `.port` lands, which is what
+/// `SIDECAR_GRACE` covers.
+pub fn migrate_server_state(old_base: &str, new_base: &str, port: u16) {
+    let home = match env::var("USERPROFILE").or_else(|_| env::var("HOME")) {
+        Ok(h) => h,
+        Err(_) => return,
+    };
+    let psmux_dir = format!("{}\\.psmux", home);
+    migrate_server_state_in(std::path::Path::new(&psmux_dir), old_base, new_base, port);
+}
+
+fn migrate_server_state_in(dir: &std::path::Path, old_base: &str, new_base: &str, port: u16) {
+    // A same-name rename would otherwise write the new files and then delete
+    // them again as "the old ones".
+    if old_base == new_base {
+        return;
+    }
+    let old = |ext: &str| dir.join(format!("{}.{}", old_base, ext));
+    let new = |ext: &str| dir.join(format!("{}.{}", new_base, ext));
+
+    // Carry the credential across before anything is unlinked.
+    if let Ok(key) = std::fs::read_to_string(old("key")) {
+        let _ = std::fs::write(new("key"), key);
+    }
+    let _ = std::fs::write(new("version"), crate::types::build_version_stamp());
+    if old("pipe").exists() {
+        let _ = std::fs::rename(old("pipe"), new("pipe"));
+    }
+
+    // `.port` last: it is the readiness beacon, and it is what parents the new
+    // sidecars against the orphan sweep.
+    let _ = std::fs::write(new("port"), port.to_string());
+
+    for ext in SERVER_STATE_EXTS {
+        let _ = std::fs::remove_file(old(ext));
+    }
+    let _ = std::fs::remove_file(old("port"));
+}
+
 fn has_ext(path: &std::path::Path, ext: &str) -> bool {
     path.extension().map(|e| e == ext).unwrap_or(false)
+}
+
+/// A sidecar younger than this is left alone even with no `.port` sibling.
+/// Servers write their state files non-atomically — during startup and during
+/// [`migrate_server_state`] a sidecar legitimately exists before its `.port`
+/// does — so without a grace period the sweep races every server that is
+/// starting or being renamed.
+const SIDECAR_GRACE: Duration = Duration::from_secs(60);
+
+/// True when `path`'s age cannot be established or is under `grace`.
+/// Unknown age counts as young: the sweep must never delete on a guess.
+fn is_within_grace(path: &std::path::Path, grace: Duration) -> bool {
+    let Ok(modified) = std::fs::metadata(path).and_then(|m| m.modified()) else {
+        return true;
+    };
+    modified.elapsed().map(|age| age < grace).unwrap_or(true)
 }
 
 /// A `.port` file is live when something still answers on the port it names.
@@ -954,7 +1020,7 @@ mod test_stale_state_cleanup {
         let dir = fresh_dir("psmux_cleanup_orphan_sidecar");
         let pipe = write(&dir, "ghost.pipe", r"\.\pipe\psmux-ghost");
 
-        cleanup_stale_state_in(&dir);
+        cleanup_stale_state_in(&dir, Duration::ZERO);
 
         assert!(!pipe.exists(), "orphan .pipe should be removed");
     }
@@ -967,7 +1033,7 @@ mod test_stale_state_cleanup {
         write(&dir, "live.port", &port.to_string());
         let pipe = write(&dir, "live.pipe", r"\.\pipe\psmux-live");
 
-        cleanup_stale_state_in(&dir);
+        cleanup_stale_state_in(&dir, Duration::ZERO);
 
         assert!(pipe.exists(), "sidecar of a live server must survive");
     }
@@ -981,7 +1047,7 @@ mod test_stale_state_cleanup {
         let key = write(&dir, "dead.key", "deadbeef");
         let version = write(&dir, "dead.version", "3.4.0");
 
-        cleanup_stale_state_in(&dir);
+        cleanup_stale_state_in(&dir, Duration::ZERO);
 
         assert!(!port.exists(), ".port should be removed");
         assert!(!pipe.exists(), ".pipe should be removed");
@@ -996,7 +1062,7 @@ mod test_stale_state_cleanup {
         let last = write(&dir, "last_session", "work");
         let log = write(&dir, "autorename.log", "noise");
 
-        cleanup_stale_state_in(&dir);
+        cleanup_stale_state_in(&dir, Duration::ZERO);
 
         assert!(seq.exists(), "pane_id_seq is global state, not per-server");
         assert!(
@@ -1004,5 +1070,124 @@ mod test_stale_state_cleanup {
             "last_session is global state, not per-server"
         );
         assert!(log.exists(), "logs are not per-server state");
+    }
+}
+
+#[cfg(test)]
+mod test_state_migration {
+    use super::*;
+    use std::path::{Path, PathBuf};
+
+    fn fresh_dir(name: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(name);
+        if dir.exists() {
+            std::fs::remove_dir_all(&dir).expect("clean pre-existing temp dir");
+        }
+        std::fs::create_dir_all(&dir).expect("create temp dir");
+        dir
+    }
+
+    fn seed_server(dir: &Path, base: &str) {
+        for (ext, body) in [("port", "5000"), ("key", "s3cret"), ("version", "3.4.0")] {
+            std::fs::write(dir.join(format!("{}.{}", base, ext)), body).expect("seed");
+        }
+    }
+
+    fn read(dir: &Path, name: &str) -> Option<String> {
+        std::fs::read_to_string(dir.join(name)).ok()
+    }
+
+    #[test]
+    fn migration_carries_the_credential_to_the_new_base() {
+        let dir = fresh_dir("psmux_migrate_carries_key");
+        seed_server(&dir, "__warm__");
+
+        migrate_server_state_in(&dir, "__warm__", "work", 6001);
+
+        assert_eq!(read(&dir, "work.key").as_deref(), Some("s3cret"));
+        assert_eq!(read(&dir, "work.port").as_deref(), Some("6001"));
+    }
+
+    #[test]
+    fn migration_leaves_no_files_at_the_old_base() {
+        let dir = fresh_dir("psmux_migrate_clears_old");
+        seed_server(&dir, "__warm__");
+
+        migrate_server_state_in(&dir, "__warm__", "work", 6001);
+
+        for ext in ["port", "key", "version"] {
+            let old = dir.join(format!("__warm__.{}", ext));
+            assert!(
+                !old.exists(),
+                "{} should not survive the move",
+                old.display()
+            );
+        }
+    }
+
+    #[test]
+    fn migration_moves_the_pipe_discovery_file() {
+        let dir = fresh_dir("psmux_migrate_moves_pipe");
+        seed_server(&dir, "__warm__");
+        std::fs::write(dir.join("__warm__.pipe"), r"\.\pipe\psmux-warm").expect("seed pipe");
+
+        migrate_server_state_in(&dir, "__warm__", "work", 6001);
+
+        assert_eq!(
+            read(&dir, "work.pipe").as_deref(),
+            Some(r"\.\pipe\psmux-warm")
+        );
+        assert!(!dir.join("__warm__.pipe").exists());
+    }
+
+    #[test]
+    fn a_concurrent_sweep_during_migration_cannot_strip_the_credential() {
+        // Regression: the claim/rename paths used to unlink the old `.port`
+        // before reading the old `.key`, so a sweep landing in that window
+        // deleted the key and the new base never got one — leaving a session
+        // with a valid `.port` and no credential.
+        let dir = fresh_dir("psmux_migrate_survives_sweep");
+        seed_server(&dir, "__warm__");
+        // A live listener, so pass 1 sees the migrated server as alive and the
+        // assertion is about pass 2 rather than about port liveness.
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind probe listener");
+        let port = listener.local_addr().expect("local_addr").port();
+
+        migrate_server_state_in(&dir, "__warm__", "work", port);
+        // Sweep with no grace at all — the harshest possible timing.
+        cleanup_stale_state_in(&dir, Duration::ZERO);
+
+        assert_eq!(
+            read(&dir, "work.key").as_deref(),
+            Some("s3cret"),
+            "credential must survive a sweep immediately after migration"
+        );
+    }
+
+    #[test]
+    fn migration_to_the_same_base_is_a_no_op() {
+        let dir = fresh_dir("psmux_migrate_same_base");
+        seed_server(&dir, "work");
+
+        migrate_server_state_in(&dir, "work", "work", 6001);
+
+        assert_eq!(read(&dir, "work.key").as_deref(), Some("s3cret"));
+        assert!(
+            dir.join("work.port").exists(),
+            "must not delete its own port"
+        );
+    }
+
+    #[test]
+    fn sweep_spares_an_unparented_sidecar_inside_the_grace_window() {
+        let dir = fresh_dir("psmux_sweep_grace_spares_fresh");
+        std::fs::write(dir.join("starting.key"), "s3cret").expect("seed");
+
+        cleanup_stale_state_in(&dir, Duration::from_secs(60));
+
+        assert!(
+            dir.join("starting.key").exists(),
+            "a sidecar written moments ago is a server mid-startup, not an orphan"
+        );
     }
 }

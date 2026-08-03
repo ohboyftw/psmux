@@ -3601,35 +3601,18 @@ pub fn run_server(
                         }
                         CtrlReq::RenameSession(name) => {
                             let _old_session_name = app.session_name.clone();
-                            let home = env::var("USERPROFILE")
-                                .or_else(|_| env::var("HOME"))
-                                .unwrap_or_default();
-                            let old_path =
-                                format!("{}\\.psmux\\{}.port", home, app.port_file_base());
-                            let old_keypath =
-                                format!("{}\\.psmux\\{}.key", home, app.port_file_base());
                             // Compute new port file base with socket_name prefix
                             let new_base = if let Some(ref sn) = app.socket_name {
                                 format!("{}__{}", sn, name)
                             } else {
                                 name.clone()
                             };
-                            let new_path = format!("{}\\.psmux\\{}.port", home, new_base);
-                            let new_keypath = format!("{}\\.psmux\\{}.key", home, new_base);
                             if let Some(port) = app.control_port {
-                                let _ = std::fs::remove_file(&old_path);
-                                let _ = std::fs::write(&new_path, port.to_string());
-                                if let Ok(key) = std::fs::read_to_string(&old_keypath) {
-                                    let _ = std::fs::remove_file(&old_keypath);
-                                    let _ = std::fs::write(&new_keypath, key);
-                                }
-                                // Rename .pipe discovery file so backend socket remains discoverable
-                                let old_pipepath =
-                                    format!("{}\\.psmux\\{}.pipe", home, app.port_file_base());
-                                let new_pipepath = format!("{}\\.psmux\\{}.pipe", home, new_base);
-                                if std::path::Path::new(&old_pipepath).exists() {
-                                    let _ = std::fs::rename(&old_pipepath, &new_pipepath);
-                                }
+                                crate::session::migrate_server_state(
+                                    &app.port_file_base(),
+                                    &new_base,
+                                    port,
+                                );
                             }
                             app.session_name = name;
                             crate::control::emit_lifecycle(
@@ -3646,43 +3629,17 @@ pub fn run_server(
                         CtrlReq::ClaimSession(name, client_cwd, resp) => {
                             // Same as RenameSession but with a synchronous response
                             // so the CLI knows the rename completed before attaching.
-                            let home = env::var("USERPROFILE")
-                                .or_else(|_| env::var("HOME"))
-                                .unwrap_or_default();
-                            let old_path =
-                                format!("{}\\.psmux\\{}.port", home, app.port_file_base());
-                            let old_keypath =
-                                format!("{}\\.psmux\\{}.key", home, app.port_file_base());
-                            let old_verpath =
-                                format!("{}\\.psmux\\{}.version", home, app.port_file_base());
                             let new_base = if let Some(ref sn) = app.socket_name {
                                 format!("{}__{}", sn, name)
                             } else {
                                 name.clone()
                             };
-                            let new_path = format!("{}\\.psmux\\{}.port", home, new_base);
-                            let new_keypath = format!("{}\\.psmux\\{}.key", home, new_base);
-                            let new_verpath = format!("{}\\.psmux\\{}.version", home, new_base);
                             if let Some(port) = app.control_port {
-                                let _ = std::fs::remove_file(&old_path);
-                                let _ = std::fs::write(&new_path, port.to_string());
-                                if let Ok(key) = std::fs::read_to_string(&old_keypath) {
-                                    let _ = std::fs::remove_file(&old_keypath);
-                                    let _ = std::fs::write(&new_keypath, key);
-                                }
-                                // Rename version stamp alongside port/key
-                                let _ = std::fs::remove_file(&old_verpath);
-                                let _ = std::fs::write(
-                                    &new_verpath,
-                                    crate::types::build_version_stamp(),
+                                crate::session::migrate_server_state(
+                                    &app.port_file_base(),
+                                    &new_base,
+                                    port,
                                 );
-                                // Rename .pipe discovery file so backend socket remains discoverable
-                                let old_pipepath =
-                                    format!("{}\\.psmux\\{}.pipe", home, app.port_file_base());
-                                let new_pipepath = format!("{}\\.psmux\\{}.pipe", home, new_base);
-                                if std::path::Path::new(&old_pipepath).exists() {
-                                    let _ = std::fs::rename(&old_pipepath, &new_pipepath);
-                                }
                             }
                             app.session_name = name;
                             // Update env so run-shell/hooks from this server target the new name
