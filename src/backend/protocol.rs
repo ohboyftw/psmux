@@ -95,9 +95,15 @@ impl AgentMetadata {
             role: map.get("@role").cloned(),
             effort: map.get("@effort").cloned(),
             max_turns: map.get("@max_turns").and_then(|v| v.parse().ok()),
-            disallowed_tools: map
-                .get("@disallowed_tools")
-                .map(|v| v.split(',').map(String::from).collect()),
+            // An empty list joins to "", and splitting "" yields one empty
+            // element — so without the filter, "nothing is disallowed" comes
+            // back as "the tool named empty-string is disallowed".
+            disallowed_tools: map.get("@disallowed_tools").map(|v| {
+                v.split(',')
+                    .filter(|s| !s.is_empty())
+                    .map(String::from)
+                    .collect()
+            }),
         })
     }
 }
