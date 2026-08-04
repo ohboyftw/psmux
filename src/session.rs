@@ -1084,6 +1084,77 @@ mod test_stale_state_cleanup {
     }
 
     #[test]
+    fn treats_an_empty_port_file_as_dead() {
+        let dir = fresh_dir("psmux_cleanup_empty_port");
+        let port = write(&dir, "empty.port", "");
+
+        cleanup_stale_state_in(&dir, Duration::ZERO);
+
+        assert!(
+            !port.exists(),
+            "empty .port names no port, so nothing is live"
+        );
+    }
+
+    #[test]
+    fn treats_a_port_above_the_u16_range_as_dead() {
+        let dir = fresh_dir("psmux_cleanup_oversized_port");
+        let port = write(&dir, "oversized.port", "70000");
+
+        cleanup_stale_state_in(&dir, Duration::ZERO);
+
+        assert!(
+            !port.exists(),
+            "70000 is not addressable, so nothing is live"
+        );
+    }
+
+    /// Port 0 is the "let the OS choose" sentinel: binding it always succeeds,
+    /// which must read as dead rather than as a successful liveness probe.
+    #[test]
+    fn treats_port_zero_as_dead() {
+        let dir = fresh_dir("psmux_cleanup_port_zero");
+        let port = write(&dir, "zero.port", "0");
+        let key = write(&dir, "zero.key", "deadbeef");
+
+        cleanup_stale_state_in(&dir, Duration::ZERO);
+
+        assert!(!port.exists(), "a .port of 0 names no listening server");
+        assert!(!key.exists(), "its sidecars should go with it");
+    }
+
+    #[test]
+    fn reads_a_port_written_with_a_trailing_newline() {
+        let dir = fresh_dir("psmux_cleanup_trailing_newline");
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind probe listener");
+        let port = listener.local_addr().expect("local_addr").port();
+        write(&dir, "nl.port", &format!("{}\r\n", port));
+        let key = write(&dir, "nl.key", "deadbeef");
+
+        cleanup_stale_state_in(&dir, Duration::ZERO);
+
+        assert!(
+            key.exists(),
+            "surrounding whitespace must not fake a dead server"
+        );
+    }
+
+    /// An unreadable `.port` yields no verdict, and the sweep never deletes on a
+    /// guess. A directory is the portable way to make `read_to_string` fail.
+    #[test]
+    fn spares_a_server_whose_port_file_cannot_be_read() {
+        let dir = fresh_dir("psmux_cleanup_unreadable_port");
+        let port = dir.join("locked.port");
+        std::fs::create_dir(&port).expect("create unreadable .port");
+        let key = write(&dir, "locked.key", "deadbeef");
+
+        cleanup_stale_state_in(&dir, Duration::ZERO);
+
+        assert!(port.exists(), "an unreadable .port must be left alone");
+        assert!(key.exists(), "and so must its sidecars");
+    }
+
+    #[test]
     fn preserves_files_that_are_not_per_server_state() {
         let dir = fresh_dir("psmux_cleanup_preserves_globals");
         let seq = write(&dir, "pane_id_seq", "170000");
