@@ -204,18 +204,32 @@ fn is_within_grace(path: &std::path::Path, grace: Duration) -> bool {
     modified.elapsed().map(|age| age < grace).unwrap_or(true)
 }
 
-/// A `.port` file is live when something still answers on the port it names.
+/// A `.port` file is live when its port is still claimed by some process.
 /// An unreadable file is left alone; an unparseable one counts as dead.
+///
+/// Liveness is decided by trying to *bind* the port, not by connecting to it.
+/// Connecting cannot answer the question quickly on Windows: a loopback port
+/// that nothing is listening on takes ~2s of SYN retransmits before it reports
+/// `ConnectionRefused`, and every budget shorter than that returns `TimedOut`
+/// instead — measured on this machine at 50ms/250ms/500ms/1s. The previous
+/// 50ms-connect probe therefore read *every* verdict as "dead", including a
+/// live server too busy to complete a handshake, and would have reaped a
+/// running session's whole file set. Binding settles it in tens of microseconds
+/// and cannot be confused by load: a bound socket stays bound for the life of
+/// the server process, whether or not anyone is calling `accept`.
+///
+/// A bind that fails for any other reason (a port inside a Windows excluded
+/// range, another process holding it) counts as live — the sweep must never
+/// delete on a guess. Servers bind port 0 and let the OS choose, so this never
+/// races a server trying to claim a specific port.
 fn port_file_is_live(path: &std::path::Path) -> bool {
     let Ok(port_str) = std::fs::read_to_string(path) else {
         return true;
     };
-    port_str.trim().parse::<u16>().is_ok_and(|port| {
-        let addr = format!("127.0.0.1:{}", port);
-        addr.parse()
-            .map(|a| std::net::TcpStream::connect_timeout(&a, Duration::from_millis(50)).is_ok())
-            .unwrap_or(false)
-    })
+    let Ok(port) = port_str.trim().parse::<u16>() else {
+        return false;
+    };
+    std::net::TcpListener::bind(("127.0.0.1", port)).is_err()
 }
 
 fn remove_server_state(port_path: &std::path::Path) {
@@ -1025,8 +1039,10 @@ mod test_stale_state_cleanup {
         assert!(!pipe.exists(), "orphan .pipe should be removed");
     }
 
+    /// The listener never calls `accept`, which is the point: a server too busy
+    /// to answer must still read as live.
     #[test]
-    fn keeps_sidecar_whose_port_is_still_answering() {
+    fn keeps_sidecar_whose_port_is_still_bound() {
         let dir = fresh_dir("psmux_cleanup_live_sidecar");
         let listener = TcpListener::bind("127.0.0.1:0").expect("bind probe listener");
         let port = listener.local_addr().expect("local_addr").port();
@@ -1053,6 +1069,18 @@ mod test_stale_state_cleanup {
         assert!(!pipe.exists(), ".pipe should be removed");
         assert!(!key.exists(), ".key should be removed");
         assert!(!version.exists(), ".version should be removed");
+    }
+
+    #[test]
+    fn treats_an_unparseable_port_file_as_dead() {
+        let dir = fresh_dir("psmux_cleanup_garbage_port");
+        let port = write(&dir, "garbage.port", "not-a-port");
+        let key = write(&dir, "garbage.key", "deadbeef");
+
+        cleanup_stale_state_in(&dir, Duration::ZERO);
+
+        assert!(!port.exists(), "unparseable .port should be removed");
+        assert!(!key.exists(), "its sidecars should go with it");
     }
 
     #[test]

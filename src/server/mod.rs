@@ -673,8 +673,11 @@ pub fn run_server(
 
     app.session_key = session_key.clone();
 
-    let regpath = format!("{}\\{}.port", dir, app.port_file_base());
-    let _ = std::fs::write(&regpath, port.to_string());
+    // `.port` is the readiness beacon, so it is written LAST: a client that can
+    // read it is guaranteed to find the credential already in place.  Writing it
+    // first left a window where a cold-start attach read an empty `.key` and
+    // failed AUTH (#496), and it is also what parents the sidecars against
+    // `session::cleanup_stale_state_in`'s orphan sweep.
     let keypath = format!("{}\\{}.key", dir, app.port_file_base());
     let _ = std::fs::write(&keypath, &session_key);
     // Write version stamp so clients can detect stale warm servers (#110).
@@ -688,22 +691,13 @@ pub fn run_server(
     let pipe_file = format!("{}\\{}.pipe", dir, app.port_file_base());
     let _ = std::fs::write(&pipe_file, &pipe_name);
 
+    let regpath = format!("{}\\{}.port", dir, app.port_file_base());
+    let _ = std::fs::write(&regpath, port.to_string());
+
     // Expose the server identity via env var so that child processes spawned
     // by run-shell (from hooks, keybindings, etc.) can find this server when
     // they call `psmux set -g ...` or other CLI commands.
     crate::util::set_env("PSMUX_TARGET_SESSION", app.port_file_base());
-
-    // Try to set file permissions to user-only (Windows)
-    #[cfg(windows)]
-    {
-        // Recreate key file with restricted permissions
-        let _ = std::fs::OpenOptions::new()
-            .write(true)
-            .create(true)
-            .truncate(true)
-            .open(&keypath)
-            .map(|mut f| std::io::Write::write_all(&mut f, session_key.as_bytes()));
-    }
 
     // Start accept thread BEFORE load_config so that run-shell commands
     // (e.g. PPM plugin manager) spawned during config parsing can connect
