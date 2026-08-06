@@ -105,3 +105,14 @@ Describe 'Get-DelegationExitCode' {
             -RepairSucceeded $false -TimedOut $true -ProcessExitCode 1 | Should -Be 2
     }
 }
+
+Describe 'Test-ShouldRepairVenv' {
+    It 'returns true when the resolved path is the default kernel-venv location, so repair is attempted' {
+        Test-ShouldRepairVenv -PythonPath (Join-Path $HOME '.prime\agent\kernel-venv\Scripts\python.exe') |
+            Should -BeTrue
+    }
+    It 'returns false when the resolved path came from an override, so repair is not attempted' {
+        Test-ShouldRepairVenv -PythonPath 'C:\Users\aravi\.prime\kernelenv\Scripts\python.exe' |
+            Should -BeFalse
+    }
+}

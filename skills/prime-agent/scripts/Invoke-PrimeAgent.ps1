@@ -112,6 +112,15 @@ function Get-DelegationExitCode {
     return 0
 }
 
+function Test-ShouldRepairVenv {
+    [OutputType([bool])]
+    param([Parameter(Mandatory)][string]$PythonPath)
+    # Only the default kernel-venv location is safe to auto-rebuild. An
+    # overridden interpreter (PRIME_AGENT_KERNEL_PYTHON) may point anywhere,
+    # including a stale path never meant to be destroyed.
+    return $PythonPath -eq (Join-Path $HOME '.prime\agent\kernel-venv\Scripts\python.exe')
+}
+
 if ($LoadFunctionsOnly) { return }
 
 if (-not $Prompt) { Write-Error 'Prompt is required.'; exit 6 }
@@ -121,21 +130,28 @@ $python = Resolve-KernelPython
 $health = if ($onPath) { Test-KernelHealth -PythonPath $python } else {
     [pscustomobject]@{ Healthy = $false; Detail = 'prime-agent not on PATH' } }
 $repaired = $true
+$repairSuppressed = [bool]$NoRepair
 
 if ($onPath -and -not $health.Healthy -and -not $NoRepair) {
-    Write-Host "prime-agent kernel unhealthy; rebuilding. $($health.Detail)"
-    $venvRoot = Split-Path (Split-Path $python -Parent) -Parent
-    $result = Repair-KernelVenv -VenvRoot $venvRoot
-    $repaired = $result.Succeeded
-    if ($repaired) { Stop-SkillDaemon } else { Write-Error $result.Detail }
+    if (-not (Test-ShouldRepairVenv -PythonPath $python)) {
+        $repairSuppressed = $true
+        Write-Error "prime-agent kernel unhealthy at overridden interpreter path; refusing to auto-repair: $python"
+    } else {
+        Write-Host "prime-agent kernel unhealthy; rebuilding. $($health.Detail)"
+        $venvRoot = Split-Path (Split-Path $python -Parent) -Parent
+        $result = Repair-KernelVenv -VenvRoot $venvRoot
+        $repaired = $result.Succeeded
+        if ($repaired) { Stop-SkillDaemon } else { Write-Error $result.Detail }
+    }
 }
 
 $outFile = New-TemporaryFile
 $errFile = New-TemporaryFile
 $timedOut = $false
 $procExit = 0
+$canInvoke = $onPath -and ($health.Healthy -or (-not $repairSuppressed -and $repaired))
 
-if ($onPath -and ($health.Healthy -or $repaired) -and -not ($NoRepair -and -not $health.Healthy)) {
+if ($canInvoke) {
     $env:PRIME_AGENT_KERNEL_PYTHON = $python
     $agentArgs = @('-p','--no-session','--daemon-socket',$script:SkillSocket,'--cwd',$Cwd)
     if ($Json) { $agentArgs += @('--mode','json') }
@@ -155,5 +171,5 @@ if ($onPath -and ($health.Healthy -or $repaired) -and -not ($NoRepair -and -not 
 
 Remove-Item $outFile, $errFile -Force -ErrorAction SilentlyContinue
 exit (Get-DelegationExitCode -PrimeAgentOnPath $onPath -Healthy $health.Healthy `
-    -RepairSuppressed ([bool]$NoRepair) -RepairSucceeded $repaired `
+    -RepairSuppressed $repairSuppressed -RepairSucceeded $repaired `
     -TimedOut $timedOut -ProcessExitCode $procExit)
