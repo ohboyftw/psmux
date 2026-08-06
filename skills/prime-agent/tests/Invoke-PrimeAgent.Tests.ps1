@@ -44,3 +44,33 @@ Describe 'Test-KernelHealth' {
         $r.Healthy | Should -BeTrue
     }
 }
+
+Describe 'Repair-KernelVenv' -Tag 'Slow' {
+    It 'turns a bare venv into a healthy kernel venv' {
+        $tmp = Join-Path $env:TEMP "pa-repair-$([guid]::NewGuid().Guid.Substring(0,8))"
+        try {
+            uv venv $tmp --python 3.11 --seed *> $null
+            (Test-KernelHealth -PythonPath (Join-Path $tmp 'Scripts\python.exe')).Healthy |
+                Should -BeFalse
+
+            $r = Repair-KernelVenv -VenvRoot $tmp
+            $r.Succeeded | Should -BeTrue
+            (Test-KernelHealth -PythonPath (Join-Path $tmp 'Scripts\python.exe')).Healthy |
+                Should -BeTrue
+        } finally { Remove-Item -Recurse -Force $tmp -ErrorAction SilentlyContinue }
+    }
+
+    It 'reports failure without throwing when the runtime source is missing' {
+        $tmp = Join-Path $env:TEMP "pa-norun-$([guid]::NewGuid().Guid.Substring(0,8))"
+        $saved = $env:APPDATA
+        try {
+            $env:APPDATA = $tmp
+            $r = Repair-KernelVenv -VenvRoot $tmp
+            $r.Succeeded | Should -BeFalse
+            $r.Detail    | Should -Not -BeNullOrEmpty
+        } finally {
+            $env:APPDATA = $saved
+            Remove-Item -Recurse -Force $tmp -ErrorAction SilentlyContinue
+        }
+    }
+}
