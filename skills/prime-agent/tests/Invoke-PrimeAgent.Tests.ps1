@@ -74,3 +74,34 @@ Describe 'Repair-KernelVenv' -Tag 'Slow' {
         }
     }
 }
+
+Describe 'Get-DelegationExitCode' {
+    It 'returns 0 on success' {
+        Get-DelegationExitCode -PrimeAgentOnPath $true -Healthy $true -RepairSuppressed $false `
+            -RepairSucceeded $true -TimedOut $false -ProcessExitCode 0 | Should -Be 0
+    }
+    It 'returns 2 when prime-agent is not on PATH' {
+        Get-DelegationExitCode -PrimeAgentOnPath $false -Healthy $true -RepairSuppressed $false `
+            -RepairSucceeded $true -TimedOut $false -ProcessExitCode 0 | Should -Be 2
+    }
+    It 'returns 3 when unhealthy and repair is suppressed' {
+        Get-DelegationExitCode -PrimeAgentOnPath $true -Healthy $false -RepairSuppressed $true `
+            -RepairSucceeded $false -TimedOut $false -ProcessExitCode 0 | Should -Be 3
+    }
+    It 'returns 4 when repair was attempted and failed' {
+        Get-DelegationExitCode -PrimeAgentOnPath $true -Healthy $false -RepairSuppressed $false `
+            -RepairSucceeded $false -TimedOut $false -ProcessExitCode 0 | Should -Be 4
+    }
+    It 'returns 5 on timeout' {
+        Get-DelegationExitCode -PrimeAgentOnPath $true -Healthy $true -RepairSuppressed $false `
+            -RepairSucceeded $true -TimedOut $true -ProcessExitCode 0 | Should -Be 5
+    }
+    It 'returns 6 when prime-agent exits non-zero' {
+        Get-DelegationExitCode -PrimeAgentOnPath $true -Healthy $true -RepairSuppressed $false `
+            -RepairSucceeded $true -TimedOut $false -ProcessExitCode 1 | Should -Be 6
+    }
+    It 'prefers the PATH failure over every other condition' {
+        Get-DelegationExitCode -PrimeAgentOnPath $false -Healthy $false -RepairSuppressed $true `
+            -RepairSucceeded $false -TimedOut $true -ProcessExitCode 1 | Should -Be 2
+    }
+}

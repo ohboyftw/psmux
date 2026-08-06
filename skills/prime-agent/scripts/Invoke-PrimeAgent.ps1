@@ -96,4 +96,64 @@ function Stop-SkillDaemon {
         ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
 }
 
+function Get-DelegationExitCode {
+    [OutputType([int])]
+    param(
+        [bool]$PrimeAgentOnPath, [bool]$Healthy, [bool]$RepairSuppressed,
+        [bool]$RepairSucceeded, [bool]$TimedOut, [int]$ProcessExitCode
+    )
+    if (-not $PrimeAgentOnPath) { return 2 }
+    if (-not $Healthy) {
+        if ($RepairSuppressed)   { return 3 }
+        if (-not $RepairSucceeded) { return 4 }
+    }
+    if ($TimedOut) { return 5 }
+    if ($ProcessExitCode -ne 0) { return 6 }
+    return 0
+}
+
 if ($LoadFunctionsOnly) { return }
+
+if (-not $Prompt) { Write-Error 'Prompt is required.'; exit 6 }
+
+$onPath = [bool](Get-Command prime-agent -ErrorAction SilentlyContinue)
+$python = Resolve-KernelPython
+$health = if ($onPath) { Test-KernelHealth -PythonPath $python } else {
+    [pscustomobject]@{ Healthy = $false; Detail = 'prime-agent not on PATH' } }
+$repaired = $true
+
+if ($onPath -and -not $health.Healthy -and -not $NoRepair) {
+    Write-Host "prime-agent kernel unhealthy; rebuilding. $($health.Detail)"
+    $venvRoot = Split-Path (Split-Path $python -Parent) -Parent
+    $result = Repair-KernelVenv -VenvRoot $venvRoot
+    $repaired = $result.Succeeded
+    if ($repaired) { Stop-SkillDaemon } else { Write-Error $result.Detail }
+}
+
+$outFile = New-TemporaryFile
+$errFile = New-TemporaryFile
+$timedOut = $false
+$procExit = 0
+
+if ($onPath -and ($health.Healthy -or $repaired) -and -not ($NoRepair -and -not $health.Healthy)) {
+    $env:PRIME_AGENT_KERNEL_PYTHON = $python
+    $agentArgs = @('-p','--no-session','--daemon-socket',$script:SkillSocket,'--cwd',$Cwd)
+    if ($Json) { $agentArgs += @('--mode','json') }
+    $agentArgs += $Prompt
+    $proc = Start-Process -FilePath 'prime-agent.cmd' -ArgumentList $agentArgs -NoNewWindow `
+        -PassThru -RedirectStandardOutput $outFile -RedirectStandardError $errFile
+    try {
+        Wait-Process -Id $proc.Id -Timeout $TimeoutSec -ErrorAction Stop
+        $procExit = $proc.ExitCode
+    } catch [System.TimeoutException] {
+        $timedOut = $true
+        Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue
+    }
+    Get-Content $outFile -Raw -ErrorAction SilentlyContinue
+    if ($procExit -ne 0) { Get-Content $errFile -Raw -ErrorAction SilentlyContinue | Write-Error }
+}
+
+Remove-Item $outFile, $errFile -Force -ErrorAction SilentlyContinue
+exit (Get-DelegationExitCode -PrimeAgentOnPath $onPath -Healthy $health.Healthy `
+    -RepairSuppressed ([bool]$NoRepair) -RepairSucceeded $repaired `
+    -TimedOut $timedOut -ProcessExitCode $procExit)
