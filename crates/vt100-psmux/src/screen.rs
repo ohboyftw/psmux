@@ -818,7 +818,77 @@ impl Screen {
     }
 }
 
+/// U+FE0F VARIATION SELECTOR-16, which requests emoji presentation.
+const VS16: char = '\u{FE0F}';
+
 impl Screen {
+    /// Does appending the zero-width char `c` turn this cell into a
+    /// double-width sequence? (#533)
+    ///
+    /// Emoji presentation is a property of the *sequence*, not of any single
+    /// character: `U+2733` is one column on its own, but `U+2733 U+FE0F` is
+    /// two, in real terminals and in tmux alike. Because `text()` measures
+    /// width one char at a time, the base settles the cell at one column and
+    /// the selector is folded in afterwards as a zero-width mark, so the cell
+    /// stays narrow and every column after it drifts left by one.
+    ///
+    /// The trigger mirrors tmux's `screen_write_combine`, which forces the
+    /// stored width to 2 when a VS16 lands on a cell whose width is still 1
+    /// (`variation-selector-always-wide`, on by default). The width measured
+    /// over the whole cell is checked too, so any other sequence that
+    /// `unicode-width` considers double width is promoted as well.
+    fn wants_wide_promotion(cell: &crate::Cell, c: char) -> bool {
+        use unicode_width::UnicodeWidthStr as _;
+        // A cell that is already wide must not be promoted again: tmux only
+        // promotes when the stored width is 1, so `📛 + VS16` stays 2 columns
+        // rather than growing to 4.
+        cell.has_contents() && !cell.is_wide() && (c == VS16 || cell.contents().width() > 1)
+    }
+
+    /// Widen the narrow cell at (`row`, `col`) into a two column cell, taking
+    /// the following cell as its continuation and advancing the cursor over
+    /// it. The cursor is expected to be sitting on that following cell, which
+    /// is the case for every caller (a zero-width char never moves it).
+    fn promote_cell_to_wide(&mut self, row: u16, col: u16, attrs: crate::attrs::Attrs) {
+        let cont = crate::grid::Pos { row, col: col + 1 };
+        if cont.col >= self.grid().size().cols {
+            // The base sits in the last column, so there is nowhere to put the
+            // continuation. Leave the cell narrow rather than wrapping a
+            // half-drawn glyph onto the next row.
+            return;
+        }
+
+        // If the cell we are taking over is itself the base of a wide glyph,
+        // that glyph's own continuation is about to be orphaned, so clear it.
+        let clobbers_wide = self
+            .grid()
+            .drawing_cell(cont)
+            .is_some_and(crate::Cell::is_wide);
+        if clobbers_wide {
+            if let Some(orphan) = self.grid_mut().drawing_cell_mut(crate::grid::Pos {
+                row,
+                col: cont.col + 1,
+            }) {
+                orphan.clear(attrs);
+                orphan.set_wide_continuation(false);
+            }
+        }
+
+        if let Some(base) = self
+            .grid_mut()
+            .drawing_cell_mut(crate::grid::Pos { row, col })
+        {
+            base.set_wide(true);
+        } else {
+            return;
+        }
+        if let Some(cell) = self.grid_mut().drawing_cell_mut(cont) {
+            cell.clear(crate::attrs::Attrs::default());
+            cell.set_wide_continuation(true);
+        }
+        self.grid_mut().col_inc(1);
+    }
+
     pub(crate) fn text(&mut self, c: char) {
         let pos = self.grid().pos();
         let size = self.grid().size();
@@ -829,11 +899,20 @@ impl Screen {
             // don't even try to draw control characters
             return;
         }
-        let width = width
+        let width: u16 = width
             .unwrap_or(1)
             .try_into()
             // width() can only return 0, 1, or 2
             .unwrap();
+
+        // A glyph wider than the whole row can never be represented: there is
+        // nowhere to put its continuation, and `size.cols - width` underflows
+        // just below (#534, reachable once a pane is shrunk to one column).
+        // tmux drops the glyph in this situation, showing nothing for a CJK
+        // character in a one column pane, so do the same.
+        if width > size.cols {
+            return;
+        }
 
         // it doesn't make any sense to wrap if the last column in a row
         // didn't already have contents. don't try to handle the case where a
@@ -864,11 +943,12 @@ impl Screen {
 
         if width == 0 {
             if pos.col > 0 {
+                let mut base_col = pos.col - 1;
                 let mut prev_cell = self
                     .grid_mut()
                     .drawing_cell_mut(crate::grid::Pos {
                         row: pos.row,
-                        col: pos.col - 1,
+                        col: base_col,
                     })
                     // pos.row is valid, since it comes directly from
                     // self.grid().pos() which we assume to always have a
@@ -876,11 +956,12 @@ impl Screen {
                     // checked for pos.col > 0.
                     .unwrap();
                 if prev_cell.is_wide_continuation() {
+                    base_col = pos.col - 2;
                     prev_cell = self
                         .grid_mut()
                         .drawing_cell_mut(crate::grid::Pos {
                             row: pos.row,
-                            col: pos.col - 2,
+                            col: base_col,
                         })
                         // pos.row is valid, since it comes directly from
                         // self.grid().pos() which we assume to always have a
@@ -891,6 +972,9 @@ impl Screen {
                         .unwrap();
                 }
                 prev_cell.append(c);
+                if Self::wants_wide_promotion(prev_cell, c) {
+                    self.promote_cell_to_wide(pos.row, base_col, attrs);
+                }
             } else if pos.row > 0 {
                 let prev_row = self
                     .grid()

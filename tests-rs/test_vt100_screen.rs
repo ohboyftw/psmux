@@ -352,3 +352,131 @@ fn squelch_csi_2j_then_3j_only_first_fires() {
     parser.process(b"\x1b[3J");
     assert!(!parser.screen().squelch_cleared());
 }
+
+// ── issue #534: shrinking a row through a wide glyph ─────────
+
+#[test]
+fn issue534_shrink_wide_then_erase_in_line_does_not_panic() {
+    // Exact repro from the report: 2x4 parser, write a wide CJK glyph, shrink
+    // to one column (truncating away its continuation), then erase in line.
+    // Before the fix this panicked with "attempt to subtract with overflow"
+    // in Row::erase.
+    let mut parser = crate::Parser::new(2, 4, 0);
+    parser.process("\u{4E2D}".as_bytes());
+    parser.screen_mut().set_size(2, 1);
+    parser.process(b"\x1b[K");
+    // The salvaged cell must not claim a width the row cannot hold.
+    let cell = parser.screen().cell(0, 0).unwrap();
+    assert!(!cell.is_wide(), "orphaned wide cell survived the shrink");
+}
+
+#[test]
+fn issue534_shrink_wide_sweep_no_cell_claims_wider_than_row() {
+    // Sweep every shrink target from 8 columns down to 1 after writing a wide
+    // glyph: no cell may keep a wide flag its row cannot hold.
+    for target in (1..=8u16).rev() {
+        let mut parser = crate::Parser::new(2, 8, 0);
+        parser.process("\u{4E2D}".as_bytes());
+        parser.screen_mut().set_size(2, target);
+        for col in 0..target {
+            if let Some(cell) = parser.screen().cell(0, col) {
+                assert!(
+                    !cell.is_wide() || col + 1 < target,
+                    "wide cell at col {col} with no continuation in a {target} column row"
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn issue534_shrink_wide_then_erase_in_display_does_not_panic() {
+    let mut parser = crate::Parser::new(2, 4, 0);
+    parser.process("\u{4E2D}".as_bytes());
+    parser.screen_mut().set_size(2, 1);
+    // CSI 2J erases the whole display; must not underflow on the orphaned cell.
+    parser.process(b"\x1b[2J");
+    assert!(!parser.screen().cell(0, 0).unwrap().is_wide());
+}
+
+#[test]
+fn issue534_shrink_wide_regrow_keeps_grid_coherent() {
+    let mut parser = crate::Parser::new(2, 4, 0);
+    parser.process("\u{4E2D}".as_bytes());
+    parser.screen_mut().set_size(2, 1);
+    parser.screen_mut().set_size(2, 4);
+    // After regrowing, no cell should be flagged wide without a continuation.
+    for col in 0..4 {
+        if let Some(cell) = parser.screen().cell(0, col) {
+            if cell.is_wide() {
+                assert!(col + 1 < 4, "wide flag with no continuation after regrow");
+            }
+        }
+    }
+}
+
+// ── issue #533: VS16 promotes a cell to wide ────────────────
+
+#[test]
+fn issue533_vs16_promotes_base_to_wide_and_advances_cursor() {
+    // U+2733 is one column on its own, but U+2733 U+FE0F is two. Before the
+    // fix the base settled at one column and the following columns drifted
+    // left by one.
+    let mut parser = crate::Parser::new(24, 80, 0);
+    parser.process("\u{2733}\u{FE0F}AB".as_bytes());
+    let base = parser.screen().cell(0, 0).unwrap();
+    assert!(base.is_wide(), "base cell not promoted to wide");
+    assert!(parser.screen().cell(0, 1).unwrap().is_wide_continuation());
+    assert_eq!(parser.screen().cell(0, 2).unwrap().contents(), "A");
+    assert_eq!(parser.screen().cell(0, 3).unwrap().contents(), "B");
+    let (_, col) = parser.screen().cursor_position();
+    assert_eq!(col, 4, "cursor did not advance past the promoted glyph");
+}
+
+#[test]
+fn issue533_vs16_split_across_process_calls() {
+    // A PTY read splitting the base and the selector is routine; promotion
+    // must still apply because it acts on the cell already in the grid.
+    let mut parser = crate::Parser::new(24, 80, 0);
+    parser.process("\u{2733}".as_bytes());
+    parser.process("\u{FE0F}".as_bytes());
+    parser.process(b"A");
+    assert!(parser.screen().cell(0, 0).unwrap().is_wide());
+    assert!(parser.screen().cell(0, 1).unwrap().is_wide_continuation());
+    assert_eq!(parser.screen().cell(0, 2).unwrap().contents(), "A");
+}
+
+#[test]
+fn issue533_vs15_does_not_promote() {
+    // VS15 (U+FE0E) requests text presentation: the base stays one column.
+    let mut parser = crate::Parser::new(24, 80, 0);
+    parser.process("\u{2733}\u{FE0E}A".as_bytes());
+    assert!(!parser.screen().cell(0, 0).unwrap().is_wide());
+    assert_eq!(parser.screen().cell(0, 1).unwrap().contents(), "A");
+}
+
+#[test]
+fn issue533_redundant_vs16_on_already_wide_emoji_stays_two() {
+    // An already-wide emoji plus a redundant VS16 must not grow to four columns.
+    let mut parser = crate::Parser::new(24, 80, 0);
+    parser.process("\u{1F4DB}\u{FE0F}A".as_bytes());
+    assert!(parser.screen().cell(0, 0).unwrap().is_wide());
+    assert!(parser.screen().cell(0, 1).unwrap().is_wide_continuation());
+    assert_eq!(parser.screen().cell(0, 2).unwrap().contents(), "A");
+    let (_, col) = parser.screen().cursor_position();
+    assert_eq!(col, 3);
+}
+
+#[test]
+fn issue533_vs16_promoted_cell_survives_truncation() {
+    // A #533-promoted wide cell must survive the same truncation path as a
+    // CJK glyph (#534 interaction).
+    let mut parser = crate::Parser::new(2, 4, 0);
+    parser.process("\u{2733}\u{FE0F}".as_bytes());
+    assert!(parser.screen().cell(0, 0).unwrap().is_wide());
+    parser.screen_mut().set_size(2, 1);
+    assert!(
+        !parser.screen().cell(0, 0).unwrap().is_wide(),
+        "promoted wide cell kept its flag after being shrunk to one column"
+    );
+}

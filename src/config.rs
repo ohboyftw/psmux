@@ -412,9 +412,120 @@ pub fn parse_config_line(app: &mut AppState, line: &str) {
     }
 }
 
+/// Strip one layer of matching wrapping quotes, if the whole string carries
+/// them. This is the pre-#536 fallback and is kept for the shapes the
+/// quote-aware scan below deliberately does not claim.
+fn strip_wrapping_quotes(v: &str) -> &str {
+    let b = v.as_bytes();
+    if b.len() >= 2 && (b[0] == b'"' || b[0] == b'\'') && b[b.len() - 1] == b[0] {
+        &v[1..v.len() - 1]
+    } else {
+        v
+    }
+}
+
+/// Split a config line into whitespace-separated tokens, treating a quoted run
+/// as a single token, and record the byte offset where each token starts.
+///
+/// The offsets are the point of this: they let the caller recover the value
+/// **verbatim** from the original line. `split_whitespace()` discards where
+/// the runs of whitespace were, which is what made a quoted gap unrecoverable
+/// (#536).
+fn tokens_with_offsets(line: &str) -> Vec<(usize, String)> {
+    let mut out: Vec<(usize, String)> = Vec::new();
+    let mut cur = String::new();
+    let mut start = 0usize;
+    let mut started = false;
+    let mut in_single = false;
+    let mut in_double = false;
+    let mut it = line.char_indices();
+    while let Some((idx, c)) = it.next() {
+        if !started && !c.is_whitespace() {
+            start = idx;
+            started = true;
+        }
+        match c {
+            // Keep the escape pair intact; the value scan resolves it later.
+            '\\' if in_double => {
+                cur.push(c);
+                if let Some((_, n)) = it.next() {
+                    cur.push(n);
+                }
+            }
+            '\'' if !in_double => {
+                in_single = !in_single;
+                cur.push(c);
+            }
+            '"' if !in_single => {
+                in_double = !in_double;
+                cur.push(c);
+            }
+            _ if c.is_whitespace() && !in_single && !in_double => {
+                if started {
+                    out.push((start, std::mem::take(&mut cur)));
+                    started = false;
+                }
+            }
+            _ => cur.push(c),
+        }
+    }
+    if started {
+        out.push((start, cur));
+    }
+    out
+}
+
+/// Resolve a `set-option` value from the remainder of a config line.
+///
+/// A value wrapped in matching quotes that close at end of line is taken
+/// byte-exact, so `set -g @x "A     B"` keeps all five spaces and
+/// `"   leading"` keeps its indent. Inside double quotes `\"` and `\\` are
+/// unescaped, matching both tmux and the tokenizer the CLI path already uses.
+/// Anything else (a bare word, or a quote that does not close the line) falls
+/// back to the old behaviour: verbatim with trailing whitespace removed and one
+/// layer of wrapping quotes stripped.
+fn extract_option_value(rest: &str) -> String {
+    let rest = rest.trim_end();
+    let mut chars = rest.char_indices();
+    let quote = match chars.next() {
+        Some((_, c)) if c == '"' || c == '\'' => c,
+        Some(_) => return rest.to_string(),
+        None => return String::new(),
+    };
+    let mut out = String::new();
+    while let Some((idx, c)) = chars.next() {
+        // Only double quotes process escapes, matching tmux and
+        // commands::parse_command_line.
+        if quote == '"' && c == '\\' {
+            if let Some((_, n)) = chars.clone().next() {
+                if n == '"' || n == '\\' {
+                    out.push(n);
+                    chars.next();
+                    continue;
+                }
+            }
+            out.push(c);
+            continue;
+        }
+        if c == quote {
+            // Only a closing quote that ends the line delimits the whole
+            // value. Trailing content means this is some other shape (a
+            // chained command, two quoted words), so leave it to the fallback
+            // rather than silently claiming half of it.
+            if rest[idx + c.len_utf8()..].trim().is_empty() {
+                return out;
+            }
+            return strip_wrapping_quotes(rest).to_string();
+        }
+        out.push(c);
+    }
+    // Unterminated quote: behave as before.
+    strip_wrapping_quotes(rest).to_string()
+}
+
 fn parse_set_option(app: &mut AppState, line: &str) {
-    let parts: Vec<&str> = line.split_whitespace().collect();
-    if parts.len() < 2 {
+    let toks = tokens_with_offsets(line);
+    if toks.len() < 2 {
         return;
     }
 
@@ -425,8 +536,8 @@ fn parse_set_option(app: &mut AppState, line: &str) {
     let mut append_mode = false; // -a: append to current value
     let mut unset_mode = false; // -u: unset (reset to default)
 
-    while i < parts.len() {
-        let p = parts[i];
+    while i < toks.len() {
+        let p = toks[i].1.as_str();
         if p.starts_with('-') {
             if p.contains('g') {
                 is_global = true;
@@ -446,7 +557,7 @@ fn parse_set_option(app: &mut AppState, line: &str) {
             // -q (quiet): no-op — we don't produce errors for unknown options
             // -w: window option — treat same as global for our single-server model
             i += 1;
-            if p.contains('t') && i < parts.len() {
+            if p.contains('t') && i < toks.len() {
                 i += 1;
             }
         } else {
@@ -454,22 +565,23 @@ fn parse_set_option(app: &mut AppState, line: &str) {
         }
     }
 
-    if i >= parts.len() {
+    if i >= toks.len() {
         return;
     }
 
-    // Extract key and value
-    let key = parts[i];
-    let raw_value = if i + 1 < parts.len() {
-        parts[i + 1..].join(" ")
-    } else {
-        String::new()
+    // Extract key, then take the value from the ORIGINAL line starting at the
+    // next token's offset, so quoted whitespace survives (#536).
+    let key = strip_wrapping_quotes(&toks[i].1).to_string();
+    let key = key.as_str();
+    let raw_value = match toks.get(i + 1) {
+        Some((off, _)) => extract_option_value(&line[*off..]),
+        None => String::new(),
     };
 
     // Handle -u (unset): reset option to empty and drop from user_set_options
     if unset_mode {
         app.user_set_options.remove(key);
-        parse_option_value(app, &format!("{} ", key), is_global);
+        parse_option_value(app, key, "", is_global);
         return;
     }
 
@@ -483,11 +595,11 @@ fn parse_set_option(app: &mut AppState, line: &str) {
         return;
     }
 
-    // Expand format strings in the value if -F flag is set
+    // Expand format strings in the value if -F flag is set. No quote trimming
+    // here any more: extract_option_value already resolved the quoting, so a
+    // value whose content legitimately begins and ends with a quote keeps it.
     let value = if format_expand && !raw_value.is_empty() {
-        let stripped = raw_value.trim_matches('"').trim_matches('\'');
-
-        crate::format::expand_format(stripped, app)
+        crate::format::expand_format(&raw_value, app)
     } else {
         raw_value
     };
@@ -495,37 +607,29 @@ fn parse_set_option(app: &mut AppState, line: &str) {
     // Handle -a (append to current value)
     let final_value = if append_mode {
         let current = crate::format::lookup_option_pub(key, app).unwrap_or_default();
-        format!("{}{}", current, value.trim_matches('"').trim_matches('\''))
+        format!("{}{}", current, value)
     } else {
         value
     };
 
-    let rest = format!("{} {}", key, final_value);
-    parse_option_value(app, &rest, is_global);
+    // Pass key and value separately. Rejoining them into one string could not
+    // represent a value with leading or trailing spaces, which the receiver
+    // then trimmed back off (#536).
+    parse_option_value(app, key, &final_value, is_global);
     // Record that the user has explicitly touched this option so future
     // `set-option -o` calls short-circuit correctly.
     app.user_set_options.insert(key.to_string());
 }
 
-pub fn parse_option_value(app: &mut AppState, rest: &str, _is_global: bool) {
-    let parts: Vec<&str> = rest.splitn(2, ' ').collect();
-    if parts.is_empty() {
-        return;
-    }
-
-    let key = parts[0].trim();
-    let value = if parts.len() > 1 {
-        let v = parts[1].trim();
-        // Only strip quotes when the entire value is wrapped in matching
-        // quotes.  Preserves values like `"path with spaces" --login`.
-        if (v.starts_with('"') && v.ends_with('"')) || (v.starts_with('\'') && v.ends_with('\'')) {
-            &v[1..v.len() - 1]
-        } else {
-            v
-        }
-    } else {
-        ""
-    };
+/// Apply one option, given its name and its **exact** value.
+///
+/// The value arrives verbatim: the caller has already resolved quoting, so a
+/// deliberate run of spaces, or leading/trailing whitespace inside a quoted
+/// config value, survives to here. This used to take a single `"key value"`
+/// string and re-split it, which could not represent those runs at all and
+/// trimmed the ends back off (#536).
+pub fn parse_option_value(app: &mut AppState, key: &str, value: &str, _is_global: bool) {
+    let key = key.trim();
 
     match key {
         "status-left" => app.status_left = value.to_string(),
@@ -1960,3 +2064,7 @@ mod tests_issue157_bind_key_case;
 #[cfg(test)]
 #[path = "../tests-rs/test_issue145_source_file.rs"]
 mod tests_issue145_source_file;
+
+#[cfg(test)]
+#[path = "../tests-rs/test_issue536_config_quoted_whitespace.rs"]
+mod tests_issue536_config_quoted_whitespace;

@@ -56,7 +56,12 @@ impl Row {
         let wide = self.cells[usize::from(i)].is_wide();
         self.clear_wide(i);
         self.cells[usize::from(i)].clear(attrs);
-        if i == self.cols() - if wide { 2 } else { 1 } {
+        // A row that was shrunk through a wide glyph's continuation can hand us
+        // an orphaned wide cell, and in a one column row `cols() - 2` underflows
+        // (#534). Saturating is correct rather than merely safe: if the logical
+        // last column would be negative there is no last column to match, so the
+        // comparison should simply not fire.
+        if i == self.cols().saturating_sub(if wide { 2 } else { 1 }) {
             self.wrapped = false;
         }
     }
@@ -73,8 +78,21 @@ impl Row {
     }
 
     pub fn resize(&mut self, len: u16, cell: crate::Cell) {
+        let shrinking = usize::from(len) < self.cells.len();
         self.cells.resize(usize::from(len), cell);
         self.wrapped = false;
+        // Shrinking can cut away the continuation of a wide glyph, leaving the
+        // last cell flagged wide with nothing after it. `truncate` above already
+        // clears that; `resize` must too, or the row keeps a cell that claims a
+        // width the row cannot hold (#534). `Cell::clear` zeroes the flag byte,
+        // so this drops the wide flag along with the contents, matching tmux,
+        // which shows nothing for a CJK glyph once the pane is one column wide.
+        if shrinking && len > 0 {
+            let last_cell = &mut self.cells[usize::from(len) - 1];
+            if last_cell.is_wide() {
+                last_cell.clear(*last_cell.attrs());
+            }
+        }
     }
 
     pub fn wrap(&mut self, wrap: bool) {

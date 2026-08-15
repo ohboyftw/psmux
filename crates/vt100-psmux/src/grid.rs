@@ -638,7 +638,11 @@ impl Grid {
     }
 
     pub fn col_wrap(&mut self, width: u16, wrap: bool) {
-        if self.pos.col > self.size.cols - width {
+        // `cols - width` underflows for a glyph wider than the row, which a
+        // pane shrunk to one column produces (#534). Screen::text drops such a
+        // glyph before reaching here, but col_wrap is reachable from elsewhere,
+        // so keep the arithmetic safe at the source too.
+        if self.pos.col > self.size.cols.saturating_sub(width) {
             let mut prev_pos = self.pos;
             self.pos.col = 0;
             let scrolled = self.row_inc_scroll(1);

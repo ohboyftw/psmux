@@ -2303,3 +2303,26 @@ fn new_window_with_shell_command_returns_command() {
         _ => panic!("expected Action::Command"),
     }
 }
+
+// Issue #552: rename-window must expand its argument as a format string
+// (tmux parity with cmd-rename-window.c's format_single_from_target).
+#[test]
+fn rename_window_expands_format_string() {
+    let mut app = mock_app_with_windows(&["old_name"]);
+    app.active_idx = 0;
+    // #{session_name} resolves to the mock_app session name "test_session".
+    execute_command_string(&mut app, "rename-window #{session_name}-win").unwrap();
+    assert_eq!(
+        app.windows[0].name, "test_session-win",
+        "rename-window should expand format sequences, not store them literally"
+    );
+}
+
+#[test]
+fn rename_window_plain_name_untouched() {
+    let mut app = mock_app_with_windows(&["old_name"]);
+    app.active_idx = 0;
+    // A name with no format sequences must pass through unchanged.
+    execute_command_string(&mut app, "rename-window plain-name").unwrap();
+    assert_eq!(app.windows[0].name, "plain-name");
+}

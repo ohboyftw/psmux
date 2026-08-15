@@ -977,8 +977,13 @@ fn execute_command_string_single(app: &mut AppState, cmd: &str) -> io::Result<()
         }
         "rename-window" | "renamew" => {
             if let Some(name) = parts.get(1) {
+                // tmux parity (#552): the argument is a format string, expanded
+                // against the window being renamed (cmd-rename-window.c uses
+                // format_single_from_target). Plain names without format
+                // sequences are unchanged.
+                let name = crate::format::expand_format(name, app);
                 let win = &mut app.windows[app.active_idx];
-                win.name = name.to_string();
+                win.name = name;
             }
         }
         "list-windows" | "lsw" => {
