@@ -32,16 +32,30 @@ pub struct AsyncPaneWriter {
 
 impl AsyncPaneWriter {
     /// Wrap a raw PTY writer.  The background drain thread starts immediately.
+    ///
+    /// The inner writer's lifetime must match the pane's: dropping the ConPTY
+    /// master writer closes the child's input pipe, which a shell reads as EOF
+    /// and exits on — closing the whole window, and with it the session if it
+    /// was the last one.  A transient write error (e.g. while a full-screen TUI
+    /// child is tearing down) must therefore NOT end the thread; it only stops
+    /// further writes.  The thread — and with it the inner writer — goes away
+    /// only when the queue side is dropped with the pane.
     pub fn new(mut inner: Box<dyn std::io::Write + Send>) -> Self {
         // Bounded channel: 1024 slots × typical ~512 bytes = ~512KB max queued.
         let (tx, rx) = mpsc::sync_channel::<Vec<u8>>(1024);
         let handle = std::thread::Builder::new()
             .name("pane-writer".into())
             .spawn(move || {
+                let mut broken = false;
                 while let Ok(data) = rx.recv() {
-                    // Best-effort write — if the pipe errors, the pane is dead.
+                    // Keep draining after a failure so the queue never wedges,
+                    // but stop touching a pipe that has already errored.
+                    if broken {
+                        continue;
+                    }
                     if inner.write_all(&data).is_err() {
-                        break;
+                        broken = true;
+                        continue;
                     }
                     let _ = inner.flush();
                 }
@@ -1801,5 +1815,141 @@ mod remain_on_exit_tests {
         assert!(RemainOnExit::On.keeps(Some(1)));
         assert!(!RemainOnExit::Off.keeps(Some(0)));
         assert!(!RemainOnExit::Off.keeps(Some(1)));
+    }
+}
+
+#[cfg(test)]
+mod async_pane_writer_tests {
+    use super::*;
+    use std::io::Write;
+    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+    use std::sync::Arc;
+    use std::time::{Duration, Instant};
+
+    /// A real `io::Write` standing in for the ConPTY master writer: it counts
+    /// write attempts, can fail them, and records when it is dropped. Not a
+    /// mock — the drain thread drives it exactly as it drives the real writer,
+    /// and the drop flag is the whole point: dropping the master writer closes
+    /// the child's stdin.
+    struct ProbeWriter {
+        writes: Arc<AtomicUsize>,
+        dropped: Arc<AtomicBool>,
+        always_fail: bool,
+    }
+
+    impl Write for ProbeWriter {
+        fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+            self.writes.fetch_add(1, Ordering::SeqCst);
+            if self.always_fail {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::Other,
+                    "transient write failure",
+                ));
+            }
+            Ok(buf.len())
+        }
+
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    impl Drop for ProbeWriter {
+        fn drop(&mut self) {
+            self.dropped.store(true, Ordering::SeqCst);
+        }
+    }
+
+    /// Poll `cond` until it holds or `deadline` elapses. Returns whether it held.
+    fn wait_for(deadline: Duration, mut cond: impl FnMut() -> bool) -> bool {
+        let start = Instant::now();
+        while start.elapsed() < deadline {
+            if cond() {
+                return true;
+            }
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        false
+    }
+
+    fn probe(always_fail: bool) -> (ProbeWriter, Arc<AtomicUsize>, Arc<AtomicBool>) {
+        let writes = Arc::new(AtomicUsize::new(0));
+        let dropped = Arc::new(AtomicBool::new(false));
+        let w = ProbeWriter {
+            writes: Arc::clone(&writes),
+            dropped: Arc::clone(&dropped),
+            always_fail,
+        };
+        (w, writes, dropped)
+    }
+
+    #[test]
+    fn transient_write_error_does_not_drop_the_inner_writer() {
+        // Regression: the drain loop used to `break` on the first failed write,
+        // ending the thread and dropping the inner writer with it. Dropping the
+        // ConPTY master writer closes the child's input pipe; a shell whose
+        // stdin hits EOF exits — so one transient failure while a TUI child was
+        // tearing down could kill the pane, close the window, and (for the last
+        // window) end the session.
+        let (inner, writes, dropped) = probe(true);
+        let mut w = AsyncPaneWriter::new(Box::new(inner));
+
+        w.write_all(b"hello").expect("queueing must succeed");
+
+        let attempted = wait_for(Duration::from_secs(5), || {
+            writes.load(Ordering::SeqCst) >= 1
+        });
+        assert!(attempted, "drain thread never attempted the write");
+
+        let released = wait_for(Duration::from_millis(300), || {
+            dropped.load(Ordering::SeqCst)
+        });
+        assert!(
+            !released,
+            "inner writer was dropped after a transient write error; \
+             that closes the child's stdin and kills the pane",
+        );
+
+        drop(w);
+    }
+
+    #[test]
+    fn writer_still_accepts_writes_after_a_transient_error() {
+        // The drain thread must outlive a failed write, so the queue side stays
+        // connected. If the thread exits, `write` reports BrokenPipe and callers
+        // treat a live pane as dead.
+        let (inner, writes, _dropped) = probe(true);
+        let mut w = AsyncPaneWriter::new(Box::new(inner));
+
+        w.write_all(b"first").expect("queueing must succeed");
+        let attempted = wait_for(Duration::from_secs(5), || {
+            writes.load(Ordering::SeqCst) >= 1
+        });
+        assert!(attempted, "drain thread never attempted the first write");
+        // Give a thread that wrongly exits time to finish doing so.
+        std::thread::sleep(Duration::from_millis(300));
+
+        assert!(
+            w.write(b"second").is_ok(),
+            "writer must still accept writes after a transient error",
+        );
+
+        drop(w);
+    }
+
+    #[test]
+    fn inner_writer_is_released_when_the_pane_writer_drops() {
+        // The other half of the contract: the inner writer's lifetime matches
+        // the pane's, so a normal drop must still release it (and join the
+        // thread) rather than leaking it for the process lifetime.
+        let (inner, _writes, dropped) = probe(false);
+        let w = AsyncPaneWriter::new(Box::new(inner));
+
+        drop(w);
+
+        assert!(
+            dropped.load(Ordering::SeqCst),
+            "dropping AsyncPaneWriter must release the inner writer",
+        );
     }
 }

@@ -590,7 +590,21 @@ pub fn parse_target(target: &str) -> ParsedTarget {
                     result.window = Some(w);
                 }
             }
-            if let Ok(p) = wp[dot_pos + 1..].parse::<usize>() {
+            // The pane slot accepts a %id as well as an index, exactly as the
+            // "%pane" and "@window" branches above already do. Parsing it with a
+            // bare parse::<usize>() silently failed on the '%', leaving
+            // pane = None, and every caller then fell through to the ACTIVE
+            // pane: "kill-pane -t sess:.%4" killed a different pane in a
+            // different window and still exited 0. A bare number must stay an
+            // index, or "sess:0.1" would start meaning pane %1.
+            let pane_str = &wp[dot_pos + 1..];
+            if let Some(pid) = pane_str
+                .strip_prefix('%')
+                .and_then(|s| s.parse::<usize>().ok())
+            {
+                result.pane = Some(pid);
+                result.pane_is_id = true;
+            } else if let Ok(p) = pane_str.parse::<usize>() {
                 result.pane = Some(p);
             }
         } else if let Ok(w) = wp.parse::<usize>() {
@@ -610,3 +624,7 @@ pub fn extract_session_from_target(target: &str) -> String {
 #[cfg(test)]
 #[path = "../tests-rs/test_issue196_flag_equals.rs"]
 mod tests_issue196_flag_equals;
+
+#[cfg(test)]
+#[path = "../tests-rs/test_pane_target_forms.rs"]
+mod tests_pane_target_forms;
