@@ -616,36 +616,72 @@ pub(crate) fn is_server_refusal(payload: &str) -> bool {
     )
 }
 
-pub fn send_control_with_response(line: String) -> io::Result<String> {
-    let home = env::var("USERPROFILE")
-        .or_else(|_| env::var("HOME"))
-        .unwrap_or_default();
-    let (_target, port, session_key) = resolve_server_for_command(&home, &line)?;
-    let full_target = env::var("PSMUX_TARGET_FULL").ok();
-    let addr = format!("127.0.0.1:{}", port);
-    let mut stream = std::net::TcpStream::connect(&addr)?;
-    let _ = stream.set_nodelay(true);
-    let _ = stream.set_read_timeout(Some(Duration::from_millis(2000)));
-    let _ = writeln!(stream, "AUTH {}", session_key);
-    if let Some(ref ft) = full_target {
-        let _ = writeln!(stream, "TARGET {}", ft);
-    }
-    let _ = write!(stream, "{}", line);
-    let _ = stream.flush();
+/// A bare `TcpStream::connect` to a port nothing answers on can hang for the
+/// full Windows SYN-retransmit schedule (~21s) before failing. A live server is
+/// on loopback and completes the handshake in microseconds, so the only thing
+/// this budget has to accommodate is how long a *dead* port takes to say so.
+///
+/// **Do not lower this.** Per the measurement in `port_file_is_live` above
+/// (see the doc comment at the top of that fn), an unbound loopback port on
+/// Windows needs ~2s of SYN retransmits before it reports `ConnectionRefused`,
+/// and every budget shorter than that returns `TimedOut` instead — measured at
+/// 50ms/250ms/500ms/1s. Anything under ~2s therefore reports "the server
+/// stalled" when the truth is "there is no server", which is exactly the
+/// confusion the rest of this function exists to remove.
+const CONTROL_CONNECT_TIMEOUT: Duration = Duration::from_millis(3000);
+
+/// Read timeout for a one-shot control reply. Matches upstream; the extra
+/// second over the old 2000ms is headroom for server-side round trips that
+/// happen before the reply is written.
+const CONTROL_READ_TIMEOUT: Duration = Duration::from_millis(3000);
+
+/// Drain `stream` until EOF, reporting whether the read stopped at a timeout
+/// rather than at end-of-reply.
+///
+/// The bool is the whole point: a stalled server and a finished one used to be
+/// indistinguishable here, because both left the loop through `break`.
+fn read_until_eof(stream: &mut std::net::TcpStream) -> (Vec<u8>, bool) {
     let mut buf = Vec::new();
     let mut temp = [0u8; 4096];
     loop {
-        match std::io::Read::read(&mut stream, &mut temp) {
-            Ok(0) => break,
+        match std::io::Read::read(stream, &mut temp) {
+            Ok(0) => return (buf, false),
             Ok(n) => buf.extend_from_slice(&temp[..n]),
             Err(e)
                 if e.kind() == io::ErrorKind::WouldBlock || e.kind() == io::ErrorKind::TimedOut =>
             {
-                break
+                return (buf, true)
             }
-            Err(_) => break,
+            Err(_) => return (buf, false),
         }
     }
+}
+
+/// Write one request on an authenticated one-shot control socket and return the
+/// server's reply.
+///
+/// `stream` must already carry its read timeout: the caller owns that policy
+/// (`wait-pane` blocks for minutes, `list-windows` for milliseconds).
+fn exchange_one_shot(
+    stream: &mut std::net::TcpStream,
+    session_key: &str,
+    full_target: Option<&str>,
+    line: &str,
+) -> io::Result<String> {
+    let _ = writeln!(stream, "AUTH {}", session_key);
+    if let Some(ft) = full_target {
+        let _ = writeln!(stream, "TARGET {}", ft);
+    }
+    let _ = write!(stream, "{}", line);
+    let _ = stream.flush();
+    // Half-close so the server's `read_line` sees EOF right after our request
+    // (server/connection.rs:225-230) and closes as soon as the reply is
+    // written. That makes end-of-reply a definitive `Ok(0)` instead of an
+    // idle-gap guess, which is what lets a timeout below mean "stalled"
+    // unambiguously. Precedent in this codebase: main.rs:318-320.
+    let _ = stream.shutdown(std::net::Shutdown::Write);
+
+    let (buf, timed_out) = read_until_eof(stream);
     let result = String::from_utf8_lossy(&buf).to_string();
     // Strip the "OK\n" AUTH response prefix if present
     let result = if let Some(rest) = result.strip_prefix("OK\n") {
@@ -657,14 +693,41 @@ pub fn send_control_with_response(line: String) -> io::Result<String> {
     };
     // A refusal is not command output: without this it was printed to stdout at
     // rc 0, so no script, orchestrate step or CI gate could detect an auth
-    // failure by exit code (#561).
+    // failure by exit code (#561). It is classified BEFORE the stall check, so
+    // a server that refuses and then holds the socket still reports the refusal
+    // — the specific diagnosis outranks the generic one.
     if is_server_refusal(&result) {
         return Err(io::Error::new(
             io::ErrorKind::PermissionDenied,
             result.trim_end().to_string(),
         ));
     }
+    // With the half-close in place the server ends every one-shot reply with a
+    // close, so a timeout is never "the reply just ended" — it is a stall or a
+    // truncation, and returning Ok here made both look like success (#561).
+    if timed_out {
+        return Err(io::Error::new(
+            io::ErrorKind::TimedOut,
+            format!(
+                "incomplete reply from server ({} bytes before stall)",
+                buf.len()
+            ),
+        ));
+    }
     Ok(result)
+}
+
+pub fn send_control_with_response(line: String) -> io::Result<String> {
+    let home = env::var("USERPROFILE")
+        .or_else(|_| env::var("HOME"))
+        .unwrap_or_default();
+    let (_target, port, session_key) = resolve_server_for_command(&home, &line)?;
+    let full_target = env::var("PSMUX_TARGET_FULL").ok();
+    let addr = std::net::SocketAddr::from(([127, 0, 0, 1], port));
+    let mut stream = std::net::TcpStream::connect_timeout(&addr, CONTROL_CONNECT_TIMEOUT)?;
+    let _ = stream.set_nodelay(true);
+    let _ = stream.set_read_timeout(Some(CONTROL_READ_TIMEOUT));
+    exchange_one_shot(&mut stream, &session_key, full_target.as_deref(), &line)
 }
 
 /// Send a control message and wait for the full response with a custom timeout.
@@ -673,7 +736,8 @@ pub fn send_control_with_response(line: String) -> io::Result<String> {
 /// read timeout, which is needed for blocking commands like `wait-pane` that
 /// may take many seconds (or minutes) to complete.
 ///
-/// Pass `None` for `timeout` to block indefinitely (no read timeout).
+/// Pass `None` for `timeout` to block indefinitely (no read timeout) — that
+/// variant can never report a stall, which is the intended wait-pane semantics.
 pub fn send_control_with_response_timeout(
     line: String,
     timeout: Option<Duration>,
@@ -683,49 +747,11 @@ pub fn send_control_with_response_timeout(
         .unwrap_or_default();
     let (_target, port, session_key) = resolve_server_for_command(&home, &line)?;
     let full_target = env::var("PSMUX_TARGET_FULL").ok();
-    let addr = format!("127.0.0.1:{}", port);
-    let mut stream = std::net::TcpStream::connect(&addr)?;
+    let addr = std::net::SocketAddr::from(([127, 0, 0, 1], port));
+    let mut stream = std::net::TcpStream::connect_timeout(&addr, CONTROL_CONNECT_TIMEOUT)?;
     let _ = stream.set_nodelay(true);
     let _ = stream.set_read_timeout(timeout);
-    let _ = writeln!(stream, "AUTH {}", session_key);
-    if let Some(ref ft) = full_target {
-        let _ = writeln!(stream, "TARGET {}", ft);
-    }
-    let _ = write!(stream, "{}", line);
-    let _ = stream.flush();
-    let mut buf = Vec::new();
-    let mut temp = [0u8; 4096];
-    loop {
-        match std::io::Read::read(&mut stream, &mut temp) {
-            Ok(0) => break,
-            Ok(n) => buf.extend_from_slice(&temp[..n]),
-            Err(e)
-                if e.kind() == io::ErrorKind::WouldBlock || e.kind() == io::ErrorKind::TimedOut =>
-            {
-                break
-            }
-            Err(_) => break,
-        }
-    }
-    let result = String::from_utf8_lossy(&buf).to_string();
-    // Strip the "OK\n" AUTH response prefix if present
-    let result = if let Some(rest) = result.strip_prefix("OK\n") {
-        rest.to_string()
-    } else if let Some(rest) = result.strip_prefix("OK\r\n") {
-        rest.to_string()
-    } else {
-        result
-    };
-    // Same classification as the non-timeout variant: this helper shares the
-    // defect, and callers that reach for a longer timeout (wait-pane, exec)
-    // are exactly the ones whose contract is "did it succeed" (#561).
-    if is_server_refusal(&result) {
-        return Err(io::Error::new(
-            io::ErrorKind::PermissionDenied,
-            result.trim_end().to_string(),
-        ));
-    }
-    Ok(result)
+    exchange_one_shot(&mut stream, &session_key, full_target.as_deref(), &line)
 }
 
 /// Send a control message to a specific port with authentication
@@ -1378,5 +1404,123 @@ mod server_refusal_tests {
     fn ordinary_output_is_not_a_refusal() {
         assert!(!is_server_refusal(""));
         assert!(!is_server_refusal("0: bash* (1 panes)"));
+    }
+}
+
+#[cfg(test)]
+mod one_shot_exchange_tests {
+    use super::*;
+    use std::io::Read;
+    use std::net::{TcpListener, TcpStream};
+    use std::sync::mpsc;
+
+    /// Read timeout the client uses in these tests. Short enough to keep a
+    /// stall test fast, long enough that a healthy loopback round trip on a
+    /// loaded CI box never trips it.
+    const TEST_READ_TIMEOUT: Duration = Duration::from_millis(400);
+
+    /// A fake control server that answers exactly one connection.
+    ///
+    /// It reads the request **to EOF before replying**, which is the pin on the
+    /// half-close: without `shutdown(Write)` that read never returns and every
+    /// test here times out instead of getting its reply.
+    ///
+    /// Returns the port and a channel carrying the raw request bytes.
+    fn spawn_fake_server(
+        payload: &'static str,
+        close_after_reply: bool,
+    ) -> (u16, mpsc::Receiver<Vec<u8>>) {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind fake server");
+        let port = listener.local_addr().expect("local_addr").port();
+        let (tx, rx) = mpsc::channel();
+        std::thread::spawn(move || {
+            let (mut sock, _) = listener.accept().expect("accept");
+            let mut request = Vec::new();
+            let _ = sock.read_to_end(&mut request);
+            let _ = tx.send(request);
+            let _ = sock.write_all(payload.as_bytes());
+            let _ = sock.flush();
+            if !close_after_reply {
+                // Hold the socket open past the client's read timeout so the
+                // client sees a stall rather than end-of-reply.
+                std::thread::sleep(TEST_READ_TIMEOUT * 6);
+            }
+        });
+        (port, rx)
+    }
+
+    fn client(port: u16) -> TcpStream {
+        let addr = std::net::SocketAddr::from(([127, 0, 0, 1], port));
+        let stream = TcpStream::connect_timeout(&addr, CONTROL_CONNECT_TIMEOUT)
+            .expect("connect to fake server");
+        stream
+            .set_read_timeout(Some(TEST_READ_TIMEOUT))
+            .expect("set read timeout");
+        stream
+    }
+
+    #[test]
+    fn a_complete_reply_returns_the_payload() {
+        let (port, _rx) = spawn_fake_server("OK\n0: bash* (1 panes)\n", true);
+
+        let got = exchange_one_shot(&mut client(port), "s3cret", None, "list-windows\n")
+            .expect("a server that replies and closes must succeed");
+
+        assert_eq!(got, "0: bash* (1 panes)\n");
+    }
+
+    #[test]
+    fn the_request_reaches_the_server_and_ends_in_eof() {
+        let (port, rx) = spawn_fake_server("OK\n", true);
+
+        let _ = exchange_one_shot(&mut client(port), "s3cret", Some("work:1.2"), "kill-pane\n");
+
+        let request = rx.recv().expect("server must reach EOF on the request");
+        assert_eq!(
+            String::from_utf8_lossy(&request),
+            "AUTH s3cret\nTARGET work:1.2\nkill-pane\n"
+        );
+    }
+
+    #[test]
+    fn a_server_that_accepts_then_stalls_is_an_error() {
+        // Reply framing only, then silence — the shape a wedged server has.
+        let (port, _rx) = spawn_fake_server("OK\n", false);
+
+        let err = exchange_one_shot(&mut client(port), "s3cret", None, "list-windows\n")
+            .expect_err("a stall must not read as an empty successful reply");
+
+        assert_eq!(err.kind(), io::ErrorKind::TimedOut);
+    }
+
+    #[test]
+    fn a_truncated_reply_is_an_error() {
+        // The reply started and then stopped mid-record. Returning Ok here fed
+        // half a record to machine consumers at rc 0.
+        let (port, _rx) = spawn_fake_server("OK\n0: bash* (1 pa", false);
+
+        let err = exchange_one_shot(&mut client(port), "s3cret", None, "list-windows\n")
+            .expect_err("a truncated reply must not read as success");
+
+        assert_eq!(err.kind(), io::ErrorKind::TimedOut);
+        assert!(
+            err.to_string().contains("incomplete reply"),
+            "the error should say what happened, got: {}",
+            err
+        );
+    }
+
+    #[test]
+    fn a_refusal_outranks_a_stall() {
+        // A refusal is written before the OK ack and the connection may then
+        // hang. Diagnosing that as a generic timeout would lose the actionable
+        // half of the message, so classification runs first.
+        let (port, _rx) = spawn_fake_server("ERROR: Invalid session key\n", false);
+
+        let err = exchange_one_shot(&mut client(port), "wrong-key", None, "list-windows\n")
+            .expect_err("a refusal is not command output");
+
+        assert_eq!(err.kind(), io::ErrorKind::PermissionDenied);
+        assert_eq!(err.to_string(), "ERROR: Invalid session key");
     }
 }

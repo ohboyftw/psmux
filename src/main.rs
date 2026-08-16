@@ -1148,13 +1148,14 @@ fn run_main() -> io::Result<()> {
                         // tmux default: new-session -P prints "session_name:"
                         "#{session_name}:".to_string()
                     };
-                    if let Ok(resp) =
-                        send_control_with_response(format!("display-message -p {}\n", fmt))
-                    {
-                        let trimmed = resp.trim();
-                        if !trimmed.is_empty() {
-                            println!("{}", trimmed);
-                        }
+                    // Propagated, not swallowed: -P exists so a script can read
+                    // the new session's identifier off stdout. Printing nothing
+                    // at rc 0 hands that script an empty id it will then use as
+                    // a target.
+                    let resp = send_control_with_response(format!("display-message -p {}\n", fmt))?;
+                    let trimmed = resp.trim();
+                    if !trimmed.is_empty() {
+                        println!("{}", trimmed);
                     }
                 }
                 return Ok(());
@@ -2672,7 +2673,13 @@ fn run_main() -> io::Result<()> {
                         };
                         if let Some(cmd) = cmd_to_run {
                             let tcp_cmd = format!("{}\n", cmd);
-                            let _ = send_control_with_response(tcp_cmd);
+                            // -b already returned rc 0 to the caller, so stderr
+                            // is the only place left to report a stalled or
+                            // refused dispatch. Silence here meant the chosen
+                            // branch simply never ran and nothing said so.
+                            if let Err(e) = send_control_with_response(tcp_cmd) {
+                                eprintln!("psmux: if-shell -b: {}", e);
+                            }
                         }
                     });
                     // Return immediately — condition runs in background
@@ -2682,7 +2689,11 @@ fn run_main() -> io::Result<()> {
                 let success = if format_mode {
                     // Expand format string via server before evaluating
                     let fmt_cmd = format!("display-message -p {}\n", crate::util::quote_arg(&cond));
-                    let expanded = send_control_with_response(fmt_cmd).unwrap_or_default();
+                    // Propagated, not defaulted: an empty expansion is a FALSE
+                    // condition, so swallowing the error silently ran the else
+                    // branch as though the format had legitimately evaluated
+                    // empty.
+                    let expanded = send_control_with_response(fmt_cmd)?;
                     let expanded = expanded.trim_end_matches('\n');
                     !expanded.is_empty() && expanded != "0"
                 } else if cond == "true" || cond == "1" {
