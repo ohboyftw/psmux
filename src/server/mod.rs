@@ -4570,6 +4570,10 @@ pub fn run_server(
                             let win = &app.windows[app.active_idx];
                             let pane_id =
                                 get_active_pane_id(&win.root, &win.active_path).unwrap_or(0);
+                            // A sink that exited on its own left its entry behind, so `-o`
+                            // toggled OFF against a dead process and started nothing (#564).
+                            // Reap before the toggle decision reads the list.
+                            crate::types::reap_exited_pipe_panes(&mut app.pipe_panes);
                             let has_existing = app.pipe_panes.iter().any(|p| p.pane_id == pane_id);
 
                             if cmd.is_empty() {

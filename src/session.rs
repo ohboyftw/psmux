@@ -593,6 +593,29 @@ pub fn send_control(line: String) -> io::Result<()> {
     Ok(())
 }
 
+/// True when a reply is the server refusing the connection outright, rather
+/// than command output.
+///
+/// `send_control_with_response` is the chokepoint every one-shot CLI read verb
+/// goes through, and it classified only the AUTH ack — so a refusal came back
+/// as reply DATA, was printed to stdout, and the process exited 0. A machine
+/// consumer parsing `list-windows` ingested `ERROR: Authentication required`
+/// as a window record, and no script or CI gate could detect the failure by
+/// exit code (#561).
+///
+/// This matches the two exact server strings as WHOLE payloads, deliberately
+/// not an `ERROR:` prefix: `capture-pane` and `show-buffer` return arbitrary
+/// pane content that may legitimately begin with the word ERROR, and
+/// misreading that as a refusal would be a worse bug than the one being fixed.
+/// The AUTH ack must be stripped before calling this — it is protocol framing,
+/// not payload.
+pub(crate) fn is_server_refusal(payload: &str) -> bool {
+    matches!(
+        payload.trim_end_matches(['\r', '\n']),
+        "ERROR: Authentication required" | "ERROR: Invalid session key"
+    )
+}
+
 pub fn send_control_with_response(line: String) -> io::Result<String> {
     let home = env::var("USERPROFILE")
         .or_else(|_| env::var("HOME"))
@@ -632,6 +655,15 @@ pub fn send_control_with_response(line: String) -> io::Result<String> {
     } else {
         result
     };
+    // A refusal is not command output: without this it was printed to stdout at
+    // rc 0, so no script, orchestrate step or CI gate could detect an auth
+    // failure by exit code (#561).
+    if is_server_refusal(&result) {
+        return Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            result.trim_end().to_string(),
+        ));
+    }
     Ok(result)
 }
 
@@ -684,6 +716,15 @@ pub fn send_control_with_response_timeout(
     } else {
         result
     };
+    // Same classification as the non-timeout variant: this helper shares the
+    // defect, and callers that reach for a longer timeout (wait-pane, exec)
+    // are exactly the ones whose contract is "did it succeed" (#561).
+    if is_server_refusal(&result) {
+        return Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            result.trim_end().to_string(),
+        ));
+    }
     Ok(result)
 }
 
@@ -1288,5 +1329,54 @@ mod test_state_migration {
             dir.join("starting.key").exists(),
             "a sidecar written moments ago is a server mid-startup, not an orphan"
         );
+    }
+}
+
+#[cfg(test)]
+mod server_refusal_tests {
+    use super::*;
+
+    // The two strings the server actually writes, from
+    // src/server/connection.rs:94 and :100.
+    const AUTH_REQUIRED: &str = "ERROR: Authentication required";
+    const INVALID_KEY: &str = "ERROR: Invalid session key";
+
+    #[test]
+    fn authentication_required_is_a_refusal() {
+        assert!(is_server_refusal(AUTH_REQUIRED));
+    }
+
+    #[test]
+    fn invalid_session_key_is_a_refusal() {
+        assert!(is_server_refusal(INVALID_KEY));
+    }
+
+    #[test]
+    fn a_refusal_is_recognised_with_its_trailing_newline() {
+        // The server writes the string with a trailing \n; on the wire it may
+        // also arrive \r\n.
+        assert!(is_server_refusal(&format!("{}\n", AUTH_REQUIRED)));
+        assert!(is_server_refusal(&format!("{}\r\n", INVALID_KEY)));
+    }
+
+    #[test]
+    fn pane_content_beginning_with_error_is_not_a_refusal() {
+        // The reason this matches whole payloads instead of an "ERROR:" prefix.
+        // capture-pane and show-buffer return arbitrary pane content, and a
+        // build log routinely starts with the word ERROR. Treating that as a
+        // refusal would turn real output into a hard failure.
+        assert!(!is_server_refusal(
+            "ERROR: Authentication required by the API"
+        ));
+        assert!(!is_server_refusal("ERROR: could not compile psmux"));
+        assert!(!is_server_refusal(
+            "ERROR: Invalid session key\nnext line of pane output"
+        ));
+    }
+
+    #[test]
+    fn ordinary_output_is_not_a_refusal() {
+        assert!(!is_server_refusal(""));
+        assert!(!is_server_refusal("0: bash* (1 panes)"));
     }
 }

@@ -358,6 +358,23 @@ pub struct PipePaneState {
     pub stdout: bool,
 }
 
+/// Drop the entries whose sink process has already exited.
+///
+/// A recorded pipe whose child is gone is NOT an existing pipe. Nothing clears
+/// `pipe_panes` when a sink exits on its own, so `pipe-pane -o` saw the stale
+/// entry, took the toggle-OFF branch, killed an already-dead process and started
+/// nothing — at rc 0. Every second re-arm was swallowed and capture flickered
+/// on and off (#564). Reap before the toggle decision reads the list.
+///
+/// An entry with no handle to check is kept: the explicit-close paths still
+/// remove it, and dropping it here would silently forget a live pipe.
+pub fn reap_exited_pipe_panes(panes: &mut Vec<PipePaneState>) {
+    panes.retain_mut(|p| match p.process.as_mut() {
+        Some(child) => matches!(child.try_wait(), Ok(None)),
+        None => true,
+    });
+}
+
 /// Wait-for channel state
 pub struct WaitChannel {
     pub locked: bool,
@@ -1815,6 +1832,120 @@ mod remain_on_exit_tests {
         assert!(RemainOnExit::On.keeps(Some(1)));
         assert!(!RemainOnExit::Off.keeps(Some(0)));
         assert!(!RemainOnExit::Off.keeps(Some(1)));
+    }
+}
+
+#[cfg(test)]
+mod pipe_pane_reap_tests {
+    use super::*;
+    use std::time::{Duration, Instant};
+
+    /// A sink that has already exited. Spawned for real and polled until the OS
+    /// reports it gone, so the test exercises the same `try_wait` the reaper uses.
+    fn dead_sink(pane_id: usize) -> PipePaneState {
+        let mut child = std::process::Command::new("cmd")
+            .args(["/C", "exit", "0"])
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .expect("spawn dead sink");
+        let start = Instant::now();
+        while start.elapsed() < Duration::from_secs(10) {
+            if matches!(child.try_wait(), Ok(Some(_))) {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        assert!(
+            matches!(child.try_wait(), Ok(Some(_))),
+            "fixture sink never exited",
+        );
+        PipePaneState {
+            pane_id,
+            process: Some(child),
+            stdin: false,
+            stdout: true,
+        }
+    }
+
+    /// A sink still running. `ping -n` is the reliable long-runner on Windows.
+    fn live_sink(pane_id: usize) -> PipePaneState {
+        let child = std::process::Command::new("cmd")
+            .args(["/C", "ping", "-n", "30", "127.0.0.1"])
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .expect("spawn live sink");
+        PipePaneState {
+            pane_id,
+            process: Some(child),
+            stdin: false,
+            stdout: true,
+        }
+    }
+
+    fn kill_all(panes: &mut Vec<PipePaneState>) {
+        for p in panes.iter_mut() {
+            if let Some(c) = p.process.as_mut() {
+                let _ = c.kill();
+                let _ = c.wait();
+            }
+        }
+    }
+
+    #[test]
+    fn exited_sink_is_reaped_so_the_toggle_can_rearm() {
+        // The #564 bug: this entry survived, `-o` toggled OFF against a dead
+        // process, and the re-arm was swallowed.
+        let mut panes = vec![dead_sink(7)];
+
+        reap_exited_pipe_panes(&mut panes);
+
+        assert!(
+            panes.is_empty(),
+            "an exited sink must not count as an existing pipe",
+        );
+    }
+
+    #[test]
+    fn live_sink_is_not_reaped() {
+        // Guard on the fix: reaping a live pipe would break the toggle-off path
+        // and orphan a running sink.
+        let mut panes = vec![live_sink(7)];
+
+        reap_exited_pipe_panes(&mut panes);
+
+        let kept = panes.len();
+        kill_all(&mut panes);
+        assert_eq!(kept, 1, "a running sink must be left alone");
+    }
+
+    #[test]
+    fn entry_without_a_process_handle_is_kept() {
+        // Nothing to check liveness against; the explicit-close paths own it.
+        let mut panes = vec![PipePaneState {
+            pane_id: 7,
+            process: None,
+            stdin: false,
+            stdout: true,
+        }];
+
+        reap_exited_pipe_panes(&mut panes);
+
+        assert_eq!(panes.len(), 1, "an entry with no handle must be kept");
+    }
+
+    #[test]
+    fn only_the_exited_entries_are_removed() {
+        let mut panes = vec![dead_sink(1), live_sink(2), dead_sink(3)];
+
+        reap_exited_pipe_panes(&mut panes);
+
+        let ids: Vec<usize> = panes.iter().map(|p| p.pane_id).collect();
+        kill_all(&mut panes);
+        assert_eq!(ids, vec![2], "only the live sink should survive");
     }
 }
 
