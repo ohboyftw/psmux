@@ -1545,18 +1545,14 @@ fn run_main() -> io::Result<()> {
             if wait_ready {
                 cmd.push_str(" --wait-ready");
             }
-            // Quote arguments that contain spaces to preserve them
-            for k in keys {
-                if k.contains(' ') || k.contains('\t') || k.contains('"') {
-                    // Escape embedded double-quotes and wrap in quotes.
-                    // Do NOT escape backslashes: the server parser treats
-                    // them as literal (Windows path separator).
-                    let escaped = k.replace('"', "\\\"");
-                    cmd.push_str(&format!(" \"{}\"", escaped));
-                } else {
-                    cmd.push_str(&format!(" {}", k));
-                }
-            }
+            // Quote arguments that need it, so none can contribute a raw line
+            // terminator. The previous test here was
+            // `contains(' ') || contains('\t') || contains('"')`, which did not
+            // include \n or \r — so a payload carrying a newline went onto the
+            // wire raw, the server's read_line cut the command there, and the
+            // tail was dispatched as a fresh psmux command against the caller's
+            // session while the client exited 0 (#560).
+            cmd.push_str(&crate::util::flatten_send_keys_args(&keys));
             cmd.push('\n');
             send_control(cmd)?;
             return Ok(());
@@ -2223,11 +2219,15 @@ fn run_main() -> io::Result<()> {
             }
 
             // --- Step 2: send-keys to execute the command in the new pane ----------
-            // Escape any embedded double-quotes in the user command
-            let escaped_cmd = user_cmd.replace('"', "\\\"");
+            // quote_arg, not a bare replace('"'): the command is user input on a
+            // line-oriented wire, so a newline in it would cut the line and run
+            // its tail as a separate psmux command (#560). quote_arg also escapes
+            // backslashes, which fixes a trailing-backslash path escaping the
+            // closing quote.
             send_control(format!(
-                "send-keys -t {} \"{}\" Enter\n",
-                pane_id, escaped_cmd
+                "send-keys -t {} {} Enter\n",
+                pane_id,
+                crate::util::quote_arg(&user_cmd)
             ))?;
 
             // --- Step 3: if detached, print pane ID and exit -----------------------

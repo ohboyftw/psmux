@@ -349,12 +349,190 @@ pub fn base64_decode(encoded: &str) -> Option<String> {
 /// Quote and escape an argument for safe transmission over the control protocol.
 /// Wraps the value in double quotes and escapes any embedded double quotes or backslashes.
 pub fn quote_arg(s: &str) -> String {
-    let escaped = s.replace('\\', "\\\\").replace('"', "\\\"");
+    let escaped = s
+        .replace('\\', "\\\\")
+        .replace('"', "\\\"")
+        .replace('\n', "\\n")
+        .replace('\r', "\\r");
     format!("\"{}\"", escaped)
+}
+
+/// Quote an argument for the control wire, but only when it needs it.
+///
+/// The wire is line-oriented and the server reads one command per `read_line`,
+/// so any argument carrying a line terminator must be quoted and escaped or the
+/// line is cut and the tail is dispatched as a fresh command against the
+/// caller's session (#560). `char::is_whitespace` covers `\n` and `\r` as well
+/// as space and tab, which is exactly the set that must never travel raw.
+///
+/// A value that needs nothing — the common case, including a Windows path such
+/// as `C:\node_modules` — is returned byte-exact so the wire stays readable and
+/// existing behaviour is unchanged.
+pub fn quote_arg_if_needed(s: &str) -> String {
+    if s.is_empty() || s.chars().any(|c| c.is_whitespace() || c == '"') {
+        quote_arg(s)
+    } else {
+        s.to_string()
+    }
+}
+
+/// Flatten send-keys key arguments onto the control wire, space separated.
+///
+/// Every argument goes through [`quote_arg_if_needed`], so no argument can
+/// contribute a raw line terminator. The result is guaranteed to contain no
+/// `\n` or `\r`, which is the whole property #560 turns on: the caller appends
+/// exactly one `\n` as the line terminator, and the server's `read_line`
+/// therefore sees the entire command.
+pub fn flatten_send_keys_args(keys: &[String]) -> String {
+    let mut out = String::new();
+    for k in keys {
+        out.push(' ');
+        out.push_str(&quote_arg_if_needed(k));
+    }
+    out
 }
 
 #[cfg(test)]
 mod tests {
+
+    // ---- issue #560: line terminators must never travel raw on the wire ----
+    //
+    // The server reads one command per read_line. A raw 0x0A inside a send-keys
+    // payload cut the line there, and the tail was dispatched as a fresh psmux
+    // command against the caller's session, while the client exited 0.
+
+    #[test]
+    fn quote_arg_escapes_newline() {
+        let out = quote_arg("TEST_HEAD\nrename-window pwned");
+        assert!(!out.contains('\n'), "raw 0x0A must not survive: {:?}", out);
+        assert!(out.contains("\\n"), "newline must become \\n: {:?}", out);
+    }
+
+    #[test]
+    fn quote_arg_escapes_carriage_return() {
+        let out = quote_arg("CRHEAD\rCRTAIL");
+        assert!(!out.contains('\r'), "raw 0x0D must not survive: {:?}", out);
+        assert!(
+            out.contains("\\r"),
+            "carriage return must become \\r: {:?}",
+            out
+        );
+    }
+
+    #[test]
+    fn quote_arg_escapes_backslash_before_introducing_its_own() {
+        // Backslash first, or the escapes introduced below would be doubled.
+        assert_eq!(quote_arg("a\"b\\c"), "\"a\\\"b\\\\c\"");
+    }
+
+    #[test]
+    fn a_windows_path_round_trips_through_the_wire_encoding() {
+        // The reason the decoder is deliberately NOT taught a global \n rule:
+        // this path would be corrupted by one. Encode with quote_arg, decode
+        // with the real server-side parser, and require it back byte-exact.
+        let path = r"C:\node_modules\.bin";
+        let line = format!("send-keys {}", quote_arg(path));
+        let parsed = crate::commands::parse_command_line(&line);
+        assert_eq!(
+            parsed.len(),
+            2,
+            "expected verb + one argument: {:?}",
+            parsed
+        );
+        assert_eq!(parsed[1], path, "Windows path must survive the round trip");
+    }
+
+    #[test]
+    fn quote_arg_if_needed_quotes_a_payload_carrying_a_newline() {
+        let out = quote_arg_if_needed("TEST_HEAD\nrename-window pwned");
+        assert!(
+            !out.contains('\n'),
+            "a newline payload must not reach the wire raw: {:?}",
+            out
+        );
+        assert!(out.starts_with('"'), "it must be quoted: {:?}", out);
+    }
+
+    #[test]
+    fn quote_arg_if_needed_quotes_a_payload_carrying_a_carriage_return() {
+        let out = quote_arg_if_needed("A\rB");
+        assert!(
+            !out.contains('\r'),
+            "raw 0x0D must not reach the wire: {:?}",
+            out
+        );
+    }
+
+    #[test]
+    fn quote_arg_if_needed_quotes_whitespace_and_quotes() {
+        assert!(quote_arg_if_needed("two words").starts_with('"'));
+        assert!(quote_arg_if_needed("tab\there").starts_with('"'));
+        assert!(quote_arg_if_needed("say \"hi\"").starts_with('"'));
+        assert_eq!(quote_arg_if_needed(""), "\"\"");
+    }
+
+    #[test]
+    fn send_keys_flattening_never_emits_a_raw_line_terminator() {
+        // The #560 contract. The caller appends exactly one '\n' as the wire
+        // terminator, so if flattening contributes one of its own the server's
+        // read_line cuts the command there and dispatches the tail.
+        let keys = vec!["TEST_HEAD\nrename-window pwned".to_string()];
+        let flat = flatten_send_keys_args(&keys);
+        // Both halves matter. Without the second assertion an empty result
+        // satisfies the first one vacuously, which proves nothing.
+        assert!(
+            !flat.contains('\n') && !flat.contains('\r'),
+            "flattened args must carry no raw line terminator: {:?}",
+            flat
+        );
+        assert!(
+            flat.contains("TEST_HEAD") && flat.contains("rename-window pwned"),
+            "the payload must still be delivered, just not executable: {:?}",
+            flat
+        );
+    }
+
+    #[test]
+    fn send_keys_flattening_survives_a_newline_without_other_whitespace() {
+        // The original guard was `contains(' ') || contains('\t') || contains('"')`,
+        // so a payload whose only whitespace is the newline took the unquoted
+        // branch and went onto the wire completely raw.
+        let keys = vec!["HEAD\nkill-session".to_string()];
+        let flat = flatten_send_keys_args(&keys);
+        assert!(
+            !flat.contains('\n'),
+            "unquoted branch leaked a newline: {:?}",
+            flat
+        );
+        assert!(
+            flat.contains("HEAD") && flat.contains("kill-session"),
+            "the payload must still be delivered: {:?}",
+            flat
+        );
+    }
+
+    #[test]
+    fn send_keys_flattening_keeps_plain_arguments_unquoted() {
+        // Guard on the fix: quoting everything would change the wire for every
+        // existing send-keys caller.
+        let keys = vec!["echo".to_string(), "hi".to_string(), "Enter".to_string()];
+        assert_eq!(flatten_send_keys_args(&keys), " echo hi Enter");
+    }
+
+    #[test]
+    fn send_keys_flattening_quotes_an_argument_with_spaces() {
+        let keys = vec!["two words".to_string()];
+        assert_eq!(flatten_send_keys_args(&keys), " \"two words\"");
+    }
+
+    #[test]
+    fn quote_arg_if_needed_leaves_a_plain_argument_byte_exact() {
+        // Guard on the fix: quoting everything would change the wire for every
+        // existing caller. A Windows path with no whitespace must pass through.
+        assert_eq!(quote_arg_if_needed("Enter"), "Enter");
+        assert_eq!(quote_arg_if_needed(r"C:\node_modules"), r"C:\node_modules");
+        assert_eq!(quote_arg_if_needed("--flag=value"), "--flag=value");
+    }
     use super::*;
     use crate::commands::parse_command_line;
 
