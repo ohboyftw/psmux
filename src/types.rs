@@ -1,6 +1,6 @@
 use std::collections::HashSet;
 use std::sync::{mpsc, Arc, Mutex};
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use chrono::Local;
 use crossterm::event::{KeyCode, KeyModifiers};
@@ -23,8 +23,11 @@ pub fn build_version_stamp() -> String {
 /// When the child process is slow to consume input (e.g., Claude Code running
 /// tool calls), the OS pipe buffer fills and `write_all()` blocks.  This wrapper
 /// prevents the main event loop from stalling by sending data through a bounded
-/// channel instead.  If the channel is full (child is severely backlogged),
-/// writes are silently dropped — this is preferable to freezing the entire UI.
+/// channel instead.  If the channel is full (child is severely backlogged), the
+/// write waits for a slot rather than discarding the buffer: input on this path
+/// is `send-keys` / agent dispatch, where losing bytes is worse than a stall.
+/// The wait is capped at [`QUEUE_WAIT`] because the same path carries interactive
+/// keystrokes, so it reports an error rather than freezing typing outright.
 pub struct AsyncPaneWriter {
     tx: Option<mpsc::SyncSender<Vec<u8>>>,
     handle: Option<std::thread::JoinHandle<()>>,
@@ -68,24 +71,68 @@ impl AsyncPaneWriter {
     }
 }
 
-impl std::io::Write for AsyncPaneWriter {
-    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
-        if let Some(ref tx) = self.tx {
-            match tx.try_send(buf.to_vec()) {
-                Ok(()) => Ok(buf.len()),
-                // Channel full — drop the data rather than blocking the UI
-                Err(mpsc::TrySendError::Full(_)) => Ok(buf.len()),
-                // Writer thread exited — pane is dead
-                Err(mpsc::TrySendError::Disconnected(_)) => Err(std::io::Error::new(
+/// How long a write may wait for queue space before it gives up.
+///
+/// Draining 1024 slots takes milliseconds against a healthy child, so this is
+/// only ever reached when the child has stopped reading its stdin entirely.
+/// It must not be unbounded: `write` sits on the interactive keystroke path
+/// (`input.rs:1253-1306`), and a wedged child would otherwise freeze typing
+/// with no way out — the very outcome the old drop-on-full arm was trying to
+/// avoid, just traded for a different failure.
+const QUEUE_WAIT: Duration = Duration::from_secs(10);
+
+/// Hand `buf` to the drain thread, waiting up to [`QUEUE_WAIT`] for room.
+///
+/// Never reports a successful write it did not queue: the old `Full` arm
+/// returned `Ok(buf.len())` after discarding the buffer, so `write_all` callers
+/// saw success and moved on while the input vanished.  That silent loss is the
+/// bug being fixed; a timeout is reported honestly as an error instead.
+///
+/// Waiting is safe from deadlock because the drain thread keeps consuming the
+/// queue even after the inner writer breaks (see `AsyncPaneWriter::new`), so it
+/// cannot exit while a sender is waiting.  `Ok(0)` is never returned — it would
+/// make `write_all` spin or fail with `WriteZero`.
+fn queue_write(
+    tx: &mpsc::SyncSender<Vec<u8>>,
+    buf: &[u8],
+    wait: Duration,
+) -> std::io::Result<usize> {
+    // `SyncSender::send_timeout` is still unstable, so the deadline is polled.
+    // The sleep only ever runs on the full-queue path, which a healthy child
+    // never reaches.
+    let deadline = Instant::now() + wait;
+    let mut pending = buf.to_vec();
+    loop {
+        match tx.try_send(pending) {
+            Ok(()) => return Ok(buf.len()),
+            Err(mpsc::TrySendError::Disconnected(_)) => {
+                return Err(std::io::Error::new(
                     std::io::ErrorKind::BrokenPipe,
                     "pane writer exited",
-                )),
+                ))
             }
-        } else {
-            Err(std::io::Error::new(
+            Err(mpsc::TrySendError::Full(back)) => {
+                if Instant::now() >= deadline {
+                    return Err(std::io::Error::new(
+                        std::io::ErrorKind::WouldBlock,
+                        "pane input queue full: child is not reading its stdin",
+                    ));
+                }
+                pending = back;
+                std::thread::sleep(Duration::from_millis(1));
+            }
+        }
+    }
+}
+
+impl std::io::Write for AsyncPaneWriter {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        match self.tx {
+            Some(ref tx) => queue_write(tx, buf, QUEUE_WAIT),
+            None => Err(std::io::Error::new(
                 std::io::ErrorKind::BrokenPipe,
                 "writer closed",
-            ))
+            )),
         }
     }
 
@@ -1954,7 +2001,7 @@ mod async_pane_writer_tests {
     use super::*;
     use std::io::Write;
     use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
-    use std::sync::Arc;
+    use std::sync::{Arc, Condvar};
     use std::time::{Duration, Instant};
 
     /// A real `io::Write` standing in for the ConPTY master writer: it counts
@@ -2066,6 +2113,146 @@ mod async_pane_writer_tests {
         );
 
         drop(w);
+    }
+
+    /// A sink that blocks every write until the gate opens, then records the
+    /// bytes it received.  Stands in for a pane whose child has stopped reading
+    /// its stdin, which is what fills the queue in production.
+    struct GatedWriter {
+        gate: Arc<(Mutex<bool>, Condvar)>,
+        sink: Arc<Mutex<Vec<u8>>>,
+    }
+
+    impl Write for GatedWriter {
+        fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+            let (lock, cv) = &*self.gate;
+            let mut open = lock.lock().unwrap();
+            while !*open {
+                open = cv.wait(open).unwrap();
+            }
+            drop(open);
+            self.sink.lock().unwrap().extend_from_slice(buf);
+            Ok(buf.len())
+        }
+
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    /// 1500 > the 1024-slot queue, so the sender is forced past `try_send`.
+    const OVERFLOW_CHUNKS: usize = 1500;
+
+    fn chunk(i: usize) -> Vec<u8> {
+        format!("{i};").into_bytes()
+    }
+
+    #[test]
+    fn a_full_queue_blocks_instead_of_discarding_the_buffer() {
+        // Regression: `Err(TrySendError::Full(_)) => Ok(buf.len())` reported a
+        // complete write while throwing the buffer away. `send-keys` reaches a
+        // pane through this writer, so a backlogged child silently ate agent
+        // input and every caller's `write_all` said it succeeded.
+        let gate = Arc::new((Mutex::new(false), Condvar::new()));
+        let sink = Arc::new(Mutex::new(Vec::new()));
+        let mut w = AsyncPaneWriter::new(Box::new(GatedWriter {
+            gate: Arc::clone(&gate),
+            sink: Arc::clone(&sink),
+        }));
+
+        let finished = Arc::new(AtomicBool::new(false));
+        let done = Arc::clone(&finished);
+        let writer = std::thread::spawn(move || {
+            for i in 0..OVERFLOW_CHUNKS {
+                w.write_all(&chunk(i)).expect("queueing must succeed");
+            }
+            done.store(true, Ordering::SeqCst);
+            w
+        });
+
+        // The sink is gated shut, so the queue fills and the sender must wait.
+        std::thread::sleep(Duration::from_millis(200));
+        let blocked = !finished.load(Ordering::SeqCst);
+
+        // Open the gate before asserting: a panic here would unwind into
+        // `AsyncPaneWriter::drop`, which joins a drain thread still parked on
+        // the gate — the test would hang instead of failing.
+        let (lock, cv) = &*gate;
+        *lock.lock().unwrap() = true;
+        cv.notify_all();
+
+        assert!(
+            blocked,
+            "writes past a full queue returned without blocking — the buffer is being dropped",
+        );
+
+        // Dropping the writer joins the drain thread, so every queued chunk has
+        // reached the sink by the time this returns.
+        drop(writer.join().expect("writer thread panicked"));
+
+        let expected: Vec<u8> = (0..OVERFLOW_CHUNKS).flat_map(chunk).collect();
+        assert_eq!(
+            sink.lock().unwrap().as_slice(),
+            expected.as_slice(),
+            "bytes were lost or reordered when the queue was full",
+        );
+    }
+
+    #[test]
+    fn a_full_queue_does_not_deadlock_when_the_inner_writer_is_broken() {
+        // The blocking send is only safe because the drain thread keeps
+        // consuming after a write error rather than exiting. If that ever
+        // regresses, a backlogged pane wedges the caller forever.
+        let (inner, _writes, _dropped) = probe(true);
+        let mut w = AsyncPaneWriter::new(Box::new(inner));
+
+        let finished = Arc::new(AtomicBool::new(false));
+        let done = Arc::clone(&finished);
+        std::thread::spawn(move || {
+            for i in 0..OVERFLOW_CHUNKS {
+                w.write_all(&chunk(i)).expect("queueing must succeed");
+            }
+            done.store(true, Ordering::SeqCst);
+            drop(w);
+        });
+
+        assert!(
+            wait_for(Duration::from_secs(10), || finished.load(Ordering::SeqCst)),
+            "writes wedged on a full queue whose inner writer had broken",
+        );
+    }
+
+    #[test]
+    fn queueing_errors_when_the_drain_side_is_gone() {
+        // Never a false `Ok` when the data cannot be delivered at all, and
+        // never `Ok(0)` — `write_all` would spin or fail with `WriteZero`.
+        let (tx, rx) = mpsc::sync_channel::<Vec<u8>>(1);
+        drop(rx);
+
+        let err = queue_write(&tx, b"payload", QUEUE_WAIT)
+            .expect_err("a vanished drain side must be an error, not a successful write");
+        assert_eq!(err.kind(), std::io::ErrorKind::BrokenPipe);
+    }
+
+    #[test]
+    fn a_queue_that_never_drains_times_out_instead_of_blocking_forever() {
+        // `write` carries interactive keystrokes as well as send-keys, so an
+        // unbounded wait on a child that has stopped reading would freeze typing
+        // with no recovery. The buffer is still never silently discarded: the
+        // caller gets an error saying so.
+        let (tx, _rx) = mpsc::sync_channel::<Vec<u8>>(1);
+        tx.try_send(b"fills the only slot".to_vec())
+            .expect("first send fills the queue");
+
+        let started = Instant::now();
+        let err = queue_write(&tx, b"payload", Duration::from_millis(150))
+            .expect_err("a queue that never drains must report an error, not a false Ok");
+
+        assert_eq!(err.kind(), std::io::ErrorKind::WouldBlock);
+        assert!(
+            started.elapsed() >= Duration::from_millis(150),
+            "must actually wait for the deadline before giving up"
+        );
     }
 
     #[test]
