@@ -551,7 +551,9 @@ fn parse_set_option(app: &mut AppState, line: &str) {
             if p.contains('a') {
                 append_mode = true;
             }
-            if p.contains('u') {
+            // -U is an unset alias of -u (tmux parity, #553); `contains` is
+            // case-sensitive, so both spellings have to be tested.
+            if p.contains('u') || p.contains('U') {
                 unset_mode = true;
             }
             // -q (quiet): no-op — we don't produce errors for unknown options
@@ -2068,3 +2070,7 @@ mod tests_issue145_source_file;
 #[cfg(test)]
 #[path = "../tests-rs/test_issue536_config_quoted_whitespace.rs"]
 mod tests_issue536_config_quoted_whitespace;
+
+#[cfg(test)]
+#[path = "../tests-rs/test_set_option_unset_alias.rs"]
+mod tests_set_option_unset_alias;

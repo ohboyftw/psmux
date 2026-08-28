@@ -1648,11 +1648,24 @@ pub(crate) fn handle_connection(
                 }
             }
             "set-option" | "set" | "set-window-option" | "setw" => {
-                let has_u = args.contains(&"-u");
-                let has_a = args.contains(&"-a");
-                let has_q = args.contains(&"-q");
-                let has_p = args.contains(&"-p");
-                let has_o = args.contains(&"-o");
+                // Flags arrive combined as often as not (`-gu`, `-ga`, `-gq`),
+                // and testing for whole tokens missed every clustered spelling:
+                // an unset asked for as `set -gu @x` was dropped in silence, and
+                // `set -U @x XX` WROTE XX where the caller asked for an unset —
+                // both at rc 0. The config parser already read flags this way,
+                // so the two paths disagreed about the same line (#553).
+                let flags: String = args
+                    .iter()
+                    .filter(|a| a.starts_with('-'))
+                    .flat_map(|a| a.chars().skip(1))
+                    .collect();
+                // -U is an unset alias of -u (tmux parity); `contains` is
+                // case-sensitive, so both spellings have to be asked for.
+                let has_u = flags.contains('u') || flags.contains('U');
+                let has_a = flags.contains('a');
+                let has_q = flags.contains('q');
+                let has_p = flags.contains('p');
+                let has_o = flags.contains('o');
                 let non_flag_args: Vec<&str> = args
                     .iter()
                     .filter(|a| !a.starts_with('-'))
