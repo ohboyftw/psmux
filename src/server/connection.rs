@@ -276,9 +276,14 @@ pub(crate) fn handle_connection(
         // A target part that was GIVEN but does not resolve — as opposed to one
         // that was omitted, which legitimately means "current".
         let mut unresolved_target: Option<(TargetKind, String)> = None;
+        // A bare `--` ends flag parsing. A `-t` after it belongs to the operand
+        // — a send-keys payload, or the command line behind `exec -t %N --` —
+        // and consuming it there silently ate two tokens out of that operand.
+        let end_of_opts = args.iter().position(|a| *a == "--");
+        let is_flag_pos = |i: usize| end_of_opts.is_none_or(|eo| i < eo);
         let mut i = 0;
         while i < args.len() {
-            if args[i] == "-t" {
+            if args[i] == "-t" && is_flag_pos(i) {
                 if let Some(v) = args.get(i + 1) {
                     raw_target = Some(v.to_string());
                     // Parse the -t value using parse_target for consistent handling
@@ -306,7 +311,7 @@ pub(crate) fn handle_connection(
             let mut filtered = Vec::new();
             let mut i = 0;
             while i < args.len() {
-                if args[i] == "-t" {
+                if args[i] == "-t" && is_flag_pos(i) {
                     i += 2; // skip -t and its value
                     continue;
                 }
@@ -948,14 +953,41 @@ pub(crate) fn handle_connection(
                 let _ = tx.send(CtrlReq::SetPaneTitle(title));
             }
             "send-keys" => {
-                let literal = args.contains(&"-l");
-                let paste_mode = args.contains(&"-p");
-                let has_x = args.contains(&"-X");
-                let hex_mode = args.contains(&"-H");
-                let wait_ready = args.contains(&"--wait-ready");
+                // End-of-options: a bare `--` stops flag parsing, so every token
+                // after it is an operand even when it starts with '-', and the
+                // marker itself is never delivered. Without this there was no
+                // spelling that sent a dash-leading payload — `--` was dropped as
+                // a dash token and the operand behind it was dropped for the same
+                // reason, with the command still exiting 0 (#562).
+                let end_of_opts = args.iter().position(|a| *a == "--");
+                let is_flag = |i: usize| end_of_opts.is_none_or(|eo| i < eo);
+                let has_flag =
+                    |flag: &str| args.iter().enumerate().any(|(i, a)| *a == flag && is_flag(i));
+                // An operand is a key to deliver: anything past the marker, or
+                // else a token that is neither a flag nor a flag's value.
+                let is_operand = |i: usize, a: &str| -> bool {
+                    match end_of_opts {
+                        Some(eo) if i == eo => false,
+                        Some(eo) if i > eo => true,
+                        _ => {
+                            let n_count_value =
+                                i > 0 && args.get(i - 1).is_some_and(|prev| *prev == "-N");
+                            !(a.starts_with('-') || n_count_value)
+                        }
+                    }
+                };
+                let literal = has_flag("-l");
+                let paste_mode = has_flag("-p");
+                let has_x = has_flag("-X");
+                let hex_mode = has_flag("-H");
+                let wait_ready = has_flag("--wait-ready");
                 // Parse -N <count> for repeat
                 let mut repeat_count: usize = 1;
-                if let Some(n_pos) = args.iter().position(|a| *a == "-N") {
+                if let Some(n_pos) = args
+                    .iter()
+                    .enumerate()
+                    .position(|(i, a)| *a == "-N" && is_flag(i))
+                {
                     if let Some(count_str) = args.get(n_pos + 1) {
                         repeat_count = count_str.parse::<usize>().unwrap_or(1).max(1);
                     }
@@ -995,8 +1027,9 @@ pub(crate) fn handle_connection(
                     // send-keys -X copy-mode-command
                     let cmd_parts: Vec<&str> = args
                         .iter()
-                        .filter(|a| **a != "-X" && !a.starts_with('-'))
-                        .copied()
+                        .enumerate()
+                        .filter(|(i, a)| is_operand(*i, a))
+                        .map(|(_, a)| *a)
                         .collect();
                     for _ in 0..repeat_count {
                         let _ = tx.send(CtrlReq::SendKeysX(cmd_parts.join(" ")));
@@ -1006,12 +1039,7 @@ pub(crate) fn handle_connection(
                     let hex_args: Vec<&str> = args
                         .iter()
                         .enumerate()
-                        .filter(|(i, a)| {
-                            !a.starts_with('-')
-                                && **a != "-t"
-                                && **a != "--wait-ready"
-                                && !(i > &0 && args.get(i - 1).is_some_and(|prev| *prev == "-N"))
-                        })
+                        .filter(|(i, a)| is_operand(*i, a))
                         .map(|(_, a)| *a)
                         .collect();
                     for _ in 0..repeat_count {
@@ -1021,15 +1049,7 @@ pub(crate) fn handle_connection(
                     let keys: Vec<&str> = args
                         .iter()
                         .enumerate()
-                        .filter(|(i, a)| {
-                            !a.starts_with('-')
-                                && **a != "-l"
-                                && **a != "-t"
-                                && **a != "--wait-ready"
-                                // Skip the argument to -N
-                                && !(i > &0
-                                    && args.get(i - 1).is_some_and(|prev| *prev == "-N"))
-                        })
+                        .filter(|(i, a)| is_operand(*i, a))
                         .map(|(_, a)| *a)
                         .collect();
                     for _ in 0..repeat_count {

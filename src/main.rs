@@ -1542,10 +1542,23 @@ fn run_main() -> io::Result<()> {
             let mut hex_mode = false;
             let mut wait_ready = false;
             let mut keys: Vec<String> = Vec::new();
+            // A bare `--` ends flag parsing, so a payload that looks like a flag
+            // still reaches the pane. The marker is forwarded rather than
+            // swallowed: the server has to see it too, or it drops the
+            // dash-leading operand for exactly the same reason (#562).
+            let mut end_of_opts = false;
             // Getopt-style parsing: -t consumes next arg, -l/-R/-H are boolean
             let mut i = 1;
             while i < cmd_args.len() {
+                if end_of_opts {
+                    keys.push(cmd_args[i].to_string());
+                    i += 1;
+                    continue;
+                }
                 match cmd_args[i].as_str() {
+                    "--" => {
+                        end_of_opts = true;
+                    }
                     "-l" => {
                         literal = true;
                     }
@@ -1579,6 +1592,9 @@ fn run_main() -> io::Result<()> {
             }
             if wait_ready {
                 cmd.push_str(" --wait-ready");
+            }
+            if end_of_opts {
+                cmd.push_str(" --");
             }
             // Quote arguments that need it, so none can contribute a raw line
             // terminator. The previous test here was
