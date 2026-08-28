@@ -2412,6 +2412,13 @@ pub fn run_server(
                             hook_event = Some("after-select-window");
                         }
                         CtrlReq::RenameWindow(name) => {
+                            // tmux parity (#552): the argument is a format
+                            // string, expanded against the window being renamed
+                            // (cmd-rename-window.c uses format_single_from_target).
+                            // commands.rs:985 already does this for the
+                            // bind-key/config/menu strings; this is the CLI path,
+                            // which is the common one.
+                            let name = expand_format(&name, &app);
                             let win = &mut app.windows[app.active_idx];
                             win.name = name;
                             win.manual_rename = true;

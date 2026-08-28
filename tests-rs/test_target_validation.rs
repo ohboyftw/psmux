@@ -125,6 +125,85 @@ fn an_empty_pane_part_means_current_not_unresolved() {
     assert!(!pt.pane_unresolved);
 }
 
+// ── Boundary edge cases ─────────────────────────────────────────────────
+//
+// `parse_target` is the entry point for every `-t` in the system, and it is
+// total: it must return a verdict for any string a user can type. The property
+// that matters is that it never both resolves a part AND marks it unresolved —
+// callers branch on the flag first, so a target that is both would be reported
+// as an error and then acted on anyway.
+
+#[test]
+fn a_part_is_never_both_resolved_and_unresolved() {
+    for t in [
+        "",
+        "%",
+        "@",
+        ":",
+        ".",
+        "::",
+        "..",
+        ":.",
+        "%%",
+        "@@",
+        "%-1",
+        "@-1",
+        "sess:",
+        "sess:.",
+        "sess::",
+        "sess:0.1.2",
+        "=",
+        "==",
+        "=%4",
+        "  ",
+        "sess:0.%",
+        "%0",
+        "@0",
+        ":0",
+        ":.0",
+        "sess:9999999999999999999999",
+    ] {
+        let pt = parse_target(t);
+        assert!(
+            !(pt.window.is_some() && pt.window_unresolved),
+            "{t:?} resolved a window AND flagged it unresolved",
+        );
+        assert!(
+            !(pt.pane.is_some() && pt.pane_unresolved),
+            "{t:?} resolved a pane AND flagged it unresolved",
+        );
+    }
+}
+
+#[test]
+fn an_overflowing_index_is_unresolved_rather_than_wrapped() {
+    // usize::MAX + 1. Silently wrapping would produce a plausible-looking pane
+    // index and act on the wrong pane, which is the whole failure class here.
+    let pt = parse_target("sess:0.18446744073709551616");
+
+    assert_eq!(pt.pane, None);
+    assert!(pt.pane_unresolved);
+}
+
+#[test]
+fn a_lone_equals_is_an_empty_session_not_a_crash() {
+    // `-t =` strips to "", which is a bare (empty) session name, not a window
+    // or pane part — so nothing is unresolved.
+    let pt = parse_target("=");
+
+    assert!(!pt.window_unresolved);
+    assert!(!pt.pane_unresolved);
+}
+
+#[test]
+fn only_one_equals_prefix_is_stripped() {
+    // "==sess" is a session literally named "=sess", not "sess". Stripping
+    // repeatedly would silently retarget a differently-named session.
+    let pt = parse_target("==sess");
+
+    assert_eq!(pt.session.as_deref(), Some("=sess"));
+}
+
 #[test]
 fn well_formed_targets_are_never_marked_unresolved() {
     for t in [

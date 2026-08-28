@@ -5,7 +5,7 @@ use std::sync::mpsc;
 use std::time::Duration;
 
 use crate::cli::parse_target;
-use crate::types::{CtrlReq, DisplayTarget, LayoutKind, WaitForOp};
+use crate::types::{CtrlReq, DisplayTarget, LayoutKind, TargetKind, WaitForOp};
 use crate::util::base64_decode;
 
 static NEXT_CLIENT_ID: AtomicU64 = AtomicU64::new(1);
@@ -275,7 +275,7 @@ pub(crate) fn handle_connection(
         let mut raw_target: Option<String> = global_raw_target.clone();
         // A target part that was GIVEN but does not resolve — as opposed to one
         // that was omitted, which legitimately means "current".
-        let mut unresolved_target: Option<(&'static str, String)> = None;
+        let mut unresolved_target: Option<(TargetKind, String)> = None;
         let mut i = 0;
         while i < args.len() {
             if args[i] == "-t" {
@@ -291,9 +291,9 @@ pub(crate) fn handle_connection(
                         pane_is_id = pt.pane_is_id;
                     }
                     if pt.window_unresolved {
-                        unresolved_target = Some(("window", v.to_string()));
+                        unresolved_target = Some((TargetKind::Window, v.to_string()));
                     } else if pt.pane_unresolved {
-                        unresolved_target = Some(("pane", v.to_string()));
+                        unresolved_target = Some((TargetKind::Pane, v.to_string()));
                     }
                 }
                 i += 2;
@@ -323,7 +323,11 @@ pub(crate) fn handle_connection(
         // window, so pane/window syntax does not apply to it (98a9188).
         if let Some((kind, raw)) = &unresolved_target {
             if !matches!(cmd, "detach-client" | "detach") {
-                let _ = writeln!(write_stream, "can't find {}: {}", kind, raw);
+                let prefix = match *kind {
+                    TargetKind::Window => crate::types::UNRESOLVED_WINDOW_PREFIX,
+                    TargetKind::Pane => crate::types::UNRESOLVED_PANE_PREFIX,
+                };
+                let _ = writeln!(write_stream, "{}{}", prefix, raw);
                 let _ = write_stream.flush();
                 // `line` still holds THIS command, and the loop head only reads
                 // a new one when it is empty. Skipping the clear re-runs the
@@ -398,7 +402,8 @@ pub(crate) fn handle_connection(
             let pane_id_str = target_pane.map(|p| format!("%{}", p)).unwrap_or_default();
             let _ = writeln!(
                 write_stream,
-                "can't find pane: {}",
+                "{}{}",
+                crate::types::UNRESOLVED_PANE_PREFIX,
                 raw_target.as_deref().unwrap_or(&pane_id_str)
             );
             let _ = write_stream.flush();

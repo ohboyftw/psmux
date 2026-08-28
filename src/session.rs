@@ -627,7 +627,8 @@ pub(crate) fn is_server_refusal(payload: &str) -> bool {
 pub(crate) fn is_unresolved_target(payload: &str) -> bool {
     let p = payload.trim_end_matches(['\r', '\n']);
     !p.contains('\n')
-        && (p.starts_with("can't find pane: ") || p.starts_with("can't find window: "))
+        && (p.starts_with(crate::types::UNRESOLVED_PANE_PREFIX)
+            || p.starts_with(crate::types::UNRESOLVED_WINDOW_PREFIX))
 }
 
 /// A bare `TcpStream::connect` to a port nothing answers on can hang for the
@@ -1452,6 +1453,56 @@ mod server_refusal_tests {
         assert!(!is_unresolved_target(
             "$ psmux kill-pane -t %999\ncan't find pane: %999"
         ));
+    }
+
+    // ── Contract between the writer (connection.rs) and this classifier ──
+    //
+    // These live in different files with no shared type, so the only thing
+    // keeping them in agreement is the shared constant. Before it existed there
+    // were two spellings in the tree — `"can't find pane: "` here and
+    // `"can't find pane:"` (no trailing space) at two sites in main.rs.
+
+    #[test]
+    fn every_reply_the_server_writes_is_classified_as_an_error() {
+        // Mirrors connection.rs's `writeln!("{}{}", prefix, raw)` exactly. If
+        // the writer's format changes and this is not updated, the exit code
+        // silently reverts to 0 — the failure the reply exists to prevent.
+        for prefix in [
+            crate::types::UNRESOLVED_PANE_PREFIX,
+            crate::types::UNRESOLVED_WINDOW_PREFIX,
+        ] {
+            for raw in [
+                "%999",
+                "@9",
+                "sess:nosuchwindow",
+                "sess:0.%999",
+                "=sess:0.1",
+                "a name with spaces",
+                "",
+            ] {
+                let wire = format!("{prefix}{raw}\n");
+                assert!(
+                    is_unresolved_target(&wire),
+                    "server writes {wire:?} and the client must call it an error",
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn the_two_prefixes_are_distinct_and_end_at_a_separator() {
+        // The trailing space is load-bearing: without it `can't find pane` —
+        // a truncated or unrelated line — would classify as a failed command.
+        assert_ne!(
+            crate::types::UNRESOLVED_PANE_PREFIX,
+            crate::types::UNRESOLVED_WINDOW_PREFIX
+        );
+        for p in [
+            crate::types::UNRESOLVED_PANE_PREFIX,
+            crate::types::UNRESOLVED_WINDOW_PREFIX,
+        ] {
+            assert!(p.ends_with(": "), "{p:?} must end at a separator");
+        }
     }
 
     #[test]

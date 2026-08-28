@@ -86,16 +86,16 @@ fn main() {
 /// code to mean anything, the check has to happen on this side too.
 fn check_target_resolvable(target: &str) -> io::Result<()> {
     let pt = crate::cli::parse_target(target);
-    let kind = if pt.window_unresolved {
-        "window"
+    let prefix = if pt.window_unresolved {
+        crate::types::UNRESOLVED_WINDOW_PREFIX
     } else if pt.pane_unresolved {
-        "pane"
+        crate::types::UNRESOLVED_PANE_PREFIX
     } else {
         return Ok(());
     };
     Err(io::Error::new(
         io::ErrorKind::NotFound,
-        format!("can't find {kind}: {target}"),
+        format!("{prefix}{target}"),
     ))
 }
 
@@ -1701,10 +1701,6 @@ fn run_main() -> io::Result<()> {
             }
             cmd.push('\n');
             let resp = send_control_with_response(cmd)?;
-            if resp.starts_with("can't find pane:") || resp.starts_with("can't find window:") {
-                eprint!("{}", resp);
-                std::process::exit(1);
-            }
             print!("{}", resp);
             return Ok(());
         }
@@ -1741,10 +1737,6 @@ fn run_main() -> io::Result<()> {
             }
             cmd.push('\n');
             let resp = send_control_with_response(cmd)?;
-            if resp.starts_with("can't find pane:") || resp.starts_with("can't find window:") {
-                eprint!("{}", resp);
-                std::process::exit(1);
-            }
             print!("{}", resp);
             return Ok(());
         }
@@ -2505,11 +2497,23 @@ fn run_main() -> io::Result<()> {
         }
         // rename-window - Rename current window
         "rename-window" | "renamew" => {
-            // cmd_args[0] is the command, cmd_args[1] should be the new name
-            if let Some(name) = cmd_args.get(1) {
-                if !name.starts_with('-') {
-                    send_control(format!("rename-window {}\n", name))?;
+            // The name is the first positional argument. Reading cmd_args[1]
+            // directly made `rename-window -t <target> <name>` a silent no-op:
+            // [1] is "-t", which starts with a dash, so nothing was sent at all
+            // and the command still exited 0. The target itself travels in the
+            // TARGET protocol line, set by the global -t pre-parse above.
+            let mut i = 1;
+            while i < cmd_args.len() {
+                let a = cmd_args[i].as_str();
+                if a == "-t" {
+                    i += 2;
+                    continue;
                 }
+                if !a.starts_with('-') {
+                    send_control(format!("rename-window {}\n", a))?;
+                    break;
+                }
+                i += 1;
             }
             return Ok(());
         }

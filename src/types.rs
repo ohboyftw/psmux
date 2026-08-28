@@ -1714,6 +1714,28 @@ pub enum WaitForOp {
     Unlock,
 }
 
+/// Which half of a `-t` failed to resolve.
+///
+/// Typed rather than a `&str` tag so the wording of the reply lives in exactly
+/// one place — see [`UNRESOLVED_PANE_PREFIX`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TargetKind {
+    Window,
+    Pane,
+}
+
+/// Wire prefix the server uses to report an unresolvable pane target.
+///
+/// The server writes this into a socket and the client classifies replies on
+/// it, in two files with no shared type between them. Reword one side and the
+/// exit code silently goes back to 0 — which is the exact failure the reply
+/// exists to prevent — so both sides read the wording from here.
+/// `is_unresolved_target` in session.rs is the only classifier.
+pub const UNRESOLVED_PANE_PREFIX: &str = "can't find pane: ";
+
+/// Wire prefix for an unresolvable window target. See [`UNRESOLVED_PANE_PREFIX`].
+pub const UNRESOLVED_WINDOW_PREFIX: &str = "can't find window: ";
+
 /// Which pane a `display-message` expands its `#{pane_*}` variables against.
 ///
 /// This was a bare `Option<usize>` meaning "position within the active window",
