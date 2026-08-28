@@ -3627,7 +3627,7 @@ pub fn run_server(
                             crate::util::set_env("PSMUX_TARGET_SESSION", app.port_file_base());
                             hook_event = Some("after-rename-session");
                         }
-                        CtrlReq::ClaimSession(name, client_cwd, resp) => {
+                        CtrlReq::ClaimSession(name, client_cwd, client_size, resp) => {
                             // Same as RenameSession but with a synchronous response
                             // so the CLI knows the rename completed before attaching.
                             let new_base = if let Some(ref sn) = app.socket_name {
@@ -3654,6 +3654,19 @@ pub fn run_server(
                             // Update shared aliases after config reload
                             if let Ok(mut w) = shared_aliases_main.write() {
                                 *w = app.command_aliases.clone();
+                            }
+                            // Honour the client's terminal size. The warm server
+                            // was spawned at the pool's default geometry, so
+                            // without this a claimed session silently ignored
+                            // `-x`/`-y` while a cold-started one honoured them.
+                            if let Some((w, h)) = client_size {
+                                app.last_window_area = Rect {
+                                    x: 0,
+                                    y: 0,
+                                    width: w,
+                                    height: h,
+                                };
+                                resize_all_panes(&mut app);
                             }
                             // Honour the client's working directory: the warm server
                             // was spawned from a previous session whose CWD may differ

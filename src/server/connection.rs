@@ -1238,9 +1238,50 @@ pub(crate) fn handle_connection(
             }
             "claim-session" => {
                 // Warm-server claim: rename + synchronous response so CLI knows it's done.
-                if let Some(name) = args.iter().find(|a| !a.starts_with('-')) {
+                //
+                // The wire form is `claim-session <name> [cwd] [-x W] [-y H]`.
+                // Taking only the first positional and passing None dropped the
+                // cwd — leaving the whole client-cwd path in the ClaimSession
+                // handler dead, so a claimed session started in the warm
+                // server's directory — and dropped the size, so it kept the
+                // warm server's 120x30 no matter what -x/-y asked for.
+                let mut positionals: Vec<&str> = Vec::new();
+                let mut claim_w: Option<u16> = None;
+                let mut claim_h: Option<u16> = None;
+                let mut ci = 0;
+                while ci < args.len() {
+                    match args[ci] {
+                        "-x" => {
+                            claim_w = args.get(ci + 1).and_then(|v| v.parse().ok());
+                            ci += 2;
+                        }
+                        "-y" => {
+                            claim_h = args.get(ci + 1).and_then(|v| v.parse().ok());
+                            ci += 2;
+                        }
+                        a => {
+                            positionals.push(a);
+                            ci += 1;
+                        }
+                    }
+                }
+                // Same defaulting as the cold-start path (main.rs srv_init_size),
+                // so a warm claim and a cold start size a session identically.
+                let claim_size = match (claim_w, claim_h) {
+                    (Some(w), Some(h)) => Some((w, h)),
+                    (Some(w), None) => Some((w, 24)),
+                    (None, Some(h)) => Some((80, h)),
+                    (None, None) => None,
+                };
+                if let Some(name) = positionals.first() {
+                    let claim_cwd = positionals.get(1).map(|s| (*s).to_string());
                     let (rtx, rrx) = mpsc::channel::<String>();
-                    let _ = tx.send(CtrlReq::ClaimSession((*name).to_string(), None, rtx));
+                    let _ = tx.send(CtrlReq::ClaimSession(
+                        (*name).to_string(),
+                        claim_cwd,
+                        claim_size,
+                        rtx,
+                    ));
                     if let Ok(resp) = rrx.recv_timeout(std::time::Duration::from_secs(5)) {
                         let _ = write!(write_stream, "{}", resp);
                         let _ = write_stream.flush();

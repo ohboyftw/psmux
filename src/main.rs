@@ -986,15 +986,23 @@ fn run_main() -> io::Result<()> {
                         let client_cwd = std::env::current_dir()
                             .ok()
                             .and_then(|p| p.to_str().map(|s| s.to_string()));
-                        let claim_cmd = if let Some(ref cwd) = client_cwd {
-                            format!(
-                                "claim-session {} {}\n",
-                                crate::util::quote_arg(&name),
-                                crate::util::quote_arg(cwd)
-                            )
-                        } else {
-                            format!("claim-session {}\n", crate::util::quote_arg(&name))
-                        };
+                        // -x/-y have to travel with the claim: the warm server
+                        // was spawned at the pool's default geometry, so without
+                        // them a claimed session ignores the size a cold-started
+                        // one would honour.
+                        let mut claim_cmd =
+                            format!("claim-session {}", crate::util::quote_arg(&name));
+                        if let Some(ref cwd) = client_cwd {
+                            claim_cmd.push(' ');
+                            claim_cmd.push_str(&crate::util::quote_arg(cwd));
+                        }
+                        if let Some(w) = init_width {
+                            claim_cmd.push_str(&format!(" -x {}", w));
+                        }
+                        if let Some(h) = init_height {
+                            claim_cmd.push_str(&format!(" -y {}", h));
+                        }
+                        claim_cmd.push('\n');
                         match crate::session::send_auth_cmd_response(
                             &warm_addr,
                             &warm_key,

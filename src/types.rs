@@ -1264,7 +1264,14 @@ pub enum CtrlReq {
     RenameSession(String),
     /// Claim a warm server: rename session + send response so CLI knows it's done.
     /// Fields: session name, optional client CWD, response sender.
-    ClaimSession(String, Option<String>, mpsc::Sender<String>),
+    /// Warm-server claim: new name, the client's cwd, the client's terminal
+    /// size, and a channel for the synchronous ack.
+    ClaimSession(
+        String,
+        Option<String>,
+        Option<(u16, u16)>,
+        mpsc::Sender<String>,
+    ),
     SwapPane(String),
     ResizePane(String, u16),
     SetBuffer(String),
