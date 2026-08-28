@@ -635,6 +635,10 @@ pub(crate) fn handle_connection(
                 let escape_seqs = args.contains(&"-e");
                 let clean_mode = args.contains(&"--clean");
                 let plain_mode = args.contains(&"--plain");
+                // -N preserves trailing whitespace. Full-screen TUIs paint their
+                // background to end-of-line with styled spaces, and the default
+                // trim drops that SGR run along with the spaces.
+                let preserve_trailing = args.contains(&"-N");
                 // Parse -S start and -E end (negative = scrollback offset, - = entire scrollback)
                 let s_arg = args.windows(2).find(|w| w[0] == "-S").map(|w| w[1]);
                 let e_arg = args.windows(2).find(|w| w[0] == "-E").map(|w| w[1]);
@@ -664,11 +668,21 @@ pub(crate) fn handle_connection(
                     if clean_mode {
                         let _ = tx.send(CtrlReq::CapturePaneClean(rtx));
                     } else if escape_seqs {
-                        let _ = tx.send(CtrlReq::CapturePaneStyled(rtx, start, end));
+                        let _ = tx.send(CtrlReq::CapturePaneStyled(
+                            rtx,
+                            start,
+                            end,
+                            preserve_trailing,
+                        ));
                     } else if s_arg.is_some() || e_arg.is_some() {
-                        let _ = tx.send(CtrlReq::CapturePaneRange(rtx, start, end));
+                        let _ = tx.send(CtrlReq::CapturePaneRange(
+                            rtx,
+                            start,
+                            end,
+                            preserve_trailing,
+                        ));
                     } else {
-                        let _ = tx.send(CtrlReq::CapturePane(rtx));
+                        let _ = tx.send(CtrlReq::CapturePane(rtx, preserve_trailing));
                     }
                     if let Ok(mut text) = rrx.recv() {
                         if plain_mode {

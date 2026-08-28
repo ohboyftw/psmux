@@ -893,10 +893,13 @@ pub fn capture_active_pane(app: &mut AppState) -> io::Result<()> {
     for r in 0..p.last_rows {
         let mut row = String::new();
         for c in 0..p.last_cols {
-            if let Some(cell) = screen.cell(r, c) {
-                row.push_str(cell.contents());
-            } else {
-                row.push(' ');
+            // An unwritten cell's contents() is EMPTY, not a space. Pushing it
+            // raw collapsed the column away, so a row could never reach the
+            // pane's full width and -N had nothing to preserve.
+            let contents = screen.cell(r, c).map(|cell| cell.contents());
+            match contents {
+                Some("") | None => row.push(' '),
+                Some(s) => row.push_str(s),
             }
         }
         text.push_str(row.trim_end());
@@ -909,7 +912,10 @@ pub fn capture_active_pane(app: &mut AppState) -> io::Result<()> {
     Ok(())
 }
 
-pub fn capture_active_pane_text(app: &mut AppState) -> io::Result<Option<String>> {
+pub fn capture_active_pane_text(
+    app: &mut AppState,
+    preserve_trailing: bool,
+) -> io::Result<Option<String>> {
     let win = &mut app.windows[app.active_idx];
     let p = match active_pane_mut(&mut win.root, &win.active_path) {
         Some(p) => p,
@@ -924,13 +930,21 @@ pub fn capture_active_pane_text(app: &mut AppState) -> io::Result<Option<String>
     for r in 0..p.last_rows {
         let mut row = String::new();
         for c in 0..p.last_cols {
-            if let Some(cell) = screen.cell(r, c) {
-                row.push_str(cell.contents());
-            } else {
-                row.push(' ');
+            // An unwritten cell's contents() is EMPTY, not a space. Pushing it
+            // raw collapsed the column away, so a row could never reach the
+            // pane's full width and -N had nothing to preserve.
+            let contents = screen.cell(r, c).map(|cell| cell.contents());
+            match contents {
+                Some("") | None => row.push(' '),
+                Some(s) => row.push_str(s),
             }
         }
-        text.push_str(row.trim_end());
+        // -N keeps the full row width; without it, trim like tmux does.
+        if preserve_trailing {
+            text.push_str(&row);
+        } else {
+            text.push_str(row.trim_end());
+        }
         text.push('\n');
     }
     Ok(Some(text))
@@ -951,7 +965,7 @@ pub fn capture_active_pane_text(app: &mut AppState) -> io::Result<Option<String>
 /// - Trim leading and trailing whitespace-only lines
 pub fn capture_active_pane_text_clean(app: &mut AppState) -> io::Result<Option<String>> {
     // 1. Get regular capture text
-    let raw = match capture_active_pane_text(app)? {
+    let raw = match capture_active_pane_text(app, false)? {
         Some(t) => t,
         None => return Ok(None),
     };
@@ -1394,6 +1408,7 @@ pub fn capture_active_pane_range(
     app: &mut AppState,
     s: Option<i32>,
     e: Option<i32>,
+    preserve_trailing: bool,
 ) -> io::Result<Option<String>> {
     let win = &mut app.windows[app.active_idx];
     let p = match active_pane_mut(&mut win.root, &win.active_path) {
@@ -1423,13 +1438,21 @@ pub fn capture_active_pane_range(
     for r in start..=end {
         let mut row = String::new();
         for c in 0..p.last_cols {
-            if let Some(cell) = screen.cell(r, c) {
-                row.push_str(cell.contents());
-            } else {
-                row.push(' ');
+            // An unwritten cell's contents() is EMPTY, not a space. Pushing it
+            // raw collapsed the column away, so a row could never reach the
+            // pane's full width and -N had nothing to preserve.
+            let contents = screen.cell(r, c).map(|cell| cell.contents());
+            match contents {
+                Some("") | None => row.push(' '),
+                Some(s) => row.push_str(s),
             }
         }
-        text.push_str(row.trim_end());
+        // -N keeps the full row width; without it, trim like tmux does.
+        if preserve_trailing {
+            text.push_str(&row);
+        } else {
+            text.push_str(row.trim_end());
+        }
         text.push('\n');
     }
     Ok(Some(text))
@@ -1441,6 +1464,7 @@ pub fn capture_active_pane_styled(
     app: &mut AppState,
     s: Option<i32>,
     e: Option<i32>,
+    preserve_trailing: bool,
 ) -> io::Result<Option<String>> {
     let win = &mut app.windows[app.active_idx];
     let p = match active_pane_mut(&mut win.root, &win.active_path) {
@@ -1581,7 +1605,12 @@ pub fn capture_active_pane_styled(
                     None
                 };
                 row_sgr.push(sgr);
-                row_chars.push(cell.contents().to_string());
+                let contents = cell.contents();
+                row_chars.push(if contents.is_empty() {
+                    " ".to_string()
+                } else {
+                    contents.to_string()
+                });
             } else {
                 row_sgr.push(None);
                 row_chars.push(" ".to_string());
@@ -1591,9 +1620,15 @@ pub fn capture_active_pane_styled(
         let last_non_ws = row_chars
             .iter()
             .rposition(|s| !s.is_empty() && s.trim() != "");
-        let trim_end = match last_non_ws {
-            Some(pos) => pos + 1,
-            None => 0, // entirely empty row
+        // -N keeps the full row width, so the SGR background a full-screen TUI
+        // paints to end-of-line with styled spaces survives the capture.
+        let trim_end = if preserve_trailing {
+            row_chars.len()
+        } else {
+            match last_non_ws {
+                Some(pos) => pos + 1,
+                None => 0, // entirely empty row
+            }
         };
         for c in 0..trim_end {
             if let Some(ref sgr) = row_sgr[c] {

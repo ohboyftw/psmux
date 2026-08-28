@@ -1506,6 +1506,11 @@ fn run_main() -> io::Result<()> {
                     "-J" => {
                         cmd.push_str(" -J");
                     }
+                    "-N" => {
+                        // Without forwarding, the server-side -N support was
+                        // reachable only via control mode or a raw socket.
+                        cmd.push_str(" -N");
+                    }
                     "--clean" => {
                         cmd.push_str(" --clean");
                     }

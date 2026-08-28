@@ -459,11 +459,13 @@ pub fn run(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> io::Result<
                         let escape_seqs = args.contains(&"-e");
                         let (rtx, rrx) = mpsc::channel::<String>();
                         if escape_seqs {
-                            let _ = tx.send(CtrlReq::CapturePaneStyled(rtx, start_line, end_line));
+                            let _ = tx
+                                .send(CtrlReq::CapturePaneStyled(rtx, start_line, end_line, false));
                         } else if start_line.is_some() || end_line.is_some() {
-                            let _ = tx.send(CtrlReq::CapturePaneRange(rtx, start_line, end_line));
+                            let _ = tx
+                                .send(CtrlReq::CapturePaneRange(rtx, start_line, end_line, false));
                         } else {
-                            let _ = tx.send(CtrlReq::CapturePane(rtx));
+                            let _ = tx.send(CtrlReq::CapturePane(rtx, false));
                         }
                         if let Ok(text) = rrx.recv() {
                             let _ = write!(stream, "{}", text);
@@ -1297,22 +1299,22 @@ pub fn run(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> io::Result<
                     let _ = kill_pane_by_id(&mut app, pid);
                     resize_all_panes(&mut app);
                 }
-                CtrlReq::CapturePane(resp) => {
-                    if let Some(text) = capture_active_pane_text(&mut app)? {
+                CtrlReq::CapturePane(resp, _) => {
+                    if let Some(text) = capture_active_pane_text(&mut app, false)? {
                         let _ = resp.send(text);
                     } else {
                         let _ = resp.send(String::new());
                     }
                 }
-                CtrlReq::CapturePaneStyled(resp, s, e) => {
-                    if let Some(text) = capture_active_pane_styled(&mut app, s, e)? {
+                CtrlReq::CapturePaneStyled(resp, s, e, _) => {
+                    if let Some(text) = capture_active_pane_styled(&mut app, s, e, false)? {
                         let _ = resp.send(text);
                     } else {
                         let _ = resp.send(String::new());
                     }
                 }
-                CtrlReq::CapturePaneRange(resp, s, e) => {
-                    if let Some(text) = capture_active_pane_range(&mut app, s, e)? {
+                CtrlReq::CapturePaneRange(resp, s, e, _) => {
+                    if let Some(text) = capture_active_pane_range(&mut app, s, e, false)? {
                         let _ = resp.send(text);
                     } else {
                         let _ = resp.send(String::new());

@@ -1693,22 +1693,28 @@ pub fn run_server(
                             meta_dirty = true;
                             hook_event = Some("after-kill-pane");
                         }
-                        CtrlReq::CapturePane(resp) => {
-                            if let Some(text) = capture_active_pane_text(&mut app)? {
+                        CtrlReq::CapturePane(resp, preserve_trailing) => {
+                            if let Some(text) =
+                                capture_active_pane_text(&mut app, preserve_trailing)?
+                            {
                                 let _ = resp.send(text);
                             } else {
                                 let _ = resp.send(String::new());
                             }
                         }
-                        CtrlReq::CapturePaneStyled(resp, s, e) => {
-                            if let Some(text) = capture_active_pane_styled(&mut app, s, e)? {
+                        CtrlReq::CapturePaneStyled(resp, s, e, preserve_trailing) => {
+                            if let Some(text) =
+                                capture_active_pane_styled(&mut app, s, e, preserve_trailing)?
+                            {
                                 let _ = resp.send(text);
                             } else {
                                 let _ = resp.send(String::new());
                             }
                         }
-                        CtrlReq::CapturePaneRange(resp, s, e) => {
-                            if let Some(text) = capture_active_pane_range(&mut app, s, e)? {
+                        CtrlReq::CapturePaneRange(resp, s, e, preserve_trailing) => {
+                            if let Some(text) =
+                                capture_active_pane_range(&mut app, s, e, preserve_trailing)?
+                            {
                                 let _ = resp.send(text);
                             } else {
                                 let _ = resp.send(String::new());
@@ -3481,7 +3487,8 @@ pub fn run_server(
                                 &app.windows[app.active_idx].active_path,
                             )
                             .unwrap_or(0);
-                            let content = capture_active_pane_text(&mut app)?.unwrap_or_default();
+                            let content =
+                                capture_active_pane_text(&mut app, false)?.unwrap_or_default();
                             let info = crate::util::CapturePaneJson {
                                 pane_id: format!("%{}", pane_id),
                                 content,

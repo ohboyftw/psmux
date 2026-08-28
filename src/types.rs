@@ -1186,8 +1186,10 @@ pub enum CtrlReq {
     ), // kind, cmd, detached, start_dir, size_percent, format, env_vars, shell, resp
     KillPane,
     KillPaneById(usize),
-    CapturePane(mpsc::Sender<String>),
-    CapturePaneStyled(mpsc::Sender<String>, Option<i32>, Option<i32>),
+    /// resp, preserve_trailing (-N)
+    CapturePane(mpsc::Sender<String>, bool),
+    /// resp, start, end, preserve_trailing (-N)
+    CapturePaneStyled(mpsc::Sender<String>, Option<i32>, Option<i32>, bool),
     FocusWindow(usize),
     /// Temporary focus for -t targeting: server saves/restores active_idx
     FocusWindowTemp(usize),
@@ -1199,7 +1201,8 @@ pub enum CtrlReq {
     FocusPaneTempCheck(usize, mpsc::Sender<bool>),
     FocusPaneByIndexTemp(usize),
     SessionInfo(mpsc::Sender<String>),
-    CapturePaneRange(mpsc::Sender<String>, Option<i32>, Option<i32>),
+    /// resp, start, end, preserve_trailing (-N)
+    CapturePaneRange(mpsc::Sender<String>, Option<i32>, Option<i32>, bool),
     ClientAttach(u64),
     ClientDetach(u64),
     DumpLayout(mpsc::Sender<String>),
