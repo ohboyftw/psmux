@@ -458,11 +458,25 @@ fn set_remain_on_exit(exe: &Path, session: &str, on: bool) {
 }
 
 /// Kill a preserved dead pane so it doesn't accumulate in the session.
-fn kill_worker_pane(exe: &Path, pane_id: &str) {
-    // Best-effort: pane may already be gone; ignore the result.
-    let _ = std::process::Command::new(exe)
-        .args(["kill-pane", "-t", pane_id])
-        .output();
+///
+/// The target must be session-qualified. Pane ids are scoped to a server, so a
+/// bare `%id` resolves to nothing here — kill-pane then exits 0 having done
+/// nothing at all, and because this function threw the result away, every
+/// worker's window survived the run with a dead pane in it.
+fn kill_worker_pane(exe: &Path, session: &str, pane_id: &str) -> Result<(), String> {
+    let target = format!("{session}:.{pane_id}");
+    let output = std::process::Command::new(exe)
+        .args(["kill-pane", "-t", &target])
+        .output()
+        .map_err(|e| format!("kill-pane failed to spawn: {e}"))?;
+    if output.status.success() {
+        return Ok(());
+    }
+    Err(format!(
+        "kill-pane -t {target} exited {}: {}",
+        output.status.code().unwrap_or(-1),
+        String::from_utf8_lossy(&output.stderr).trim()
+    ))
 }
 
 /// Spawn a pane for `worker` using `psmux new-window -P`. Returns pane id.
@@ -700,7 +714,12 @@ pub fn run_plan(
             // already reaped, so no kill is needed in that case.
             if code != EXIT_PANE_GONE && code != EXIT_SESSION_GONE {
                 if let Ok(exe) = psmux_exe() {
-                    kill_worker_pane(&exe, &pane_id);
+                    // Reported, not discarded: a silent failure here is exactly
+                    // how the leak went unnoticed — the run still exits 0 and
+                    // the windows just pile up.
+                    if let Err(e) = kill_worker_pane(&exe, &plan.session, &pane_id) {
+                        eprintln!("psmux orchestrate: {e}");
+                    }
                 }
             }
         }

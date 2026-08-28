@@ -41,6 +41,26 @@ Test-Case "plan.json with two sequential workers runs and both succeed" {
     (Test-Path $outA) -and (Test-Path $outB)
 }
 
+# The run leaves the session as it found it. Every worker's dead pane used to
+# survive its own window: the cleanup killed the pane with a BARE `%id`, which
+# resolves to nothing, so kill-pane exited 0 having done nothing and the result
+# was discarded. A long-lived orchestrate session accumulated one window per
+# worker, per run.
+Test-Case "no worker window survives a completed run" {
+    $windows = @(psmux list-windows -t $session 2>$null | ForEach-Object { [string]$_ })
+    $leaked = @($windows | Where-Object { $_ -match '^\d+:\s*(a|b)[-*]?\s' })
+    if ($leaked.Count -gt 0) {
+        Write-Host "    leaked: $($leaked -join ' | ')" -ForegroundColor DarkYellow
+    }
+    $leaked.Count -eq 0
+}
+
+Test-Case "no dead pane survives a completed run" {
+    $dead = @(psmux list-panes -a -t $session -F '#{pane_dead}' 2>$null |
+        Where-Object { "$_".Trim() -eq '1' })
+    $dead.Count -eq 0
+}
+
 Test-Case "state.json records both workers' exit codes as 0" {
     $stateCandidate = @(
         Join-Path $workDir ".orchestration/$session/state.json"

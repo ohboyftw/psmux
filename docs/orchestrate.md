@@ -98,7 +98,11 @@ spawning the worker. `--cleanup` reverses this (`git worktree remove`).
    spawn so dead panes persist long enough for their exit codes to be
    read.
 3. **Succeeded** — `check_pane_exit` observed `pane_dead=1 pane_exit_code=0`.
-   The preserved dead pane is then explicitly killed for cleanup.
+   The preserved dead pane is then explicitly killed, which also removes its
+   window once that pane was the last one in it, so a completed run leaves the
+   session holding the windows it started with. A kill that fails is reported
+   on stderr rather than passed over — a silent one used to leave one dead
+   window per worker, per run.
 4. **Failed** — any non-zero exit code, OR the pane vanished without an
    observable code (`exit_code = -1`, "pane gone"), OR the whole session
    was torn down (`exit_code = -3`, "session gone"), OR the `--timeout`
