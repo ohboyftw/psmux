@@ -1871,7 +1871,27 @@ pub(crate) fn handle_connection(
                 let _ = tx.send(CtrlReq::LockClient);
             }
             "refresh-client" => {
-                let _ = tx.send(CtrlReq::RefreshClient);
+                // tmux restricts -C/-B/-A/-f to control-mode clients. A one-shot
+                // CLI client is not one, so reject the flag rather than silently
+                // ignoring it and letting the caller believe the size or
+                // subscription was applied.
+                let control_only = args
+                    .iter()
+                    .find(|a| matches!(**a, "-C" | "-B" | "-A" | "-f"));
+                match control_only {
+                    Some(flag) if !persistent => {
+                        let _ = writeln!(
+                            write_stream,
+                            "ERROR: refresh-client {}: not a control client",
+                            flag
+                        );
+                        let _ = write_stream.flush();
+                    }
+                    Some(_) => {}
+                    None => {
+                        let _ = tx.send(CtrlReq::RefreshClient);
+                    }
+                }
             }
             "suspend-client" => {
                 let _ = tx.send(CtrlReq::SuspendClient);

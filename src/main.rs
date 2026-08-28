@@ -3816,10 +3816,16 @@ fn run_main() -> io::Result<()> {
                     "-l" => {
                         cmd.push_str(" -l");
                     }
-                    "-C" => {
+                    // Control-only flags are forwarded so the server can reject
+                    // them with tmux's "not a control client" error, instead of
+                    // the client dropping them and exiting 0 as though the size
+                    // or subscription had been applied.
+                    "-C" | "-B" | "-A" | "-f" => {
                         if let Some(t) = cmd_args.get(i + 1) {
-                            cmd.push_str(&format!(" -C {}", t));
+                            cmd.push_str(&format!(" {} {}", cmd_args[i], t));
                             i += 1;
+                        } else {
+                            cmd.push_str(&format!(" {}", cmd_args[i]));
                         }
                     }
                     "-t" => {
@@ -3833,7 +3839,17 @@ fn run_main() -> io::Result<()> {
                 i += 1;
             }
             cmd.push('\n');
-            send_control(cmd)?;
+            // Fire-and-forget here meant the server's rejection was written to a
+            // socket nobody read, and the command still exited 0.
+            let resp = send_control_with_response(cmd)?;
+            let trimmed = resp.trim();
+            if let Some(reason) = trimmed.strip_prefix("ERROR:") {
+                eprintln!("psmux: {}", reason.trim());
+                std::process::exit(1);
+            }
+            if !trimmed.is_empty() {
+                print!("{}", resp);
+            }
             return Ok(());
         }
         // send-prefix - Send the prefix key to the active pane
