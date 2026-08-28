@@ -65,9 +65,7 @@ pub fn resurrect_dir(custom: Option<&str>) -> PathBuf {
     if let Some(p) = custom {
         return PathBuf::from(p);
     }
-    let home = std::env::var("USERPROFILE")
-        .unwrap_or_else(|_| std::env::var("HOME").unwrap_or_else(|_| ".".into()));
-    PathBuf::from(home).join(".psmux").join("resurrect")
+    PathBuf::from(crate::paths::psmux_dir()).join("resurrect")
 }
 
 /// Atomically save `snap` as `<session_name>.json` inside `dir`.

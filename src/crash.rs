@@ -45,16 +45,10 @@ pub fn crash_directory() -> PathBuf {
     if let Some(local) = std::env::var_os("LOCALAPPDATA") {
         PathBuf::from(local).join("psmux").join("crashes")
     } else {
-        dirs_or_home().join(".psmux").join("crashes")
+        PathBuf::from(crate::paths::psmux_dir()).join("crashes")
     }
 }
 
-fn dirs_or_home() -> PathBuf {
-    std::env::var_os("USERPROFILE")
-        .or_else(|| std::env::var_os("HOME"))
-        .map(PathBuf::from)
-        .unwrap_or_else(std::env::temp_dir)
-}
 
 /// A discovered crash report file.
 #[derive(Debug, Clone)]

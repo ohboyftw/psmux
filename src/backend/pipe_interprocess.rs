@@ -45,10 +45,7 @@ fn bare_pipe_name(session_name: &str) -> String {
 }
 
 fn psmux_dir() -> String {
-    let home = std::env::var("USERPROFILE")
-        .or_else(|_| std::env::var("HOME"))
-        .unwrap_or_default();
-    format!("{}\\.psmux", home)
+    crate::paths::psmux_dir()
 }
 
 /// Start a `PipeListener` and dispatch each accepted connection.

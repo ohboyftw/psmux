@@ -27,10 +27,7 @@ use std::sync::{LazyLock, Mutex};
 
 /// Resolve the psmux data directory (`~/.psmux/`).
 fn psmux_dir() -> String {
-    let home = std::env::var("USERPROFILE")
-        .or_else(|_| std::env::var("HOME"))
-        .unwrap_or_default();
-    format!("{}/.psmux", home)
+    crate::paths::psmux_dir()
 }
 
 /// Open a log file in the psmux data directory, creating the directory if needed.

@@ -289,6 +289,14 @@ $env:PSMUX_NO_WARM = "1"
 # Override the config file path (same effect as -f flag)
 $env:PSMUX_CONFIG_FILE = "C:\Users\me\.psmux-alt.conf"
 
+# Move the data directory (port/key/pipe files, logs, plugins, resurrect and
+# crash state) off the default ~/.psmux. Must be an ABSOLUTE path: the client
+# and the server it talks to run from different working directories, so a
+# relative value would split them into two universes. Config files are NOT
+# affected - ~/.psmux.conf and ~/.psmuxrc are still read from your home
+# directory. A client must set the same value to see servers started under it.
+$env:PSMUX_DATA_DIR = "D:\myapp\psmux-state"
+
 # These are set INSIDE psmux panes (tmux-compatible):
 # TMUX       - socket path and server info
 # TMUX_PANE  - current pane ID (%0, %1, etc.)

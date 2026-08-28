@@ -387,10 +387,7 @@ pub mod mouse_inject {
             return;
         }
 
-        let home = std::env::var("USERPROFILE")
-            .or_else(|_| std::env::var("HOME"))
-            .unwrap_or_default();
-        let path = format!("{}/.psmux/mouse_debug.log", home);
+        let path = crate::paths::psmux_dir_file("mouse_debug.log");
         if let Ok(mut f) = std::fs::OpenOptions::new()
             .create(true)
             .append(true)
@@ -1911,10 +1908,7 @@ pub mod process_info {
         if n > 100 {
             return;
         }
-        let home = std::env::var("USERPROFILE")
-            .or_else(|_| std::env::var("HOME"))
-            .unwrap_or_default();
-        let path = format!("{}/.psmux/autorename.log", home);
+        let path = crate::paths::psmux_dir_file("autorename.log");
         if let Ok(mut f) = std::fs::OpenOptions::new()
             .create(true)
             .append(true)

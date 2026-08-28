@@ -337,15 +337,12 @@ fn drain_wait_pane_queue(app: &mut AppState) {
 /// Spawn a single warm server process with the given session name.
 /// Returns true if a new server was spawned, false if one already existed.
 fn spawn_one_warm_server(app: &AppState, warm_session_name: &str) -> bool {
-    let home = env::var("USERPROFILE")
-        .or_else(|_| env::var("HOME"))
-        .unwrap_or_default();
     let warm_base = if let Some(ref sn) = app.socket_name {
         format!("{}__{}", sn, warm_session_name)
     } else {
         warm_session_name.to_string()
     };
-    let warm_port_path = format!("{}\\.psmux\\{}.port", home, warm_base);
+    let warm_port_path = crate::paths::port_file(&warm_base);
     if std::path::Path::new(&warm_port_path).exists() {
         // Check if it's actually alive
         if let Ok(port_str) = std::fs::read_to_string(&warm_port_path) {
@@ -649,10 +646,7 @@ pub fn run_server(
     // config or creating windows.  run-shell scripts (e.g. PPM) need the
     // port file to discover the server, and the client polls for it to know
     // the server is ready.
-    let home = env::var("USERPROFILE")
-        .or_else(|_| env::var("HOME"))
-        .unwrap_or_default();
-    let dir = format!("{}\\.psmux", home);
+    let dir = crate::paths::psmux_dir();
     let _ = std::fs::create_dir_all(&dir);
 
     // Generate a random session key for security
@@ -1908,13 +1902,10 @@ pub fn run_server(
                             }
                             hook_event = Some("client-detached");
                             if app.attached_clients == 0 && app.destroy_unattached {
-                                let home = env::var("USERPROFILE")
-                                    .or_else(|_| env::var("HOME"))
-                                    .unwrap_or_default();
                                 let regpath =
-                                    format!("{}\\.psmux\\{}.port", home, app.port_file_base());
+                                    crate::paths::port_file(app.port_file_base());
                                 let keypath =
-                                    format!("{}\\.psmux\\{}.key", home, app.port_file_base());
+                                    crate::paths::key_file(app.port_file_base());
                                 let _ = std::fs::remove_file(&regpath);
                                 let _ = std::fs::remove_file(&keypath);
                                 crate::types::shutdown_persistent_streams();
@@ -3513,16 +3504,13 @@ pub fn run_server(
                         CtrlReq::KillSession => {
                             // Remove port/key/version/pipe files FIRST so clients see the
                             // session as gone immediately, then kill processes.
-                            let home = env::var("USERPROFILE")
-                                .or_else(|_| env::var("HOME"))
-                                .unwrap_or_default();
                             let regpath =
-                                format!("{}\\.psmux\\{}.port", home, app.port_file_base());
-                            let keypath = format!("{}\\.psmux\\{}.key", home, app.port_file_base());
+                                crate::paths::port_file(app.port_file_base());
+                            let keypath = crate::paths::key_file(app.port_file_base());
                             let verpath =
-                                format!("{}\\.psmux\\{}.version", home, app.port_file_base());
+                                crate::paths::version_file(app.port_file_base());
                             let pipepath =
-                                format!("{}\\.psmux\\{}.pipe", home, app.port_file_base());
+                                crate::paths::pipe_file(app.port_file_base());
                             let _ = std::fs::remove_file(&regpath);
                             let _ = std::fs::remove_file(&keypath);
                             let _ = std::fs::remove_file(&verpath);
@@ -4850,16 +4838,13 @@ pub fn run_server(
                         CtrlReq::KillServer => {
                             // Remove port/key/version/pipe files FIRST so clients see the
                             // session as gone immediately, then kill processes.
-                            let home = env::var("USERPROFILE")
-                                .or_else(|_| env::var("HOME"))
-                                .unwrap_or_default();
                             let regpath =
-                                format!("{}\\.psmux\\{}.port", home, app.port_file_base());
-                            let keypath = format!("{}\\.psmux\\{}.key", home, app.port_file_base());
+                                crate::paths::port_file(app.port_file_base());
+                            let keypath = crate::paths::key_file(app.port_file_base());
                             let verpath =
-                                format!("{}\\.psmux\\{}.version", home, app.port_file_base());
+                                crate::paths::version_file(app.port_file_base());
                             let pipepath =
-                                format!("{}\\.psmux\\{}.pipe", home, app.port_file_base());
+                                crate::paths::pipe_file(app.port_file_base());
                             let _ = std::fs::remove_file(&regpath);
                             let _ = std::fs::remove_file(&keypath);
                             let _ = std::fs::remove_file(&verpath);
@@ -5057,8 +5042,7 @@ pub fn run_server(
                         app.windows.len(),
                         (chrono::Local::now() - app.created_at).num_seconds(),
                         {
-                            let home = env::var("USERPROFILE").or_else(|_| env::var("HOME")).unwrap_or_default();
-                            format!("{}\\.psmux\\{}.port", home, app.port_file_base())
+                            crate::paths::port_file(app.port_file_base())
                         }
                     );
                             let _ = resp.send(info);
@@ -6269,16 +6253,13 @@ pub fn run_server(
                 app.exit_empty && all_empty
             };
             if should_exit {
-                let home = env::var("USERPROFILE")
-                    .or_else(|_| env::var("HOME"))
-                    .unwrap_or_default();
-                let regpath = format!("{}\\.psmux\\{}.port", home, app.port_file_base());
-                let keypath = format!("{}\\.psmux\\{}.key", home, app.port_file_base());
-                let verpath = format!("{}\\.psmux\\{}.version", home, app.port_file_base());
+                let regpath = crate::paths::port_file(app.port_file_base());
+                let keypath = crate::paths::key_file(app.port_file_base());
+                let verpath = crate::paths::version_file(app.port_file_base());
                 let _ = std::fs::remove_file(&regpath);
                 let _ = std::fs::remove_file(&keypath);
                 let _ = std::fs::remove_file(&verpath);
-                let pipepath = format!("{}\\.psmux\\{}.pipe", home, app.port_file_base());
+                let pipepath = crate::paths::pipe_file(app.port_file_base());
                 let _ = std::fs::remove_file(&pipepath);
                 crate::types::shutdown_persistent_streams();
                 // Kill warm pane's child (process::exit skips Drop)

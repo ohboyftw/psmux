@@ -18,10 +18,7 @@ pub fn pipe_path(session_name: &str) -> String {
 
 /// Resolve the psmux data directory (`~/.psmux/`).
 fn psmux_dir() -> String {
-    let home = std::env::var("USERPROFILE")
-        .or_else(|_| std::env::var("HOME"))
-        .unwrap_or_default();
-    format!("{}\\.psmux", home)
+    crate::paths::psmux_dir()
 }
 
 /// Start listening on a named pipe for JSON-RPC connections.

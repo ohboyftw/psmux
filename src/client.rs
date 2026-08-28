@@ -272,10 +272,7 @@ pub fn run_remote(
     input: &crate::ssh_input::InputSource,
 ) -> io::Result<()> {
     let name = env::var("PSMUX_SESSION_NAME").unwrap_or_else(|_| "default".to_string());
-    let home = env::var("USERPROFILE")
-        .or_else(|_| env::var("HOME"))
-        .unwrap_or_default();
-    let path = format!("{}\\.psmux\\{}.port", home, name);
+    let path = crate::paths::port_file(&name);
     let port = std::fs::read_to_string(&path)
         .ok()
         .and_then(|s| s.trim().parse::<u16>().ok())
@@ -284,7 +281,7 @@ pub fn run_remote(
         })?;
     let addr = format!("127.0.0.1:{}", port);
     let session_key = read_session_key(&name).unwrap_or_default();
-    let last_path = format!("{}\\.psmux\\last_session", home);
+    let last_path = crate::paths::psmux_dir_file("last_session");
     if !crate::session::is_warm_session(&name) {
         let _ = std::fs::write(&last_path, &name);
     }
@@ -700,10 +697,7 @@ pub fn run_remote(
     // Diagnostic latency log: set PSMUX_LATENCY_LOG=1 to enable
     let latency_log_enabled = env::var("PSMUX_LATENCY_LOG").unwrap_or_default() == "1";
     let mut latency_log: Option<std::fs::File> = if latency_log_enabled {
-        let home = env::var("USERPROFILE")
-            .or_else(|_| env::var("HOME"))
-            .unwrap_or_default();
-        let path = format!("{}\\.psmux\\latency.log", home);
+        let path = crate::paths::psmux_dir_file("latency.log");
         std::fs::File::create(&path).ok()
     } else {
         None
@@ -1523,7 +1517,7 @@ pub fn run_remote(
                                         tree_selected = 0;
                                         tree_scroll = 0;
                                         // Query ALL sessions (like tmux choose-tree)
-                                        let dir = format!("{}\\.psmux", home);
+                                        let dir = crate::paths::psmux_dir();
                                         if let Ok(entries) = std::fs::read_dir(&dir) {
                                             #[allow(clippy::type_complexity)]
                                             let mut sessions: Vec<(
@@ -1691,7 +1685,7 @@ pub fn run_remote(
                                         session_entries.clear();
                                         session_selected = 0;
                                         session_scroll = 0;
-                                        let dir = format!("{}\\.psmux", home);
+                                        let dir = crate::paths::psmux_dir();
                                         if let Ok(entries) = std::fs::read_dir(&dir) {
                                             for e in entries.flatten() {
                                                 if let Some(fname) = e.file_name().to_str() {
@@ -1769,7 +1763,7 @@ pub fn run_remote(
                                     KeyCode::Char('(') | KeyCode::Char(')') => {
                                         let dir_next = key.code == KeyCode::Char(')');
                                         // Enumerate sessions
-                                        let dir = format!("{}\\.psmux", home);
+                                        let dir = crate::paths::psmux_dir();
                                         let mut names: Vec<String> = Vec::new();
                                         if let Ok(entries) = std::fs::read_dir(&dir) {
                                             for e in entries.flatten() {
@@ -1942,12 +1936,9 @@ pub fn run_remote(
                                             quit = true;
                                         } else {
                                             // Kill another session by connecting to it
-                                            let h = env::var("USERPROFILE")
-                                                .or_else(|_| env::var("HOME"))
-                                                .unwrap_or_default();
                                             let port_path =
-                                                format!("{}\\.psmux\\{}.port", h, sname);
-                                            let key_path = format!("{}\\.psmux\\{}.key", h, sname);
+                                                crate::paths::port_file(&sname);
+                                            let key_path = crate::paths::key_file(&sname);
                                             if let Ok(port_str) =
                                                 std::fs::read_to_string(&port_path)
                                             {

@@ -10,6 +10,7 @@ pub mod hints;
 #[cfg(feature = "mycel")]
 pub mod mycel;
 pub mod octal;
+pub mod paths;
 pub mod orchestrate;
 pub mod remote;
 pub mod session;

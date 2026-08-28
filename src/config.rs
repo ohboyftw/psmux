@@ -34,9 +34,10 @@ pub fn is_warm_disabled_by_config() -> bool {
         };
         std::fs::read_to_string(expanded).ok()
     } else {
-        let home = env::var("USERPROFILE")
-            .or_else(|_| env::var("HOME"))
-            .unwrap_or_default();
+        // Config files live beside the user's other dotfiles, NOT in the data
+        // directory: PSMUX_DATA_DIR moves server state, and an embedder doing
+        // that must not silently stop reading the user's config.
+        let home = crate::paths::home_dir();
         let paths = [
             format!("{}/.psmux.conf", home),
             format!("{}/.psmuxrc", home),
@@ -91,9 +92,8 @@ pub fn load_config(app: &mut AppState) {
         return;
     }
 
-    let home = env::var("USERPROFILE")
-        .or_else(|_| env::var("HOME"))
-        .unwrap_or_default();
+    // Config files are home-relative, not data-dir-relative — see load_config.
+    let home = crate::paths::home_dir();
     let paths = vec![
         format!("{}\\.psmux.conf", home),
         format!("{}\\.psmuxrc", home),
@@ -995,17 +995,18 @@ pub fn parse_option_value(app: &mut AppState, key: &str, value: &str, _is_global
                         .unwrap_or_default();
                     let xdg_config = env::var("XDG_CONFIG_HOME")
                         .unwrap_or_else(|_| format!("{}\\.config", home));
+                    let plugins = crate::paths::psmux_dir_file("plugins");
                     let candidates = [
-                        // Classic paths: ~/.psmux/plugins/
+                        // Classic paths: <data dir>/plugins/
                         format!(
-                            "{}\\.psmux\\plugins\\{}\\plugin.conf",
-                            home,
+                            "{}\\{}\\plugin.conf",
+                            plugins,
                             value.replace('/', "\\")
                         ),
-                        format!("{}\\.psmux\\plugins\\{}\\plugin.conf", home, plugin_name),
+                        format!("{}\\{}\\plugin.conf", plugins, plugin_name),
                         format!(
-                            "{}\\.psmux\\plugins\\psmux-plugins\\{}\\plugin.conf",
-                            home, plugin_name
+                            "{}\\psmux-plugins\\{}\\plugin.conf",
+                            plugins, plugin_name
                         ),
                         // XDG paths: ~/.config/psmux/plugins/
                         format!(
@@ -1040,18 +1041,18 @@ pub fn parse_option_value(app: &mut AppState, key: &str, value: &str, _is_global
                         let ps1_candidates = [
                             // Classic paths
                             format!(
-                                "{}\\.psmux\\plugins\\{}\\{}.ps1",
-                                home,
+                                "{}\\{}\\{}.ps1",
+                                plugins,
                                 value.replace('/', "\\"),
                                 plugin_name
                             ),
                             format!(
-                                "{}\\.psmux\\plugins\\{}\\{}.ps1",
-                                home, plugin_name, plugin_name
+                                "{}\\{}\\{}.ps1",
+                                plugins, plugin_name, plugin_name
                             ),
                             format!(
-                                "{}\\.psmux\\plugins\\psmux-plugins\\{}\\{}.ps1",
-                                home, plugin_name, plugin_name
+                                "{}\\psmux-plugins\\{}\\{}.ps1",
+                                plugins, plugin_name, plugin_name
                             ),
                             // XDG paths
                             format!(
@@ -1420,10 +1421,8 @@ pub fn source_file(app: &mut AppState, path: &str) {
     // Fallback: if path references ~/.psmux/ but doesn't exist and the
     // XDG equivalent (~/.config/psmux/) does, use that instead (issue #135).
     let expanded_path = if !std::path::Path::new(&expanded_path).exists() {
-        let home = env::var("USERPROFILE")
-            .or_else(|_| env::var("HOME"))
-            .unwrap_or_default();
-        let classic = format!("{}\\.psmux\\", home);
+        let home = crate::paths::home_dir();
+        let classic = format!("{}\\", crate::paths::psmux_dir());
         if expanded_path.starts_with(&classic) {
             let xdg_base =
                 env::var("XDG_CONFIG_HOME").unwrap_or_else(|_| format!("{}\\.config", home));

@@ -32,10 +32,7 @@ fn mouse_log(msg: &str) {
         return;
     }
 
-    let home = std::env::var("USERPROFILE")
-        .or_else(|_| std::env::var("HOME"))
-        .unwrap_or_default();
-    let path = format!("{}/.psmux/mouse_debug.log", home);
+    let path = crate::paths::psmux_dir_file("mouse_debug.log");
     if let Ok(mut f) = std::fs::OpenOptions::new()
         .create(true)
         .append(true)

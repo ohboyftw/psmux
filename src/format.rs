@@ -2070,10 +2070,7 @@ pub fn expand_var(var: &str, app: &AppState, win_idx: usize) -> String {
         "version" => VERSION.to_string(),
         "start_time" => app.created_at.timestamp().to_string(),
         "socket_path" => {
-            let home = env::var("USERPROFILE")
-                .or_else(|_| env::var("HOME"))
-                .unwrap_or_default();
-            format!("{}/.psmux/default", home)
+            crate::paths::psmux_dir_file("default")
         }
 
         // ── Options as format variables ──

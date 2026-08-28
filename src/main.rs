@@ -18,6 +18,7 @@ mod input;
 mod layout;
 mod orchestrate;
 mod pane;
+mod paths;
 mod platform;
 mod popup;
 mod rendering;
@@ -188,10 +189,7 @@ fn run_main() -> io::Result<()> {
                 if let Ok(port) = parts[1].trim().parse::<u16>() {
                     // Look up which session owns this port (port file base
                     // already includes -L namespace prefix if applicable)
-                    let home = env::var("USERPROFILE")
-                        .or_else(|_| env::var("HOME"))
-                        .unwrap_or_default();
-                    let psmux_dir = format!("{}\\.psmux", home);
+                    let psmux_dir = crate::paths::psmux_dir();
                     if let Ok(entries) = std::fs::read_dir(&psmux_dir) {
                         for entry in entries.flatten() {
                             let path = entry.path();
@@ -298,10 +296,7 @@ fn run_main() -> io::Result<()> {
     match cmd {
         // kill-server MUST be handled early before any potential fall-through
         "kill-server" => {
-            let home = env::var("USERPROFILE")
-                .or_else(|_| env::var("HOME"))
-                .unwrap_or_default();
-            let psmux_dir = format!("{}\\.psmux", home);
+            let psmux_dir = crate::paths::psmux_dir();
             // Compute namespace prefix for -L filtering (matches list-sessions behavior)
             let ns_prefix = l_socket_name.as_ref().map(|l| format!("{l}__"));
             let mut streams: Vec<std::net::TcpStream> = Vec::new();
@@ -382,10 +377,7 @@ fn run_main() -> io::Result<()> {
             return Ok(());
         }
         "ls" | "list-sessions" => {
-            let home = env::var("USERPROFILE")
-                .or_else(|_| env::var("HOME"))
-                .unwrap_or_default();
-            let dir = format!("{}\\.psmux", home);
+            let dir = crate::paths::psmux_dir();
             // Compute namespace prefix for -L filtering
             let ns_prefix = l_socket_name.as_ref().map(|l| format!("{l}__"));
             if let Ok(entries) = std::fs::read_dir(&dir) {
@@ -418,7 +410,7 @@ fn run_main() -> io::Result<()> {
                                                 s.set_read_timeout(Some(Duration::from_millis(50)));
                                             // Read session key and authenticate
                                             let key_path =
-                                                format!("{}\\.psmux\\{}.key", home, base);
+                                                crate::paths::key_file(base);
                                             if let Ok(key) = std::fs::read_to_string(&key_path) {
                                                 let _ = std::io::Write::write_all(
                                                     &mut s,
@@ -461,7 +453,7 @@ fn run_main() -> io::Result<()> {
             let resurrect_dir = crate::resurrection::resurrect_dir(None);
             for name in crate::resurrection::list_resurrectable(&resurrect_dir) {
                 // Skip if a live session with this name was already printed
-                let port_file = format!("{}\\.psmux\\{}.port", home, name);
+                let port_file = crate::paths::port_file(&name);
                 if std::path::Path::new(&port_file).exists() {
                     continue;
                 }
@@ -873,10 +865,7 @@ fn run_main() -> io::Result<()> {
                 };
 
             // Check if session already exists AND is actually running
-            let home = env::var("USERPROFILE")
-                .or_else(|_| env::var("HOME"))
-                .unwrap_or_default();
-            let port_path = format!("{}\\.psmux\\{}.port", home, port_file_base);
+            let port_path = crate::paths::port_file(&port_file_base);
             if std::path::Path::new(&port_path).exists() {
                 // Verify server is actually running
                 let server_alive = if let Ok(port_str) = std::fs::read_to_string(&port_path) {
@@ -943,19 +932,19 @@ fn run_main() -> io::Result<()> {
                         } else {
                             warm_name.clone()
                         };
-                        let warm_port_path = format!("{}\\.psmux\\{}.port", home, warm_base);
+                        let warm_port_path = crate::paths::port_file(&warm_base);
                         if !std::path::Path::new(&warm_port_path).exists() {
                             continue;
                         }
                         // Skip warm servers built from a different version/commit
                         // to avoid stale-binary confusion (#110).
-                        let warm_ver_path = format!("{}\\.psmux\\{}.version", home, warm_base);
+                        let warm_ver_path = crate::paths::version_file(&warm_base);
                         if let Ok(ver) = std::fs::read_to_string(&warm_ver_path) {
                             if ver.trim() != crate::types::build_version_stamp() {
                                 // Stale warm server — kill it and clean up
                                 let _ = std::fs::remove_file(&warm_port_path);
                                 let _ = std::fs::remove_file(&warm_ver_path);
-                                let wkey = format!("{}\\.psmux\\{}.key", home, warm_base);
+                                let wkey = crate::paths::key_file(&warm_base);
                                 let _ = std::fs::remove_file(&wkey);
                                 continue;
                             }
@@ -1831,10 +1820,7 @@ fn run_main() -> io::Result<()> {
             // Try to send kill command to server
             if send_control("kill-session\n".to_string()).is_err() {
                 // Server not responding - clean up stale port file
-                let home = env::var("USERPROFILE")
-                    .or_else(|_| env::var("HOME"))
-                    .unwrap_or_default();
-                let port_path = format!("{}\\.psmux\\{}.port", home, session_name);
+                let port_path = crate::paths::port_file(&session_name);
                 let _ = std::fs::remove_file(&port_path);
             }
             return Ok(());
@@ -1869,10 +1855,7 @@ fn run_main() -> io::Result<()> {
             if crate::session::is_warm_session(&target) {
                 std::process::exit(1);
             }
-            let home = env::var("USERPROFILE")
-                .or_else(|_| env::var("HOME"))
-                .unwrap_or_default();
-            let path = format!("{}\\.psmux\\{}.port", home, target);
+            let path = crate::paths::port_file(&target);
             if let Ok(port_str) = std::fs::read_to_string(&path) {
                 if let Ok(port) = port_str.trim().parse::<u16>() {
                     let addr = format!("127.0.0.1:{}", port);
@@ -4066,9 +4049,6 @@ fn run_main() -> io::Result<()> {
         return Ok(());
     }
     if env::var("PSMUX_REMOTE_ATTACH").ok().as_deref() != Some("1") {
-        let home = env::var("USERPROFILE")
-            .or_else(|_| env::var("HOME"))
-            .unwrap_or_default();
         let session_name = env::var("PSMUX_SESSION_NAME")
             .unwrap_or_else(|_| crate::session::next_session_name(l_socket_name.as_deref()));
         let port_file_base = if let Some(ref l) = l_socket_name {
@@ -4076,7 +4056,7 @@ fn run_main() -> io::Result<()> {
         } else {
             session_name.clone()
         };
-        let port_path = format!("{}\\.psmux\\{}.port", home, port_file_base);
+        let port_path = crate::paths::port_file(&port_file_base);
 
         // Try warm server claim first (fast path)
         // Skipped when PSMUX_NO_WARM=1 is set or config has 'set -g warm off'.
@@ -4089,10 +4069,10 @@ fn run_main() -> io::Result<()> {
         } else {
             "__warm__".to_string()
         };
-        let warm_port_path = format!("{}\\.psmux\\{}.port", home, warm_base);
+        let warm_port_path = crate::paths::port_file(&warm_base);
         let mut warm_claimed = false;
         // Skip stale warm servers from a different build (#110)
-        let warm_ver_path = format!("{}\\.psmux\\{}.version", home, warm_base);
+        let warm_ver_path = crate::paths::version_file(&warm_base);
         let warm_version_ok = std::fs::read_to_string(&warm_ver_path)
             .map(|v| v.trim() == crate::types::build_version_stamp())
             .unwrap_or(true); // no version file = legacy warm server, allow
@@ -4239,10 +4219,7 @@ fn run_main() -> io::Result<()> {
             env::remove_var("PSMUX_SWITCH_TO");
             env::set_var("PSMUX_SESSION_NAME", &switch_to);
             // Update last_session file
-            let home = env::var("USERPROFILE")
-                .or_else(|_| env::var("HOME"))
-                .unwrap_or_default();
-            let last_path = format!("{}\\.psmux\\last_session", home);
+            let last_path = crate::paths::psmux_dir_file("last_session");
             let _ = std::fs::write(&last_path, &switch_to);
             // Continue loop to attach to new session
             continue;

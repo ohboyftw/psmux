@@ -603,15 +603,12 @@ pub(crate) fn apply_set_option(app: &mut AppState, option: &str, value: &str, _q
                     wp.child.kill().ok();
                 }
                 // Kill the background warm server process
-                let home = std::env::var("USERPROFILE")
-                    .or_else(|_| std::env::var("HOME"))
-                    .unwrap_or_default();
                 let warm_base = if let Some(ref sn) = app.socket_name {
                     format!("{}____warm__", sn)
                 } else {
                     "__warm__".to_string()
                 };
-                let warm_port_path = format!("{}\\.psmux\\{}.port", home, warm_base);
+                let warm_port_path = crate::paths::port_file(&warm_base);
                 if let Ok(port_str) = std::fs::read_to_string(&warm_port_path) {
                     if let Ok(port) = port_str.trim().parse::<u16>() {
                         let addr = format!("127.0.0.1:{}", port);
@@ -620,9 +617,9 @@ pub(crate) fn apply_set_option(app: &mut AppState, option: &str, value: &str, _q
                     }
                 }
                 let _ = std::fs::remove_file(&warm_port_path);
-                let warm_key_path = format!("{}\\.psmux\\{}.key", home, warm_base);
+                let warm_key_path = crate::paths::key_file(&warm_base);
                 let _ = std::fs::remove_file(&warm_key_path);
-                let warm_pipe_path = format!("{}\\.psmux\\{}.pipe", home, warm_base);
+                let warm_pipe_path = crate::paths::pipe_file(&warm_base);
                 let _ = std::fs::remove_file(&warm_pipe_path);
             }
         }

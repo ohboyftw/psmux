@@ -19,14 +19,15 @@ pub fn expand_run_shell_path(cmd: &str) -> String {
         cmd.to_string()
     };
 
-    // Step 2: XDG fallback for plugin paths
-    let home = std::env::var("USERPROFILE")
-        .or_else(|_| std::env::var("HOME"))
-        .unwrap_or_default();
-    let classic_fwd = format!("{}/.psmux/plugins/", home);
-    let classic_win = format!("{}\\.psmux\\plugins\\", home);
+    // Step 2: XDG fallback for plugin paths.
+    // Both separators: the option value is user-written and either spelling
+    // names the same directory on Windows.
+    let home = crate::paths::home_dir();
+    let plugins = crate::paths::psmux_dir_file("plugins");
+    let classic_fwd = format!("{}/", plugins.replace('\\', "/"));
+    let classic_win = format!("{}\\", plugins);
     if cmd.contains(&classic_fwd) || cmd.contains(&classic_win) {
-        let classic_dir = std::path::Path::new(&home).join(".psmux").join("plugins");
+        let classic_dir = std::path::PathBuf::from(&plugins);
         let xdg_base =
             std::env::var("XDG_CONFIG_HOME").unwrap_or_else(|_| format!("{}\\.config", home));
         let xdg_dir = std::path::Path::new(&xdg_base)

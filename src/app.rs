@@ -292,10 +292,7 @@ pub fn run(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> io::Result<
     let listener = TcpListener::bind(("127.0.0.1", 0))?;
     let port = listener.local_addr()?.port();
     app.control_port = Some(port);
-    let home = env::var("USERPROFILE")
-        .or_else(|_| env::var("HOME"))
-        .unwrap_or_default();
-    let dir = format!("{}\\.psmux", home);
+    let dir = crate::paths::psmux_dir();
     let _ = std::fs::create_dir_all(&dir);
     let regpath = format!("{}\\{}.port", dir, app.port_file_base());
     let _ = std::fs::write(&regpath, port.to_string());
@@ -1604,12 +1601,9 @@ pub fn run(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> io::Result<
                     for win in app.windows.iter_mut() {
                         kill_all_children(&mut win.root);
                     }
-                    let home = env::var("USERPROFILE")
-                        .or_else(|_| env::var("HOME"))
-                        .unwrap_or_default();
-                    let regpath = format!("{}/.psmux/{}.port", home, app.port_file_base());
-                    let keypath = format!("{}/.psmux/{}.key", home, app.port_file_base());
-                    let pipepath = format!("{}/.psmux/{}.pipe", home, app.port_file_base());
+                    let regpath = crate::paths::port_file(app.port_file_base());
+                    let keypath = crate::paths::key_file(app.port_file_base());
+                    let pipepath = crate::paths::pipe_file(app.port_file_base());
                     let _ = std::fs::remove_file(&regpath);
                     let _ = std::fs::remove_file(&keypath);
                     let _ = std::fs::remove_file(&pipepath);

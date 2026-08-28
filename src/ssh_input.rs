@@ -1112,10 +1112,7 @@ fn vk_modifiers(state: u32) -> KeyModifiers {
 #[cfg(windows)]
 static SSH_LOG: std::sync::LazyLock<std::sync::Mutex<Option<std::fs::File>>> =
     std::sync::LazyLock::new(|| {
-        let home = std::env::var("USERPROFILE")
-            .or_else(|_| std::env::var("HOME"))
-            .unwrap_or_default();
-        let dir = format!("{}/.psmux", home);
+        let dir = crate::paths::psmux_dir();
         let _ = std::fs::create_dir_all(&dir);
         let f = std::fs::OpenOptions::new()
             .create(true)
