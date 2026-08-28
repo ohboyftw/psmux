@@ -2632,6 +2632,46 @@ fn run_main() -> io::Result<()> {
         }
         // set-option / set - Set an option
         "set-option" | "set" => {
+            // Positionals, with flags and `-t <target>` removed. `-t` is the
+            // only set-option flag that takes a value — `-g/-q/-o/-a/-u/-p` are
+            // all boolean here — and `@user-options` begin with '@', so they
+            // read as positionals.
+            let mut positionals: Vec<&str> = Vec::new();
+            let mut flags = String::new();
+            let mut j = 1;
+            while j < cmd_args.len() {
+                let a = cmd_args[j].as_str();
+                if a == "-t" {
+                    j += 2;
+                    continue;
+                }
+                if a.starts_with('-') && a.len() > 1 {
+                    flags.push_str(&a[1..]);
+                    j += 1;
+                    continue;
+                }
+                positionals.push(a);
+                j += 1;
+            }
+            // An option name carrying no value used to be dropped in silence —
+            // nothing set, empty stderr, exit 0 (#535). It is easy to hit by
+            // accident here: in PowerShell a bare `@name` is the splatting
+            // operator, so a status refresher running `set -g @pill $undefined`
+            // sends one positional, and every layer reported success while the
+            // bar stayed empty. `-q` does not excuse it — it covers unknown or
+            // ambiguous options, and tmux 3.4 still fails `set -gq @foo`.
+            //
+            // tmux TOGGLES this form when the option is a boolean flag. psmux
+            // has no boolean-option classifier and no toggle path for that to
+            // hook into, so every no-value form is an error here instead.
+            if positionals.is_empty() {
+                eprintln!("psmux: set-option: too few arguments (need at least 1)");
+                std::process::exit(1);
+            }
+            if positionals.len() == 1 && !flags.contains('u') && !flags.contains('U') {
+                eprintln!("psmux: set-option: empty value for '{}'", positionals[0]);
+                std::process::exit(1);
+            }
             // Quoting on `contains(' ')` alone let two things through: a value
             // holding a `"` (which toggled quoting on the server and mangled
             // the rest of the line) and a value holding a NEWLINE, which is

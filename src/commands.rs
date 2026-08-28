@@ -456,6 +456,12 @@ pub fn parse_command_line(line: &str) -> Vec<String> {
     let mut current = String::new();
     let mut in_double_quotes = false;
     let mut in_single_quotes = false;
+    // An empty token exists only if it was written as `""` or `''`. Dropping
+    // it along with the whitespace runs cost the caller a real argument:
+    // `set -g @foo ""` — how tmux clears an option — arrived one positional
+    // short, so the server read it as a name with no value and kept the old
+    // value (#535).
+    let mut token_was_quoted = false;
     let chars: Vec<char> = line.chars().collect();
     let mut i = 0;
 
@@ -486,20 +492,23 @@ pub fn parse_command_line(line: &str) -> Vec<String> {
             }
         } else if c == '"' {
             in_double_quotes = !in_double_quotes;
+            token_was_quoted = true;
         } else if c == '\'' && !in_double_quotes {
             in_single_quotes = true;
+            token_was_quoted = true;
         } else if c.is_whitespace() && !in_double_quotes {
-            if !current.is_empty() {
+            if !current.is_empty() || token_was_quoted {
                 args.push(current.clone());
                 current.clear();
             }
+            token_was_quoted = false;
         } else {
             current.push(c);
         }
         i += 1;
     }
 
-    if !current.is_empty() {
+    if !current.is_empty() || token_was_quoted {
         args.push(current);
     }
 
@@ -1582,3 +1591,7 @@ mod tests_new_commands;
 #[cfg(test)]
 #[path = "../tests-rs/test_issue192_command_chaining.rs"]
 mod tests_issue192_command_chaining;
+
+#[cfg(test)]
+#[path = "../tests-rs/test_set_option_no_value.rs"]
+mod tests_set_option_no_value;
