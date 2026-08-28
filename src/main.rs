@@ -2611,16 +2611,17 @@ fn run_main() -> io::Result<()> {
         }
         // set-option / set - Set an option
         "set-option" | "set" => {
+            // Quoting on `contains(' ')` alone let two things through: a value
+            // holding a `"` (which toggled quoting on the server and mangled
+            // the rest of the line) and a value holding a NEWLINE, which is
+            // whitespace but not a space — so it reached the wire raw, the
+            // server's read_line cut the command there, and the tail was
+            // dispatched as a fresh command (#560). quote_arg_if_needed covers
+            // all whitespace plus `"`, and escapes backslashes, so a Windows
+            // path ending in one no longer leaves the string unterminated.
             let cmd_str: String = cmd_args
                 .iter()
-                .map(|s| {
-                    let s = s.as_str();
-                    if s.contains(' ') {
-                        format!("\"{}\"", s.replace('"', "\\\""))
-                    } else {
-                        s.to_string()
-                    }
-                })
+                .map(|s| crate::util::quote_arg_if_needed(s))
                 .collect::<Vec<String>>()
                 .join(" ");
             match send_control(format!("{}\n", cmd_str)) {
@@ -3615,12 +3616,16 @@ fn run_main() -> io::Result<()> {
                     }
                     "-t" => {
                         if let Some(t) = cmd_args.get(i + 1) {
-                            cmd.push_str(&format!(" -t {}", t));
+                            cmd.push_str(&format!(" -t {}", crate::util::quote_arg_if_needed(t)));
                             i += 1;
                         }
                     }
                     s => {
-                        cmd.push_str(&format!(" {}", s));
+                        // The pipe target is a shell command — `cat > 'C:\my
+                        // logs\out.txt'`. Appended raw it split on every space,
+                        // and a newline in it cut the control line and ran the
+                        // tail as a separate command (#560).
+                        cmd.push_str(&format!(" {}", crate::util::quote_arg_if_needed(s)));
                     }
                 }
                 i += 1;
