@@ -878,6 +878,23 @@ pub fn paste_latest(app: &mut AppState) -> io::Result<()> {
     Ok(())
 }
 
+/// The text one screen cell contributes to a captured row.
+///
+/// Three cells all report an empty `contents()` and they do NOT mean the same
+/// thing. A cell that was never written must become a space, or the column
+/// collapses and the row can never reach the pane width — that collapse was
+/// silently concatenating text across gaps in every capture. The second half of
+/// a wide character must contribute NOTHING: the character before it already
+/// occupies this column, so a space here shifts the rest of the row right by
+/// one per wide character.
+fn capture_cell_text(cell: Option<&vt100::Cell>) -> &str {
+    match cell {
+        Some(c) if c.is_wide_continuation() => "",
+        Some(c) if c.has_contents() => c.contents(),
+        _ => " ",
+    }
+}
+
 pub fn capture_active_pane(app: &mut AppState) -> io::Result<()> {
     let win = &mut app.windows[app.active_idx];
     let p = match active_pane_mut(&mut win.root, &win.active_path) {
@@ -893,14 +910,7 @@ pub fn capture_active_pane(app: &mut AppState) -> io::Result<()> {
     for r in 0..p.last_rows {
         let mut row = String::new();
         for c in 0..p.last_cols {
-            // An unwritten cell's contents() is EMPTY, not a space. Pushing it
-            // raw collapsed the column away, so a row could never reach the
-            // pane's full width and -N had nothing to preserve.
-            let contents = screen.cell(r, c).map(|cell| cell.contents());
-            match contents {
-                Some("") | None => row.push(' '),
-                Some(s) => row.push_str(s),
-            }
+            row.push_str(capture_cell_text(screen.cell(r, c)));
         }
         text.push_str(row.trim_end());
         text.push('\n');
@@ -930,14 +940,7 @@ pub fn capture_active_pane_text(
     for r in 0..p.last_rows {
         let mut row = String::new();
         for c in 0..p.last_cols {
-            // An unwritten cell's contents() is EMPTY, not a space. Pushing it
-            // raw collapsed the column away, so a row could never reach the
-            // pane's full width and -N had nothing to preserve.
-            let contents = screen.cell(r, c).map(|cell| cell.contents());
-            match contents {
-                Some("") | None => row.push(' '),
-                Some(s) => row.push_str(s),
-            }
+            row.push_str(capture_cell_text(screen.cell(r, c)));
         }
         // -N keeps the full row width; without it, trim like tmux does.
         if preserve_trailing {
@@ -1438,14 +1441,7 @@ pub fn capture_active_pane_range(
     for r in start..=end {
         let mut row = String::new();
         for c in 0..p.last_cols {
-            // An unwritten cell's contents() is EMPTY, not a space. Pushing it
-            // raw collapsed the column away, so a row could never reach the
-            // pane's full width and -N had nothing to preserve.
-            let contents = screen.cell(r, c).map(|cell| cell.contents());
-            match contents {
-                Some("") | None => row.push(' '),
-                Some(s) => row.push_str(s),
-            }
+            row.push_str(capture_cell_text(screen.cell(r, c)));
         }
         // -N keeps the full row width; without it, trim like tmux does.
         if preserve_trailing {
@@ -1605,12 +1601,7 @@ pub fn capture_active_pane_styled(
                     None
                 };
                 row_sgr.push(sgr);
-                let contents = cell.contents();
-                row_chars.push(if contents.is_empty() {
-                    " ".to_string()
-                } else {
-                    contents.to_string()
-                });
+                row_chars.push(capture_cell_text(Some(cell)).to_string());
             } else {
                 row_sgr.push(None);
                 row_chars.push(" ".to_string());
@@ -1977,4 +1968,39 @@ pub fn select_a_word_big(app: &mut AppState) {
         app.copy_pos = Some((r, end as u16));
     }
     app.copy_selection_mode = crate::types::SelectionMode::Char;
+}
+
+#[cfg(test)]
+mod capture_cell_tests {
+    use super::capture_cell_text;
+
+    /// Build the row string exactly as the capture builders do.
+    fn row_of(input: &str, cols: u16) -> String {
+        let mut parser = vt100::Parser::new(1, cols, 0);
+        parser.process(input.as_bytes());
+        let screen = parser.screen();
+        (0..cols)
+            .map(|c| capture_cell_text(screen.cell(0, c)))
+            .collect()
+    }
+
+    #[test]
+    fn a_wide_character_occupies_two_columns_but_emits_once() {
+        // Its continuation cell reports empty contents(); emitting a space
+        // there shifted everything after it right by one column per wide char.
+        assert_eq!(row_of("\u{6f22}\u{5b57}AB", 10), "\u{6f22}\u{5b57}AB    ");
+    }
+
+    #[test]
+    fn a_never_written_cell_becomes_a_space() {
+        // "A", cursor to column 6, "B". Without the space the two fragments
+        // came back concatenated as "AB".
+        assert_eq!(row_of("A\x1b[6GB", 8), "A    B  ");
+    }
+
+    #[test]
+    fn a_row_of_wide_characters_still_spans_the_full_pane_width() {
+        let row = row_of("\u{6f22}\u{5b57}", 6);
+        assert_eq!(row.chars().count(), 4, "2 wide chars + 2 blank columns");
+    }
 }
