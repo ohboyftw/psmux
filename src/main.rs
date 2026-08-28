@@ -78,6 +78,27 @@ fn main() {
     }
 }
 
+/// Reject a `-t` that names a window or pane which cannot exist.
+///
+/// select-pane and select-window are fire-and-forget: nothing reads the
+/// server's reply, so a server-side "can't find window" is written into a
+/// socket no one is listening on and the client still exits 0. For the exit
+/// code to mean anything, the check has to happen on this side too.
+fn check_target_resolvable(target: &str) -> io::Result<()> {
+    let pt = crate::cli::parse_target(target);
+    let kind = if pt.window_unresolved {
+        "window"
+    } else if pt.pane_unresolved {
+        "pane"
+    } else {
+        return Ok(());
+    };
+    Err(io::Error::new(
+        io::ErrorKind::NotFound,
+        format!("can't find {kind}: {target}"),
+    ))
+}
+
 fn run_main() -> io::Result<()> {
     let args: Vec<String> = crate::cli::normalize_flag_equals(env::args().collect());
 
@@ -1586,6 +1607,7 @@ fn run_main() -> io::Result<()> {
                 match cmd_args[i].as_str() {
                     "-t" => {
                         if let Some(t) = cmd_args.get(i + 1) {
+                            check_target_resolvable(t)?;
                             cmd.push_str(&format!(" -t {}", t));
                             i += 1;
                         }
@@ -1624,6 +1646,7 @@ fn run_main() -> io::Result<()> {
                 match cmd_args[i].as_str() {
                     "-t" => {
                         if let Some(t) = cmd_args.get(i + 1) {
+                            check_target_resolvable(t)?;
                             cmd.push_str(&format!(" -t {}", t));
                             i += 1;
                         }
@@ -1733,6 +1756,10 @@ fn run_main() -> io::Result<()> {
                 match cmd_args[i].as_str() {
                     "-t" => {
                         if let Some(t) = cmd_args.get(i + 1) {
+                            // Without this, an unresolvable -t left the target
+                            // unset and kill-window destroyed the ACTIVE window
+                            // instead — silently, at rc 0 (8edd1cb).
+                            check_target_resolvable(t)?;
                             cmd.push_str(&format!(" -t {}", t));
                             i += 1;
                         }

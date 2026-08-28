@@ -616,6 +616,20 @@ pub(crate) fn is_server_refusal(payload: &str) -> bool {
     )
 }
 
+/// True when a reply is the server reporting that the `-t` target does not
+/// resolve, rather than command output.
+///
+/// Same whole-payload discipline as [`is_server_refusal`], and the same
+/// accepted residual: a `capture-pane` of a pane whose entire content is
+/// exactly one of these lines would be misread as an error. That is strictly
+/// better than what it replaces — a typo'd `-t` printing to stdout at rc 0,
+/// which is indistinguishable from the command having worked.
+pub(crate) fn is_unresolved_target(payload: &str) -> bool {
+    let p = payload.trim_end_matches(['\r', '\n']);
+    !p.contains('\n')
+        && (p.starts_with("can't find pane: ") || p.starts_with("can't find window: "))
+}
+
 /// A bare `TcpStream::connect` to a port nothing answers on can hang for the
 /// full Windows SYN-retransmit schedule (~21s) before failing. A live server is
 /// on loopback and completes the handshake in microseconds, so the only thing
@@ -699,6 +713,15 @@ fn exchange_one_shot(
     if is_server_refusal(&result) {
         return Err(io::Error::new(
             io::ErrorKind::PermissionDenied,
+            result.trim_end().to_string(),
+        ));
+    }
+    // An unresolvable `-t` is a failed command, not output. Printed to stdout
+    // at rc 0 it read as success, so a script targeting a pane that had already
+    // died carried on as though it had written to it (#545).
+    if is_unresolved_target(&result) {
+        return Err(io::Error::new(
+            io::ErrorKind::NotFound,
             result.trim_end().to_string(),
         ));
     }
@@ -1404,6 +1427,38 @@ mod server_refusal_tests {
     fn ordinary_output_is_not_a_refusal() {
         assert!(!is_server_refusal(""));
         assert!(!is_server_refusal("0: bash* (1 panes)"));
+    }
+
+    #[test]
+    fn an_unresolvable_pane_target_is_an_error() {
+        assert!(is_unresolved_target("can't find pane: %999"));
+        assert!(is_unresolved_target("can't find pane: sess:0.%999\n"));
+    }
+
+    #[test]
+    fn an_unresolvable_window_target_is_an_error() {
+        assert!(is_unresolved_target("can't find window: sess:nosuchwindow"));
+        assert!(is_unresolved_target("can't find window: @9\r\n"));
+    }
+
+    #[test]
+    fn captured_pane_content_quoting_the_error_is_not_an_error() {
+        // Same reason `is_server_refusal` matches whole payloads: capture-pane
+        // returns arbitrary screen content, and a screen showing this message
+        // among other lines is output, not a failed command.
+        assert!(!is_unresolved_target(
+            "can't find pane: %999\n$ echo done\ndone"
+        ));
+        assert!(!is_unresolved_target(
+            "$ psmux kill-pane -t %999\ncan't find pane: %999"
+        ));
+    }
+
+    #[test]
+    fn ordinary_output_is_not_an_unresolvable_target() {
+        assert!(!is_unresolved_target(""));
+        assert!(!is_unresolved_target("0: bash* (1 panes)"));
+        assert!(!is_unresolved_target("can't find pane"));
     }
 }
 

@@ -1273,7 +1273,13 @@ pub enum CtrlReq {
     ShowBuffer(mpsc::Sender<String>),
     ShowBufferAt(mpsc::Sender<String>, usize),
     DeleteBuffer,
-    DisplayMessage(mpsc::Sender<String>, String, Option<usize>, bool), // resp, format, target_pane_idx, set_status_bar
+    DisplayMessage(mpsc::Sender<String>, String, DisplayTarget, bool), // resp, format, target, set_status_bar
+    /// Does this pane id exist? Answers without moving focus.
+    ///
+    /// `FocusPaneTempCheck` answers the same question, but only as a side
+    /// effect of focusing the pane. `display-message` must not do that: its
+    /// `#{pane_active}` has to keep reporting the REAL active pane (#113).
+    PaneExists(usize, mpsc::Sender<bool>),
     LastWindow,
     LastPane,
     RotateWindow(bool),
@@ -1708,6 +1714,23 @@ pub enum WaitForOp {
     Unlock,
 }
 
+/// Which pane a `display-message` expands its `#{pane_*}` variables against.
+///
+/// This was a bare `Option<usize>` meaning "position within the active window",
+/// and two callers passed a pane *id* into it instead (`wait-pane --ready` and
+/// the backend's `wait_for` ready poll). A pane id read as a position selects a
+/// pane that does not exist, so the poll could never observe readiness — the
+/// same silent-wrong-target failure `-t` validation exists to close.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DisplayTarget {
+    /// No `-t`: the active pane.
+    Active,
+    /// `-t <n>`: the nth pane of the active window.
+    Index(usize),
+    /// `-t %id`: the pane with this id, in whichever window holds it.
+    Id(usize),
+}
+
 /// Parsed target specification from -t argument.
 #[derive(Debug, Clone, Default)]
 pub struct ParsedTarget {
@@ -1716,6 +1739,13 @@ pub struct ParsedTarget {
     pub pane: Option<usize>,
     pub pane_is_id: bool,
     pub window_is_id: bool,
+    /// A non-empty window part was given and does not resolve. `window: None`
+    /// alone cannot say this: it also means "no window part given", which
+    /// legitimately means the current window. Callers that cannot tell the two
+    /// apart fall through to the ACTIVE window and exit 0 on a typo'd `-t`.
+    pub window_unresolved: bool,
+    /// As `window_unresolved`, for the pane part.
+    pub pane_unresolved: bool,
 }
 
 #[cfg(test)]

@@ -529,10 +529,17 @@ pub fn print_commands() {
 pub fn parse_target(target: &str) -> ParsedTarget {
     let mut result = ParsedTarget::default();
 
+    // tmux's `=name` means "match this name exactly". psmux never does prefix
+    // matching, so the marker carries no meaning here — but it still has to be
+    // removed, or it stays part of the session name and matches nothing.
+    let target = target.strip_prefix('=').unwrap_or(target);
+
     if let Some(rest) = target.strip_prefix('%') {
         if let Ok(pid) = rest.parse::<usize>() {
             result.pane = Some(pid);
             result.pane_is_id = true;
+        } else {
+            result.pane_unresolved = true;
         }
         return result;
     }
@@ -540,6 +547,8 @@ pub fn parse_target(target: &str) -> ParsedTarget {
         if let Ok(wid) = rest.parse::<usize>() {
             result.window = Some(wid);
             result.window_is_id = true;
+        } else {
+            result.window_unresolved = true;
         }
         return result;
     }
@@ -578,16 +587,22 @@ pub fn parse_target(target: &str) -> ParsedTarget {
             if let Ok(pid) = rest.parse::<usize>() {
                 result.pane = Some(pid);
                 result.pane_is_id = true;
+            } else {
+                result.pane_unresolved = true;
             }
         } else if let Some(rest) = wp.strip_prefix('@') {
             if let Ok(wid) = rest.parse::<usize>() {
                 result.window = Some(wid);
                 result.window_is_id = true;
+            } else {
+                result.window_unresolved = true;
             }
         } else if let Some(dot_pos) = wp.find('.') {
             if dot_pos > 0 {
                 if let Ok(w) = wp[..dot_pos].parse::<usize>() {
                     result.window = Some(w);
+                } else {
+                    result.window_unresolved = true;
                 }
             }
             // The pane slot accepts a %id as well as an index, exactly as the
@@ -606,9 +621,16 @@ pub fn parse_target(target: &str) -> ParsedTarget {
                 result.pane_is_id = true;
             } else if let Ok(p) = pane_str.parse::<usize>() {
                 result.pane = Some(p);
+            } else if !pane_str.is_empty() {
+                // An EMPTY pane slot ("sess:0.") means the current pane and is
+                // legitimate; a non-empty one that will not parse is a typo.
+                result.pane_unresolved = true;
             }
         } else if let Ok(w) = wp.parse::<usize>() {
             result.window = Some(w);
+        } else if !wp.is_empty() {
+            // psmux has no window-name resolution, so a name here names nothing.
+            result.window_unresolved = true;
         }
     }
 
@@ -628,3 +650,7 @@ mod tests_issue196_flag_equals;
 #[cfg(test)]
 #[path = "../tests-rs/test_pane_target_forms.rs"]
 mod tests_pane_target_forms;
+
+#[cfg(test)]
+#[path = "../tests-rs/test_target_validation.rs"]
+mod tests_target_validation;

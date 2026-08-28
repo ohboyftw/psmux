@@ -23,8 +23,8 @@ use crate::tree::{
     resize_all_panes,
 };
 use crate::types::{
-    Action, AppState, Bind, CtrlReq, FocusDir, LayoutKind, Mode, Node, PipePaneState, WaitChannel,
-    WaitForOp, VERSION,
+    Action, AppState, Bind, CtrlReq, DisplayTarget, FocusDir, LayoutKind, Mode, Node,
+    PipePaneState, WaitChannel, WaitForOp, VERSION,
 };
 
 use helpers::{
@@ -3778,23 +3778,48 @@ pub fn run_server(
                                 app.paste_buffers.remove(0);
                             }
                         }
-                        CtrlReq::DisplayMessage(resp, fmt, target_pane_idx, _) => {
+                        CtrlReq::DisplayMessage(resp, fmt, target, _) => {
                             // Propagate OSC titles so #{pane_title} reflects latest state
                             helpers::propagate_osc_titles(&mut app);
-                            let result = if let Some(pane_idx) = target_pane_idx {
-                                // -t targeting: evaluate format for the specific pane
-                                // using PANE_POS_OVERRIDE so #{pane_active} reflects
-                                // the REAL active pane, not the target (#113)
-                                crate::format::expand_format_for_pane(
+                            // `-t sess:N` temp-focused window N before this
+                            // arrived, so app.active_idx is the TARGET. Tell the
+                            // expander where focus really is, or #{window_active}
+                            // answers the caller's question with its own input.
+                            crate::format::set_real_active_window(
+                                temp_focus_restore.map(|(idx, _)| idx),
+                            );
+                            // -t targeting evaluates the format for the specific pane
+                            // via PANE_POS_OVERRIDE, so #{pane_active} keeps reporting
+                            // the REAL active pane rather than the target (#113).
+                            let result = match target {
+                                DisplayTarget::Active => expand_format(&fmt, &app),
+                                DisplayTarget::Index(pos) => crate::format::expand_format_for_pane(
                                     &fmt,
                                     &app,
                                     app.active_idx,
-                                    pane_idx,
-                                )
-                            } else {
-                                expand_format(&fmt, &app)
+                                    pos,
+                                ),
+                                // A pane id can name a pane in another window, so
+                                // both halves have to be resolved. An id that
+                                // resolves to nothing answers empty on purpose:
+                                // falling back to the active pane is how this
+                                // returned confidently wrong values before.
+                                DisplayTarget::Id(pid) => {
+                                    match crate::tree::find_pane_location(&app, pid) {
+                                        Some((win_idx, pos)) => {
+                                            crate::format::expand_format_for_pane(
+                                                &fmt, &app, win_idx, pos,
+                                            )
+                                        }
+                                        None => String::new(),
+                                    }
+                                }
                             };
+                            crate::format::set_real_active_window(None);
                             let _ = resp.send(result);
+                        }
+                        CtrlReq::PaneExists(pid, resp) => {
+                            let _ = resp.send(crate::tree::find_pane_location(&app, pid).is_some());
                         }
                         CtrlReq::LastWindow => {
                             if app.windows.len() > 1 && app.last_window_idx < app.windows.len() {

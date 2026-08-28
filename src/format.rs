@@ -20,6 +20,25 @@ use crate::types::{AppState, LayoutKind, Mode, Node, Pane, VERSION};
 thread_local! {
     static PANE_POS_OVERRIDE: Cell<Option<usize>> = const { Cell::new(None) };
     static BUFFER_IDX_OVERRIDE: Cell<Option<usize>> = const { Cell::new(None) };
+    /// The window that is *really* active, while `-t` targeting has temporarily
+    /// moved `app.active_idx` somewhere else.
+    static REAL_ACTIVE_WIN: Cell<Option<usize>> = const { Cell::new(None) };
+}
+
+/// Tell format expansion which window is really active, for the window of a
+/// request that temp-focused a `-t` target.
+///
+/// `-t` targeting works by moving `app.active_idx` and restoring it after the
+/// batch, so during expansion `app.active_idx` IS the target. `#{window_active}`
+/// and `#{window_flags}` then reported the target as current — which is exactly
+/// the question the caller was asking, answered with its own input.
+pub fn set_real_active_window(idx: Option<usize>) {
+    REAL_ACTIVE_WIN.set(idx);
+}
+
+/// The active window as the user sees it, ignoring any temporary `-t` focus.
+fn real_active_idx(app: &AppState) -> usize {
+    REAL_ACTIVE_WIN.get().unwrap_or(app.active_idx)
 }
 
 /// Set the buffer index for per-buffer format expansion in list-buffers -F.
@@ -1330,7 +1349,7 @@ pub fn expand_var(var: &str, app: &AppState, win_idx: usize) -> String {
         "window_index" => (win_idx + app.window_base_index).to_string(),
         "window_name" => win.name.clone(),
         "window_active" => {
-            if win_idx == app.active_idx {
+            if win_idx == real_active_idx(app) {
                 "1".into()
             } else {
                 "0".into()
@@ -1339,7 +1358,7 @@ pub fn expand_var(var: &str, app: &AppState, win_idx: usize) -> String {
         "window_panes" => count_panes(&win.root).to_string(),
         "window_flags" | "window_raw_flags" => {
             let mut f = String::new();
-            if win_idx == app.active_idx {
+            if win_idx == real_active_idx(app) {
                 f.push('*');
             } else if win_idx == app.last_window_idx {
                 f.push('-');

@@ -901,6 +901,18 @@ pub fn find_window_index_by_id(app: &AppState, wid: usize) -> Option<usize> {
     app.windows.iter().position(|w| w.id == wid)
 }
 
+/// Locate a pane by id as `(window index, position within that window)`.
+///
+/// Both halves are needed: a pane id says nothing about which window holds it,
+/// and `expand_format_for_pane` has to be told the window. Resolving only the
+/// position and assuming the active window silently answers for the wrong pane
+/// whenever the target lives elsewhere.
+pub fn find_pane_location(app: &AppState, pane_id: usize) -> Option<(usize, usize)> {
+    app.windows.iter().enumerate().find_map(|(idx, win)| {
+        get_pane_position_in_window(&win.root, pane_id).map(|pos| (idx, pos))
+    })
+}
+
 pub fn focus_pane_by_id(app: &mut AppState, pid: usize) {
     focus_pane_by_id_inner(app, pid, true);
 }

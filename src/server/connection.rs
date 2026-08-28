@@ -5,7 +5,7 @@ use std::sync::mpsc;
 use std::time::Duration;
 
 use crate::cli::parse_target;
-use crate::types::{CtrlReq, LayoutKind, WaitForOp};
+use crate::types::{CtrlReq, DisplayTarget, LayoutKind, WaitForOp};
 use crate::util::base64_decode;
 
 static NEXT_CLIENT_ID: AtomicU64 = AtomicU64::new(1);
@@ -273,6 +273,9 @@ pub(crate) fn handle_connection(
         // Save raw -t value for relative pane targets like :.+ or :.-
         // Falls back to global_raw_target from TARGET protocol line
         let mut raw_target: Option<String> = global_raw_target.clone();
+        // A target part that was GIVEN but does not resolve — as opposed to one
+        // that was omitted, which legitimately means "current".
+        let mut unresolved_target: Option<(&'static str, String)> = None;
         let mut i = 0;
         while i < args.len() {
             if args[i] == "-t" {
@@ -286,6 +289,11 @@ pub(crate) fn handle_connection(
                     if pt.pane.is_some() {
                         target_pane = pt.pane;
                         pane_is_id = pt.pane_is_id;
+                    }
+                    if pt.window_unresolved {
+                        unresolved_target = Some(("window", v.to_string()));
+                    } else if pt.pane_unresolved {
+                        unresolved_target = Some(("pane", v.to_string()));
                     }
                 }
                 i += 2;
@@ -307,6 +315,23 @@ pub(crate) fn handle_connection(
             }
             filtered
         };
+        // A `-t` that names something which cannot exist is an error, not a
+        // reason to fall back. Dropping it is how `-t sess:nosuchwindow` came to
+        // run against whatever window was ACTIVE and still exit 0.
+        //
+        // detach-client is exempt: its `-t` names a CLIENT, not a pane or a
+        // window, so pane/window syntax does not apply to it (98a9188).
+        if let Some((kind, raw)) = &unresolved_target {
+            if !matches!(cmd, "detach-client" | "detach") {
+                let _ = writeln!(write_stream, "can't find {}: {}", kind, raw);
+                let _ = write_stream.flush();
+                // `line` still holds THIS command, and the loop head only reads
+                // a new one when it is empty. Skipping the clear re-runs the
+                // same command forever (see the same clear at the loop tail).
+                line.clear();
+                continue;
+            }
+        }
         // Commands that should permanently change focus when used with -t.
         // split-window is deliberately excluded (#71): it uses temp focus so
         // that split-window -t <target> doesn't pollute the target pane's
@@ -326,6 +351,21 @@ pub(crate) fn handle_connection(
         };
         let skip_pane_focus = matches!(cmd, "display-message" | "display");
         let mut target_pane_not_found = false;
+        // display-message must not move focus — #{pane_active} has to keep
+        // reporting the real active pane (#113) — but an unresolvable -t still
+        // has to fail rather than quietly answer for whatever is active.
+        if skip_pane_focus && pane_is_id {
+            if let Some(pid) = target_pane {
+                let (exists_tx, exists_rx) = mpsc::channel();
+                let _ = tx.send(CtrlReq::PaneExists(pid, exists_tx));
+                if !matches!(
+                    exists_rx.recv_timeout(std::time::Duration::from_secs(2)),
+                    Ok(true)
+                ) {
+                    target_pane_not_found = true;
+                }
+            }
+        }
         if !skip_pane_focus && targeted_kill_pane_id.is_none() {
             if let Some(pid) = target_pane {
                 if is_focus_cmd {
@@ -362,6 +402,11 @@ pub(crate) fn handle_connection(
                 raw_target.as_deref().unwrap_or(&pane_id_str)
             );
             let _ = write_stream.flush();
+            // Without this clear the loop head — which only reads a new command
+            // when `line` is empty — re-ran this same command forever, spinning
+            // the server and growing the client's reply buffer without bound.
+            // `send-keys -t %<dead pane>` was enough to trigger it.
+            line.clear();
             continue;
         }
         match cmd {
@@ -1343,10 +1388,16 @@ pub(crate) fn handle_connection(
                 }
 
                 let fmt = parts.join(" ");
-                // Pass target pane index for PANE_POS_OVERRIDE (#113).
-                let target_pane_idx: Option<usize> = if !pane_is_id { target_pane } else { None };
+                // Pass the target through for PANE_POS_OVERRIDE (#113). A `%id`
+                // used to be discarded here, so `display-message -t %N` silently
+                // answered for whichever pane happened to be ACTIVE.
+                let target = match (target_pane, pane_is_id) {
+                    (Some(pid), true) => DisplayTarget::Id(pid),
+                    (Some(pos), false) => DisplayTarget::Index(pos),
+                    (None, _) => DisplayTarget::Active,
+                };
                 let (rtx, rrx) = mpsc::channel::<String>();
-                let _ = tx.send(CtrlReq::DisplayMessage(rtx, fmt, target_pane_idx, false));
+                let _ = tx.send(CtrlReq::DisplayMessage(rtx, fmt, target, false));
                 if let Ok(text) = rrx.recv() {
                     if json_mode {
                         let info = crate::util::DisplayMessageJson { message: text };
@@ -1924,7 +1975,7 @@ pub(crate) fn handle_connection(
                         let _ = tx.send(CtrlReq::DisplayMessage(
                             cwd_tx,
                             "#{pane_current_path}".to_string(),
-                            None,
+                            DisplayTarget::Active,
                             false,
                         ));
                         let base_dir = cwd_rx
@@ -1967,7 +2018,10 @@ pub(crate) fn handle_connection(
                             let _ = tx.send(CtrlReq::DisplayMessage(
                                 ptx,
                                 "#{pane_ready}".to_string(),
-                                target_pane_id,
+                                // A pane ID, not a position: passing it as one
+                                // polled a pane index that cannot exist, so
+                                // `--ready` could never observe readiness.
+                                target_pane_id.map_or(DisplayTarget::Active, DisplayTarget::Id),
                                 false,
                             ));
                             let ready = prx
@@ -2403,7 +2457,7 @@ pub(crate) fn handle_connection(
                         let _ = tx.send(CtrlReq::DisplayMessage(
                             rtx,
                             condition.to_string(),
-                            None,
+                            DisplayTarget::Active,
                             false,
                         ));
                         let expanded = rrx.recv().unwrap_or_default();
@@ -2459,7 +2513,12 @@ pub(crate) fn handle_connection(
                     }
                 } else if let Some(fmt_str) = fmt {
                     let (rtx, rrx) = mpsc::channel::<String>();
-                    let _ = tx.send(CtrlReq::DisplayMessage(rtx, fmt_str, None, false));
+                    let _ = tx.send(CtrlReq::DisplayMessage(
+                        rtx,
+                        fmt_str,
+                        DisplayTarget::Active,
+                        false,
+                    ));
                     if let Ok(text) = rrx.recv() {
                         let _ = writeln!(write_stream, "{}", text);
                         let _ = write_stream.flush();

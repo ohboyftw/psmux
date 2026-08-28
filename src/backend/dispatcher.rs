@@ -6,7 +6,7 @@
 
 use std::sync::mpsc;
 
-use crate::types::CtrlReq;
+use crate::types::{CtrlReq, DisplayTarget};
 
 use super::protocol::*;
 
@@ -849,7 +849,8 @@ fn handle_wait_for(
                 let _ = tx.send(CtrlReq::DisplayMessage(
                     ptx,
                     "#{pane_ready}".to_string(),
-                    pane_id,
+                    // A pane ID, not a position — see the same fix in connection.rs.
+                    pane_id.map_or(DisplayTarget::Active, DisplayTarget::Id),
                     false,
                 ));
                 let ready = prx
