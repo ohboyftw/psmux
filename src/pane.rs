@@ -242,6 +242,7 @@ pub fn create_window(
         .slave
         .spawn_command(shell_cmd)
         .map_err(|e| io::Error::other(format!("spawn shell error: {e}")))?;
+    crate::proc_stats::record_spawn(crate::proc_stats::SpawnKind::Pane);
     // On Windows ConPTY the slave handle MUST be closed after spawning so the
     // child owns the sole reference to the console input pipe.  Leaving it open
     // causes "The handle is invalid" IOExceptions inside the child process.
@@ -428,6 +429,7 @@ pub fn spawn_warm_pane(
         .slave
         .spawn_command(shell_cmd)
         .map_err(|e| io::Error::other(format!("spawn shell error: {e}")))?;
+    crate::proc_stats::record_spawn(crate::proc_stats::SpawnKind::Pane);
     drop(pair.slave);
     let scrollback = app.history_limit as u32;
     let term: Arc<Mutex<vt100::Parser>> = Arc::new(Mutex::new(vt100::Parser::new(
@@ -507,6 +509,7 @@ pub fn create_window_raw(
         .slave
         .spawn_command(shell_cmd)
         .map_err(|e| io::Error::other(format!("spawn shell error: {e}")))?;
+    crate::proc_stats::record_spawn(crate::proc_stats::SpawnKind::Pane);
     // Close the slave handle immediately – see create_window() comment.
     drop(pair.slave);
 
@@ -848,6 +851,7 @@ pub fn split_active_with_command(
         .slave
         .spawn_command(shell_cmd)
         .map_err(|e| io::Error::other(format!("spawn shell error: {e}")))?;
+    crate::proc_stats::record_spawn(crate::proc_stats::SpawnKind::Pane);
     // Close the slave handle immediately – see create_window() comment.
     drop(pair.slave);
     let term: Arc<Mutex<vt100::Parser>> = Arc::new(Mutex::new(vt100::Parser::new(

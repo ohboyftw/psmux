@@ -285,6 +285,32 @@ pub fn expand_format_for_window(fmt: &str, app: &AppState, win_idx: usize) -> St
     result
 }
 
+/// Resolve the process-accounting variables (`zombie_count`, `spawn_*`).
+/// Spawn counts cover this server only, since it started.
+fn proc_stat_var(var: &str, app: &AppState) -> Option<String> {
+    use crate::proc_stats::{spawn_count, SpawnKind};
+    let n = match var {
+        // Empty until the first background scan finishes.
+        "zombie_count" => {
+            let refresh = std::time::Duration::from_secs(app.status_interval);
+            return Some(
+                crate::proc_stats::zombie_count(refresh)
+                    .map(|n| n.to_string())
+                    .unwrap_or_default(),
+            );
+        }
+        "spawn_pane" => spawn_count(SpawnKind::Pane),
+        "spawn_status" => spawn_count(SpawnKind::Status),
+        "spawn_other" => spawn_count(SpawnKind::Other),
+        "spawn_count" => [SpawnKind::Pane, SpawnKind::Status, SpawnKind::Other]
+            .into_iter()
+            .map(spawn_count)
+            .sum(),
+        _ => return None,
+    };
+    Some(n.to_string())
+}
+
 /// Execute a shell command and return its stdout (trimmed).
 /// Used for `#(command)` expansion (tmux compatibility).
 ///
@@ -325,6 +351,7 @@ fn run_shell_command(cmd: &str, app: &AppState) -> String {
 
     let output = match child {
         Ok(child) => {
+            crate::proc_stats::record_spawn(crate::proc_stats::SpawnKind::Status);
             // Wait with a 2-second timeout using a helper thread.
             let timeout = Duration::from_secs(2);
             wait_with_timeout(child, timeout)
@@ -1276,6 +1303,9 @@ fn find_comparison_in_cond(cond: &str) -> Option<(&str, &str, &str)> {
 
 /// Expand a named variable.
 pub fn expand_var(var: &str, app: &AppState, win_idx: usize) -> String {
+    if let Some(v) = proc_stat_var(var, app) {
+        return v;
+    }
     let win = match app.windows.get(win_idx) {
         Some(w) => w,
         None => {

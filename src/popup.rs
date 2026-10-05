@@ -60,6 +60,7 @@ pub fn create_popup_pane(
     }
 
     let child = pair.slave.spawn_command(cmd_builder).ok()?;
+    crate::proc_stats::record_spawn(crate::proc_stats::SpawnKind::Pane);
     drop(pair.slave); // required for ConPTY
 
     let term: Arc<Mutex<vt100::Parser>> = Arc::new(Mutex::new(vt100::Parser::new(rows, cols, 0)));

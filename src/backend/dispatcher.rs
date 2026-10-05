@@ -635,6 +635,7 @@ fn handle_run_shell(
         message: format!("Failed to spawn: {e}"),
         data: Some(serde_json::json!({ "command": p.command })),
     })?;
+    crate::proc_stats::record_spawn(crate::proc_stats::SpawnKind::Other);
 
     // Take stdout/stderr pipes before poll loop
     let mut stdout_pipe = child.stdout.take();

@@ -851,6 +851,7 @@ fn pipe_text_to_command(text: &str, cmd: &str) {
         .hide_window()
         .spawn()
     {
+        crate::proc_stats::record_spawn(crate::proc_stats::SpawnKind::Other);
         if let Some(mut stdin) = child.stdin.take() {
             let _ = stdin.write_all(text.as_bytes());
         }

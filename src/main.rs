@@ -21,6 +21,7 @@ mod pane;
 mod paths;
 mod platform;
 mod popup;
+mod proc_stats;
 mod rendering;
 mod resurrection;
 mod server;
@@ -98,6 +99,40 @@ fn check_target_resolvable(target: &str) -> io::Result<()> {
         io::ErrorKind::NotFound,
         format!("{prefix}{target}"),
     ))
+}
+
+/// `psmux debug spawns`: print how many processes the target server has
+/// started, by kind, and the machine-wide zombie count.
+fn print_spawn_stats() -> io::Result<()> {
+    let resp = send_control_with_response(
+        "display-message -p \"#{session_name} #{spawn_pane} #{spawn_status} #{spawn_other} #{spawn_count} #{zombie_count}\"\n"
+            .to_string(),
+    )?;
+    let f: Vec<&str> = resp.split_whitespace().collect();
+    if f.len() < 5 {
+        return Err(io::Error::other(format!(
+            "unexpected server reply: {resp:?}"
+        )));
+    }
+    println!("Processes started by server '{}' since it began:", f[0]);
+    println!(
+        "  pane shells   {:>8}  (each also starts a hidden console host)",
+        f[1]
+    );
+    println!("  status #()    {:>8}", f[2]);
+    println!("  other         {:>8}  (run-shell, hooks, if-shell, copy-pipe, exec, plugins, toasts, warm pool)", f[3]);
+    println!("  total         {:>8}", f[4]);
+    match f.get(5).and_then(|z| z.parse::<u64>().ok()) {
+        Some(z) => println!(
+            "Zombie processes on this machine: {z} (~{:.1} GB)",
+            z as f64 * 64.0 / (1024.0 * 1024.0)
+        ),
+        None => println!("Zombie processes on this machine: scanning, run again in a few seconds"),
+    }
+    println!(
+        "Not counted: if-shell sent from the command line, and processes started by other psmux servers (each warm-pool server keeps its own count)."
+    );
+    Ok(())
 }
 
 fn run_main() -> io::Result<()> {
@@ -3024,8 +3059,15 @@ fn run_main() -> io::Result<()> {
                         }
                     }
                 }
+                "spawns" => {
+                    print_spawn_stats()?;
+                    return Ok(());
+                }
                 _ => {
-                    eprintln!("psmux debug: unknown subcommand '{sub}'\nusage: psmux debug crashes list|show");
+                    eprintln!(
+                        "psmux debug: unknown subcommand '{sub}'\n\
+                         usage: psmux debug crashes list|show | psmux debug spawns"
+                    );
                     std::process::exit(2);
                 }
             }

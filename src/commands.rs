@@ -83,6 +83,9 @@ pub fn resolve_run_shell() -> (String, Vec<String>) {
 /// (e.g., `pwsh -NoProfile -File script.ps1`). Also detects bare `.ps1` file
 /// paths and uses `-File` instead of `-Command` for reliable path handling.
 pub fn build_run_shell_command(shell_cmd: &str) -> std::process::Command {
+    // Counted here rather than at each caller: every caller spawns the result
+    // immediately, and one caller lives in server/connection.rs.
+    crate::proc_stats::record_spawn(crate::proc_stats::SpawnKind::Other);
     #[cfg(windows)]
     {
         let lower = shell_cmd.trim_start().to_lowercase();

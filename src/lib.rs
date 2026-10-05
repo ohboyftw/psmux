@@ -11,6 +11,7 @@ pub mod hints;
 pub mod mycel;
 pub mod octal;
 pub mod paths;
+pub mod proc_stats;
 pub mod orchestrate;
 pub mod remote;
 pub mod session;

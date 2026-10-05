@@ -64,6 +64,7 @@ fn fire_toast_notification(title: &str, body: &str) {
     );
     std::thread::spawn(move || {
         use crate::platform::HideWindowCommandExt;
+        crate::proc_stats::record_spawn(crate::proc_stats::SpawnKind::Other);
         let _ = std::process::Command::new("powershell")
             .args(["-NoProfile", "-NonInteractive", "-Command", &script])
             .stdin(std::process::Stdio::null())

@@ -1880,6 +1880,7 @@ fn parse_if_shell(app: &mut AppState, line: &str) {
     let false_cmd = positional.get(2);
 
     let success = if format_mode {
+            crate::proc_stats::record_spawn(crate::proc_stats::SpawnKind::Other);
         let expanded = crate::format::expand_format(condition, app);
         !expanded.is_empty() && expanded != "0"
     } else if condition == "true" || condition == "1" {

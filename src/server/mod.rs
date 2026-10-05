@@ -378,7 +378,9 @@ fn spawn_one_warm_server(app: &AppState, warm_session_name: &str) -> bool {
     }
     #[cfg(windows)]
     {
-        let _ = crate::platform::spawn_server_hidden(&exe, &args);
+        if crate::platform::spawn_server_hidden(&exe, &args).is_ok() {
+            crate::proc_stats::record_spawn(crate::proc_stats::SpawnKind::Other);
+        }
     }
     #[cfg(not(windows))]
     {
@@ -849,6 +851,7 @@ pub fn run_server(
             cmd.stdout(std::process::Stdio::null());
             cmd.stderr(std::process::Stdio::null());
             if let Ok(child) = cmd.spawn() {
+                crate::proc_stats::record_spawn(crate::proc_stats::SpawnKind::Other);
                 children.push(child);
             }
         }
@@ -2816,6 +2819,9 @@ pub fn run_server(
                                                 .stderr(std::process::Stdio::null())
                                                 .spawn()
                                             {
+                                                crate::proc_stats::record_spawn(
+                                                    crate::proc_stats::SpawnKind::Other,
+                                                );
                                                 if let Some(mut stdin) = child.stdin.take() {
                                                     use std::io::Write;
                                                     let _ = stdin.write_all(text.as_bytes());
