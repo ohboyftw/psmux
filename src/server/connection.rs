@@ -1180,21 +1180,19 @@ pub(crate) fn handle_connection(
                 }
             }
             "wait-pane" | "waitp" => {
-                // Parse -t %N for target pane ID
-                let mut pane_id: Option<usize> = None;
+                // The `-t` prefilter above already resolved the target AND rebuilt
+                // `args` without `-t` and its value, so the re-scan that used to
+                // live here matched nothing: pane_id stayed None on every
+                // invocation, the readiness poll below was unreachable, and every
+                // call short-circuited to "1" — wait-pane never worked from the
+                // CLI. Take the resolved value, as the wait-for --ready arm does.
+                let pane_id: Option<usize> = if pane_is_id { target_pane } else { None };
                 // --timeout is milliseconds (matches wait-for semantics).
                 let mut timeout_ms: Option<u64> = None;
                 let mut wait_ready = false;
                 let mut i = 0;
                 while i < args.len() {
                     match args[i] {
-                        "-t" => {
-                            if let Some(target) = args.get(i + 1) {
-                                let target_str = target.trim_start_matches('%');
-                                pane_id = target_str.parse::<usize>().ok();
-                                i += 1;
-                            }
-                        }
                         "--timeout" => {
                             if let Some(val) = args.get(i + 1) {
                                 timeout_ms = val.parse::<u64>().ok();
