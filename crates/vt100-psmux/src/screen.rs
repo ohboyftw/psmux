@@ -125,6 +125,11 @@ pub struct Screen {
     /// OSC 777 (rxvt-unicode).  Each entry is (title, body).
     /// Drained by the server loop to fire Windows toast notifications.
     pub(crate) notifications: Vec<(String, String)>,
+
+    /// Replies owed to the child for terminal queries it sent (cursor
+    /// position, device attributes).  Drained by the PTY reader thread and
+    /// written to the child's input.
+    replies: Vec<u8>,
 }
 
 impl Screen {
@@ -147,6 +152,7 @@ impl Screen {
             squelch_cleared: false,
             squelch_clear_pending: false,
             notifications: Vec::new(),
+            replies: Vec::new(),
         }
     }
 
@@ -688,6 +694,19 @@ impl Screen {
     /// Returns (title, body) pairs.
     pub fn drain_notifications(&mut self) -> Vec<(String, String)> {
         std::mem::take(&mut self.notifications)
+    }
+
+    /// Take the replies queued for terminal queries the child has sent.
+    pub fn take_replies(&mut self) -> Vec<u8> {
+        std::mem::take(&mut self.replies)
+    }
+
+    /// Queue a reply to a terminal query (called from `csi_dispatch`).
+    pub(crate) fn push_reply(&mut self, reply: &[u8]) {
+        // A child that floods queries while nothing drains must not grow this.
+        if self.replies.len() + reply.len() <= 4096 {
+            self.replies.extend_from_slice(reply);
+        }
     }
 
     /// Push a desktop notification (called from `osc_dispatch`).

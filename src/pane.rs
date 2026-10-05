@@ -15,14 +15,12 @@ use crate::types::{AppState, LayoutKind, Node, Pane, PassthroughQueue, Window};
 /// real terminal keeps its user-configured default cursor.
 pub const CURSOR_SHAPE_UNSET: u8 = 255;
 
-/// Send a preemptive cursor-position report (\x1b[1;1R) to the ConPTY input pipe.
+/// Send a preemptive cursor-position report ([1;1R) to the ConPTY input pipe.
 ///
-/// Windows ConPTY sends a Device Status Report (\x1b[6n]) during initialization
-/// and **blocks** until the host responds with a cursor-position report.  In
-/// portable-pty ≤0.2 this was handled internally, but 0.9+ exposes raw handles
-/// and the host must respond.  Writing the response preemptively (before the
-/// reader thread even starts) is safe because the data sits in the pipe buffer
-/// and ConPTY reads it when ready.
+/// Windows ConPTY sends a Device Status Report ([6n]) during initialization
+/// and **blocks** until the host responds with a cursor-position report.
+/// Regular panes answer it from `spawn_reader_thread`; this is only for the
+/// popup, whose reader thread does not answer queries.
 pub fn conpty_preemptive_dsr_response(writer: &mut dyn std::io::Write) {
     let _ = writer.write_all(b"\x1b[1;1R");
     let _ = writer.flush();
@@ -268,8 +266,13 @@ pub fn create_window(
         .try_clone_reader()
         .map_err(|e| io::Error::other(format!("clone reader error: {e}")))?;
 
+    let reply_writer = pair
+        .master
+        .try_clone_writer()
+        .map_err(|e| io::Error::other(format!("clone writer error: {e}")))?;
     spawn_reader_thread(
         reader,
+        reply_writer,
         term_reader,
         dv_writer,
         cs_writer,
@@ -283,11 +286,10 @@ pub fn create_window(
         Some(app.default_shell.as_str())
     };
     let child_pid = crate::platform::mouse_inject::get_child_pid(&*child);
-    let mut pty_writer = pair
+    let pty_writer = pair
         .master
         .take_writer()
         .map_err(|e| io::Error::other(format!("take writer error: {e}")))?;
-    conpty_preemptive_dsr_response(&mut *pty_writer);
     let epoch = std::time::Instant::now() - Duration::from_secs(2);
     let pane_id = app.next_pane_id;
     // Compute shell_name: basename of the shell used for this pane.
@@ -450,13 +452,24 @@ pub fn spawn_warm_pane(
         .map_err(|e| io::Error::other(format!("clone reader error: {e}")))?;
     // Warm panes don't need last_output_time tracking — they get a fresh Arc
     // when adopted into a Pane struct.
-    spawn_reader_thread(reader, term_reader, dv_writer, cs_writer, None, bell_writer);
+    let reply_writer = pair
+        .master
+        .try_clone_writer()
+        .map_err(|e| io::Error::other(format!("clone writer error: {e}")))?;
+    spawn_reader_thread(
+        reader,
+        reply_writer,
+        term_reader,
+        dv_writer,
+        cs_writer,
+        None,
+        bell_writer,
+    );
     let child_pid = crate::platform::mouse_inject::get_child_pid(&*child);
-    let mut pty_writer = pair
+    let pty_writer = pair
         .master
         .take_writer()
         .map_err(|e| io::Error::other(format!("take writer error: {e}")))?;
-    conpty_preemptive_dsr_response(&mut *pty_writer);
     Ok(crate::types::WarmPane {
         master: pair.master,
         writer: pty_writer,
@@ -531,8 +544,13 @@ pub fn create_window_raw(
         .try_clone_reader()
         .map_err(|e| io::Error::other(format!("clone reader error: {e}")))?;
 
+    let reply_writer = pair
+        .master
+        .try_clone_writer()
+        .map_err(|e| io::Error::other(format!("clone writer error: {e}")))?;
     spawn_reader_thread(
         reader,
+        reply_writer,
         term_reader,
         dv_writer,
         cs_writer,
@@ -541,11 +559,10 @@ pub fn create_window_raw(
     );
 
     let child_pid = crate::platform::mouse_inject::get_child_pid(&*child);
-    let mut pty_writer = pair
+    let pty_writer = pair
         .master
         .take_writer()
         .map_err(|e| io::Error::other(format!("take writer error: {e}")))?;
-    conpty_preemptive_dsr_response(&mut *pty_writer);
     let epoch = std::time::Instant::now() - Duration::from_secs(2);
     let raw_pane_id = app.next_pane_id;
     let raw_win_name = std::path::Path::new(&raw_args[0])
@@ -872,8 +889,13 @@ pub fn split_active_with_command(
     let cs_writer = cursor_shape.clone();
     let bell_pending = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
     let bell_writer = bell_pending.clone();
+    let reply_writer = pair
+        .master
+        .try_clone_writer()
+        .map_err(|e| io::Error::other(format!("clone writer error: {e}")))?;
     spawn_reader_thread(
         reader,
+        reply_writer,
         term_reader,
         dv_writer,
         cs_writer,
@@ -881,11 +903,10 @@ pub fn split_active_with_command(
         bell_writer,
     );
     let child_pid = crate::platform::mouse_inject::get_child_pid(&*child);
-    let mut pty_writer = pair
+    let pty_writer = pair
         .master
         .take_writer()
         .map_err(|e| io::Error::other(format!("take writer error: {e}")))?;
-    conpty_preemptive_dsr_response(&mut *pty_writer);
     let epoch = std::time::Instant::now() - Duration::from_secs(2);
     let split_pane_id = app.next_pane_id;
     // Compute shell_name: basename of the shell actually used for this pane.
@@ -1668,6 +1689,7 @@ fn scan_rmcup(data: &[u8]) -> bool {
 
 pub fn spawn_reader_thread(
     mut reader: Box<dyn std::io::Read + Send>,
+    mut reply_writer: Box<dyn std::io::Write + Send>,
     term_reader: Arc<Mutex<vt100::Parser>>,
     dv_writer: Arc<std::sync::atomic::AtomicU64>,
     cursor_shape: Arc<std::sync::atomic::AtomicU8>,
@@ -1694,8 +1716,19 @@ pub fn spawn_reader_thread(
                         bell_pending.store(true, std::sync::atomic::Ordering::Release);
                     }
                     let rmcup = scan_rmcup(&local[..n]);
-                    if let Ok(mut parser) = term_reader.lock() {
-                        parser.process(&local[..n]);
+                    let replies = match term_reader.lock() {
+                        Ok(mut parser) => {
+                            parser.process(&local[..n]);
+                            parser.screen_mut().take_replies()
+                        }
+                        Err(_) => Vec::new(),
+                    };
+                    // Answer cursor-position / device-attribute queries.
+                    // This includes the one ConPTY sends at startup and
+                    // blocks on.  Written outside the parser lock.
+                    if !replies.is_empty() {
+                        let _ = reply_writer.write_all(&replies);
+                        let _ = reply_writer.flush();
                     }
                     // When TUI sends RMCUP, reset cursor shape so it
                     // doesn't persist from the exiting TUI app.

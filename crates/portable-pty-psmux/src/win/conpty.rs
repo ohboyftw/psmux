@@ -133,6 +133,15 @@ impl MasterPty for ConPtyMasterPty {
         Ok(Box::new(self.inner.lock().unwrap().readable.try_clone()?))
     }
 
+    fn try_clone_writer(&self) -> anyhow::Result<Box<dyn std::io::Write + Send>> {
+        let inner = self.inner.lock().unwrap();
+        let writable = inner
+            .writable
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("writer already taken"))?;
+        Ok(Box::new(writable.try_clone()?))
+    }
+
     fn take_writer(&self) -> anyhow::Result<Box<dyn std::io::Write + Send>> {
         Ok(Box::new(
             self.inner

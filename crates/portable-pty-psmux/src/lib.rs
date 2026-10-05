@@ -101,6 +101,13 @@ pub trait MasterPty: Downcast + Send {
     /// It is invalid to take the writer more than once.
     fn take_writer(&self) -> Result<Box<dyn std::io::Write + Send>, Error>;
 
+    /// Obtain an extra writable handle to the slave's input, for a thread
+    /// other than the one that owns the handle from `take_writer`.
+    /// Must be called before `take_writer`.
+    fn try_clone_writer(&self) -> Result<Box<dyn std::io::Write + Send>, Error> {
+        anyhow::bail!("this pty does not support cloning the writer")
+    }
+
     /// If applicable to the type of the tty, return the local process id
     /// of the process group or session leader
     #[cfg(unix)]

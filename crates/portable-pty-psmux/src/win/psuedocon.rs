@@ -9,7 +9,7 @@ use std::ffi::OsString;
 use std::io::Error as IoError;
 use std::os::windows::ffi::OsStringExt;
 use std::os::windows::io::{AsRawHandle, FromRawHandle};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use std::{mem, ptr};
 use winapi::shared::minwindef::DWORD;
@@ -29,6 +29,10 @@ pub const PSUEDOCONSOLE_INHERIT_CURSOR: DWORD = 0x1;
 pub const PSEUDOCONSOLE_RESIZE_QUIRK: DWORD = 0x2;
 pub const PSEUDOCONSOLE_WIN32_INPUT_MODE: DWORD = 0x4;
 pub const PSEUDOCONSOLE_PASSTHROUGH_MODE: DWORD = 0x8;
+/// OpenConsole 1.22+ only, where bits 0x18 select how the host measures text
+/// width and 0x8 no longer means passthrough.  wcswidth is per-codepoint,
+/// which is how the vt100-psmux parser measures.
+pub const PSEUDOCONSOLE_GLYPH_WIDTH_WCSWIDTH: DWORD = 0x10;
 
 shared_library!(ConPtyFuncs,
     pub fn CreatePseudoConsole(
@@ -42,21 +46,60 @@ shared_library!(ConPtyFuncs,
     pub fn ClosePseudoConsole(hpc: HPCON),
 );
 
-fn load_conpty() -> ConPtyFuncs {
-    // Always use the system kernel32.dll ConPTY implementation.
-    // Do NOT try to sideload conpty.dll — terminal emulators like WezTerm
-    // bundle their own conpty.dll + OpenConsole.exe, and the DLL search order
-    // can pick those up when psmux runs inside such a terminal.  Using a
-    // foreign conpty.dll causes blank panes and broken I/O because the
-    // bundled OpenConsole.exe may not be compatible with our ConPTY flags
-    // (PASSTHROUGH_MODE, WIN32_INPUT_MODE, etc.).
-    ConPtyFuncs::open(Path::new("kernel32.dll")).expect(
+/// Directory holding a pinned conpty.dll + OpenConsole.exe pair:
+/// `PSMUX_CONPTY_DIR` if set, else `conpty\` next to the psmux executable.
+fn bundled_conpty_dir() -> Option<PathBuf> {
+    if let Some(dir) = std::env::var_os("PSMUX_CONPTY_DIR") {
+        return Some(PathBuf::from(dir));
+    }
+    Some(std::env::current_exe().ok()?.parent()?.join("conpty"))
+}
+
+struct ConPty {
+    funcs: ConPtyFuncs,
+    /// True when `funcs` comes from the pinned conpty.dll, whose flag bits
+    /// differ from kernel32's.
+    bundled: bool,
+}
+
+fn load_conpty() -> ConPty {
+    // Prefer a pinned conpty.dll loaded by FULL PATH.  The inbox conhost.exe
+    // (10.0.26100.9549) access-violates in COOKED_READ_DATA when a TUI that
+    // used the alternate screen exits (OpenCode 2.x), which kills the pane.
+    // OpenConsole 1.23.2510.08001 does not.
+    //
+    // Never load "conpty.dll" by bare name: terminal emulators like WezTerm
+    // bundle their own copy, the DLL search order can pick it up when psmux
+    // runs inside them, and an untested OpenConsole.exe causes blank panes
+    // and broken I/O.
+    //
+    // OpenConsole.exe must be there too: without it conpty.dll silently
+    // launches the inbox conhost and hands it flags it does not understand.
+    if let Some(dir) = bundled_conpty_dir() {
+        let dll = dir.join("conpty.dll");
+        if dll.is_file() && dir.join("OpenConsole.exe").is_file() {
+            match ConPtyFuncs::open(&dll) {
+                Ok(funcs) => {
+                    return ConPty {
+                        funcs,
+                        bundled: true,
+                    }
+                }
+                Err(e) => log::warn!("failed to load {}: {:?}; using kernel32", dll.display(), e),
+            }
+        }
+    }
+    let funcs = ConPtyFuncs::open(Path::new("kernel32.dll")).expect(
         "this system does not support conpty.  Windows 10 October 2018 or newer is required",
-    )
+    );
+    ConPty {
+        funcs,
+        bundled: false,
+    }
 }
 
 lazy_static! {
-    static ref CONPTY: ConPtyFuncs = load_conpty();
+    static ref CONPTY: ConPty = load_conpty();
 }
 
 pub struct PsuedoCon {
@@ -72,7 +115,7 @@ unsafe impl Sync for PsuedoCon {}
 
 impl Drop for PsuedoCon {
     fn drop(&mut self) {
-        unsafe { (CONPTY.ClosePseudoConsole)(self.con) };
+        unsafe { (CONPTY.funcs.ClosePseudoConsole)(self.con) };
     }
 }
 
@@ -90,6 +133,11 @@ fn supports_passthrough_mode() -> bool {
         .unwrap_or(false)
     {
         log::info!("ConPTY passthrough mode disabled via PSMUX_NO_PASSTHROUGH");
+        return false;
+    }
+    // The pinned conpty.dll has no passthrough flag: 0x8 is a text-width mode
+    // there, and its host relays VT sequences unconditionally.
+    if CONPTY.bundled {
         return false;
     }
     let ver = unsafe {
@@ -124,12 +172,21 @@ fn supports_passthrough_mode() -> bool {
     ver.dwBuildNumber >= 22621
 }
 
+/// Flags every pseudoconsole is created with.
+fn base_flags() -> DWORD {
+    let flags =
+        PSUEDOCONSOLE_INHERIT_CURSOR | PSEUDOCONSOLE_RESIZE_QUIRK | PSEUDOCONSOLE_WIN32_INPUT_MODE;
+    if CONPTY.bundled {
+        flags | PSEUDOCONSOLE_GLYPH_WIDTH_WCSWIDTH
+    } else {
+        flags
+    }
+}
+
 impl PsuedoCon {
     pub fn new(size: COORD, input: FileDescriptor, output: FileDescriptor) -> Result<Self, Error> {
         let mut con: HPCON = INVALID_HANDLE_VALUE;
-        let base_flags = PSUEDOCONSOLE_INHERIT_CURSOR
-            | PSEUDOCONSOLE_RESIZE_QUIRK
-            | PSEUDOCONSOLE_WIN32_INPUT_MODE;
+        let base_flags = base_flags();
 
         // Use PSEUDOCONSOLE_PASSTHROUGH_MODE on Windows 11 22H2+ to relay
         // VT sequences (including DECSCUSR cursor shapes) from child processes
@@ -138,7 +195,7 @@ impl PsuedoCon {
         // only attempt it on known-good builds.
         if supports_passthrough_mode() {
             let result = unsafe {
-                (CONPTY.CreatePseudoConsole)(
+                (CONPTY.funcs.CreatePseudoConsole)(
                     size,
                     input.as_raw_handle() as _,
                     output.as_raw_handle() as _,
@@ -159,7 +216,7 @@ impl PsuedoCon {
         }
 
         let result = unsafe {
-            (CONPTY.CreatePseudoConsole)(
+            (CONPTY.funcs.CreatePseudoConsole)(
                 size,
                 input.as_raw_handle() as _,
                 output.as_raw_handle() as _,
@@ -187,12 +244,10 @@ impl PsuedoCon {
         output: FileDescriptor,
     ) -> Result<Self, Error> {
         let mut con: HPCON = INVALID_HANDLE_VALUE;
-        let base_flags = PSUEDOCONSOLE_INHERIT_CURSOR
-            | PSEUDOCONSOLE_RESIZE_QUIRK
-            | PSEUDOCONSOLE_WIN32_INPUT_MODE;
+        let base_flags = base_flags();
 
         let result = unsafe {
-            (CONPTY.CreatePseudoConsole)(
+            (CONPTY.funcs.CreatePseudoConsole)(
                 size,
                 input.as_raw_handle() as _,
                 output.as_raw_handle() as _,
@@ -212,7 +267,7 @@ impl PsuedoCon {
     }
 
     pub fn resize(&self, size: COORD) -> Result<(), Error> {
-        let result = unsafe { (CONPTY.ResizePseudoConsole)(self.con, size) };
+        let result = unsafe { (CONPTY.funcs.ResizePseudoConsole)(self.con, size) };
         ensure!(
             result == S_OK,
             "failed to resize console to {}x{}: HRESULT: {}",

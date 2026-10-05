@@ -115,11 +115,20 @@ impl<CB: crate::callbacks::Callbacks> vte::Perform for WrappedScreen<CB> {
                 'X' => self.screen.ech(canonicalize_params_1(params, 1)),
                 'd' => self.screen.vpa(canonicalize_params_1(params, 1)),
                 'm' => self.screen.sgr(params, unhandled),
-                'n' => {
-                    // DSR (Device Status Report) — in passthrough mode the
-                    // child sends this and expects a response.  We ignore it
-                    // at the parser level (the host must respond via the PTY
-                    // writer if needed), but we must not call unhandled.
+                // DSR and DA1.  A console host that forwards queries to the
+                // terminal (OpenConsole 1.22+) relies on us to answer; the
+                // older inbox conhost answers them itself and never forwards.
+                'n' => match canonicalize_params_1(params, 0) {
+                    5 => self.screen.push_reply(b"[0n"),
+                    6 => {
+                        let (row, col) = self.screen.cursor_position();
+                        let reply = format!("[{};{}R", row + 1, col + 1);
+                        self.screen.push_reply(reply.as_bytes());
+                    }
+                    _ => {}
+                },
+                'c' if canonicalize_params_1(params, 0) == 0 => {
+                    self.screen.push_reply(DA1_REPLY);
                 }
                 'r' => self.screen.decstbm(canonicalize_params_decstbm(
                     params,
@@ -178,6 +187,9 @@ impl<CB: crate::callbacks::Callbacks> vte::Perform for WrappedScreen<CB> {
                     );
                 }
             },
+            Some(b'>') if c == 'c' && canonicalize_params_1(params, 0) == 0 => {
+                self.screen.push_reply(DA2_REPLY);
+            }
             Some(b' ') if c == 'q' => {
                 // DECSCUSR — Set Cursor Style (CSI Ps SP q)
                 let style = params
@@ -338,6 +350,12 @@ fn unescape_tmux_passthrough(data: &[u8]) -> Vec<u8> {
     result
 }
 
+/// Byte-for-byte what the inbox conhost answers (captured on 10.0.26200), so a
+/// child sees the same terminal whichever console host is in use.
+const DA1_REPLY: &[u8] = b"[?61;6;7;21;22;23;24;28;32;42c";
+/// Not captured from a live host.
+const DA2_REPLY: &[u8] = b"[>0;10;1c";
+
 fn canonicalize_params_1(params: &vte::Params, default: u16) -> u16 {
     let first = params.iter().next().map_or(0, |x| *x.first().unwrap_or(&0));
     if first == 0 {
@@ -450,5 +468,54 @@ mod dcs_tests {
             data.is_empty(),
             "Non-tmux DCS should not trigger passthrough callback"
         );
+    }
+}
+
+#[cfg(test)]
+mod query_reply_tests {
+    use super::{DA1_REPLY, DA2_REPLY};
+
+    fn replies_to(input: &[u8]) -> Vec<u8> {
+        let mut parser = crate::Parser::new(24, 80, 0);
+        parser.process(input);
+        parser.screen_mut().take_replies()
+    }
+
+    #[test]
+    fn cursor_position_query_when_cursor_moved_then_replies_with_one_based_position() {
+        assert_eq!(replies_to(b"[3;7H[6n"), b"[3;7R");
+    }
+
+    #[test]
+    fn cursor_position_query_when_followed_by_output_then_reports_position_at_query() {
+        assert_eq!(replies_to(b"ab[6ncd"), b"[1;3R");
+    }
+
+    #[test]
+    fn status_query_when_received_then_replies_ok() {
+        assert_eq!(replies_to(b"[5n"), b"[0n");
+    }
+
+    #[test]
+    fn primary_device_attributes_query_when_received_then_replies() {
+        assert_eq!(replies_to(b"[c"), DA1_REPLY);
+    }
+
+    #[test]
+    fn secondary_device_attributes_query_when_received_then_replies() {
+        assert_eq!(replies_to(b"[>c"), DA2_REPLY);
+    }
+
+    #[test]
+    fn take_replies_when_called_twice_then_second_is_empty() {
+        let mut parser = crate::Parser::new(24, 80, 0);
+        parser.process(b"[6n");
+        let _ = parser.screen_mut().take_replies();
+        assert!(parser.screen_mut().take_replies().is_empty());
+    }
+
+    #[test]
+    fn plain_output_when_processed_then_queues_no_reply() {
+        assert!(replies_to(b"hello[31mred[m").is_empty());
     }
 }

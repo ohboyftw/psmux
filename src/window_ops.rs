@@ -1304,8 +1304,13 @@ pub fn respawn_active_pane(
     let bell_pending = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
     let bell_writer = bell_pending.clone();
 
+    let reply_writer = pair
+        .master
+        .try_clone_writer()
+        .map_err(|e| io::Error::other(format!("clone writer error: {e}")))?;
     crate::pane::spawn_reader_thread(
         reader,
+        reply_writer,
         term_reader,
         dv_writer,
         cs_writer,
@@ -1313,11 +1318,10 @@ pub fn respawn_active_pane(
         bell_writer,
     );
 
-    let mut pty_writer = pair
+    let pty_writer = pair
         .master
         .take_writer()
         .map_err(|e| io::Error::other(format!("take writer error: {e}")))?;
-    crate::pane::conpty_preemptive_dsr_response(&mut *pty_writer);
 
     pane.master = pair.master;
     pane.writer = pty_writer;
