@@ -297,6 +297,17 @@ $env:PSMUX_CONFIG_FILE = "C:\Users\me\.psmux-alt.conf"
 # directory. A client must set the same value to see servers started under it.
 $env:PSMUX_DATA_DIR = "D:\myapp\psmux-state"
 
+# Host panes with the conpty.dll + OpenConsole.exe pair in this directory.
+# Without it psmux uses the pair in conpty\ beside psmux.exe when present,
+# else the inbox conhost (kernel32). Empty means unset. A directory that does
+# not exist, lacks either file, or whose DLL will not load falls back to the
+# inbox conhost with a logged reason. Read once, when the server starts.
+$env:PSMUX_CONPTY_DIR = "C:\tools\openconsole"
+
+# Diagnosis only: start pane processes outside their kill-on-close job, so a
+# pane's leftover processes outlive the pane and the server, as before.
+$env:PSMUX_NO_PANE_JOB = "1"
+
 # These are set INSIDE psmux panes (tmux-compatible):
 # TMUX       - socket path and server info
 # TMUX_PANE  - current pane ID (%0, %1, etc.)

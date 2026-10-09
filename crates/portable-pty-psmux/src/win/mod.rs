@@ -16,6 +16,10 @@ mod job;
 mod procthreadattr;
 mod psuedocon;
 
+/// Which ConPTY implementation this process loaded: kernel32, the pinned
+/// OpenConsole beside the executable, or one named by `PSMUX_CONPTY_DIR`.
+pub use psuedocon::{conpty_source, ConPtySource};
+
 use filedescriptor::OwnedHandle;
 
 #[derive(Debug)]

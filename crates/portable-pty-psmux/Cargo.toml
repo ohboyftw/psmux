@@ -108,9 +108,6 @@ version = "2.0"
 [target."cfg(windows)".dependencies.lazy_static]
 version = "1.4"
 
-[target."cfg(windows)".dependencies.shared_library]
-version = "0.1"
-
 [target."cfg(windows)".dependencies.winapi]
 version = "0.3"
 features = [
