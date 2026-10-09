@@ -5,18 +5,18 @@ use crate::win::procthreadattr::ProcThreadAttributeList;
 use anyhow::{bail, ensure, Error};
 use filedescriptor::{FileDescriptor, OwnedHandle};
 use lazy_static::lazy_static;
-use shared_library::shared_library;
 use std::ffi::OsString;
 use std::io::Error as IoError;
-use std::os::windows::ffi::OsStringExt;
+use std::os::windows::ffi::{OsStrExt, OsStringExt};
 use std::os::windows::io::{AsRawHandle, FromRawHandle};
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use std::{mem, ptr};
-use winapi::shared::minwindef::DWORD;
+use winapi::shared::minwindef::{DWORD, FARPROC, HMODULE};
 use winapi::shared::winerror::ERROR_ACCESS_DENIED;
 use winapi::shared::winerror::{HRESULT, S_OK};
 use winapi::um::handleapi::*;
+use winapi::um::libloaderapi::{GetModuleHandleW, GetProcAddress, LoadLibraryExW};
 use winapi::um::processthreadsapi::*;
 use winapi::um::winbase::{
     CREATE_SUSPENDED, CREATE_UNICODE_ENVIRONMENT, EXTENDED_STARTUPINFO_PRESENT,
@@ -37,72 +37,176 @@ pub const PSEUDOCONSOLE_PASSTHROUGH_MODE: DWORD = 0x8;
 /// which is how the vt100-psmux parser measures.
 pub const PSEUDOCONSOLE_GLYPH_WIDTH_WCSWIDTH: DWORD = 0x10;
 
-shared_library!(ConPtyFuncs,
-    pub fn CreatePseudoConsole(
-        size: COORD,
-        hInput: HANDLE,
-        hOutput: HANDLE,
-        flags: DWORD,
-        hpc: *mut HPCON
-    ) -> HRESULT,
-    pub fn ResizePseudoConsole(hpc: HPCON, size: COORD) -> HRESULT,
-    pub fn ClosePseudoConsole(hpc: HPCON),
-);
+/// Where the three ConPTY entry points came from.
+///
+/// Upstream psmux has only `Kernel32` and `Directory`.  Code ported from
+/// upstream that asks "is the pane host user supplied" (`== Directory`)
+/// means "is it OpenConsole rather than the inbox conhost" here, which is
+/// `!= Kernel32`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ConPtySource {
+    /// The system implementation in kernel32.dll, which drives the inbox
+    /// conhost.exe.  Used when no pinned host is present or one fails to load.
+    Kernel32,
+    /// The pinned conpty.dll in `conpty\` beside the psmux executable, which
+    /// drives the OpenConsole.exe next to it.  The default when present.
+    Bundled,
+    /// A conpty.dll the user named with `PSMUX_CONPTY_DIR`, which drives the
+    /// OpenConsole.exe next to it.  Overrides the pinned one.
+    Directory,
+}
 
-/// Directory holding a pinned conpty.dll + OpenConsole.exe pair:
-/// `PSMUX_CONPTY_DIR` if set, else `conpty\` next to the psmux executable.
-fn bundled_conpty_dir() -> Option<PathBuf> {
-    if let Some(dir) = std::env::var_os("PSMUX_CONPTY_DIR") {
-        return Some(PathBuf::from(dir));
+type CreateFn = unsafe extern "system" fn(COORD, HANDLE, HANDLE, DWORD, *mut HPCON) -> HRESULT;
+type ResizeFn = unsafe extern "system" fn(HPCON, COORD) -> HRESULT;
+type CloseFn = unsafe extern "system" fn(HPCON);
+
+/// The three ConPTY entry points plus a note of where they came from.
+///
+/// The module behind the pointers is never freed: this lives in a
+/// `lazy_static` for the life of the process and panes hold HPCONs it made.
+#[allow(non_snake_case)]
+struct ConPtyApi {
+    CreatePseudoConsole: CreateFn,
+    ResizePseudoConsole: ResizeFn,
+    ClosePseudoConsole: CloseFn,
+    source: ConPtySource,
+}
+
+/// Look the three entry points up in `module`, a loaded module that is never
+/// freed.  `label` names it in the error.
+fn resolve_exports(
+    module: HMODULE,
+    label: &str,
+    source: ConPtySource,
+) -> Result<ConPtyApi, String> {
+    let resolve = |name: &[u8]| {
+        // SAFETY: `module` is loaded and `name` is NUL terminated.
+        let p = unsafe { GetProcAddress(module, name.as_ptr() as *const i8) };
+        if p.is_null() {
+            let name = String::from_utf8_lossy(&name[..name.len() - 1]);
+            return Err(format!("{} exports no {}", label, name));
+        }
+        Ok(p)
+    };
+    let create = resolve(b"CreatePseudoConsole\0")?;
+    let resize = resolve(b"ResizePseudoConsole\0")?;
+    let close = resolve(b"ClosePseudoConsole\0")?;
+    // SAFETY: kernel32 and conpty.dll export these three with exactly these
+    // signatures, and the module stays loaded for the life of the process.
+    Ok(unsafe {
+        ConPtyApi {
+            CreatePseudoConsole: mem::transmute::<FARPROC, CreateFn>(create),
+            ResizePseudoConsole: mem::transmute::<FARPROC, ResizeFn>(resize),
+            ClosePseudoConsole: mem::transmute::<FARPROC, CloseFn>(close),
+            source,
+        }
+    })
+}
+
+fn load_conpty_kernel32() -> ConPtyApi {
+    let name: Vec<u16> = "kernel32.dll".encode_utf16().chain(Some(0)).collect();
+    // SAFETY: `name` is NUL terminated; kernel32 is mapped into every process
+    // and never unloaded.
+    let module = unsafe { GetModuleHandleW(name.as_ptr()) };
+    resolve_exports(module, "kernel32.dll", ConPtySource::Kernel32).expect(
+        "this system does not support conpty.  Windows 10 October 2018 or newer is required",
+    )
+}
+
+/// Load `<dir>\conpty.dll` by absolute path with
+/// `LOAD_WITH_ALTERED_SEARCH_PATH`, so the DLL resolves against its own
+/// directory and drives the OpenConsole.exe beside it.  Never by bare name:
+/// terminal emulators such as WezTerm ship their own conpty.dll, the DLL
+/// search order can pick it up when psmux runs inside them, and an untested
+/// OpenConsole.exe causes blank panes and broken I/O.
+///
+/// OpenConsole.exe must be there too: without it conpty.dll silently
+/// launches the inbox conhost and hands it flags it does not understand.
+///
+/// Returns a human readable reason on failure.
+fn load_conpty_from_dir(dir: &Path, source: ConPtySource) -> Result<ConPtyApi, String> {
+    const LOAD_WITH_ALTERED_SEARCH_PATH: DWORD = 0x0000_0008;
+
+    if !dir.is_dir() {
+        return Err(format!("{} is not a directory", dir.display()));
     }
+    for file in ["conpty.dll", "OpenConsole.exe"] {
+        if !dir.join(file).is_file() {
+            return Err(format!("{} does not exist", dir.join(file).display()));
+        }
+    }
+    // LOAD_WITH_ALTERED_SEARCH_PATH requires an absolute path to mean anything.
+    let abs = std::fs::canonicalize(dir.join("conpty.dll"))
+        .map_err(|e| format!("cannot resolve {}: {}", dir.display(), e))?;
+    let wide: Vec<u16> = abs.as_os_str().encode_wide().chain(Some(0)).collect();
+    // SAFETY: `wide` is a NUL terminated absolute path.
+    let module = unsafe {
+        LoadLibraryExW(
+            wide.as_ptr(),
+            ptr::null_mut(),
+            LOAD_WITH_ALTERED_SEARCH_PATH,
+        )
+    };
+    if module.is_null() {
+        let err = IoError::last_os_error();
+        return Err(format!("LoadLibraryExW({}) failed: {}", abs.display(), err));
+    }
+    // The module is intentionally never freed: see ConPtyApi.
+    resolve_exports(module, &abs.display().to_string(), source)
+}
+
+/// Pick the ConPTY implementation, first match wins:
+///
+/// 1. `env_dir`, the value of `PSMUX_CONPTY_DIR`.  An explicit choice, so
+///    when it cannot be loaded the reason is logged and psmux uses kernel32,
+///    as upstream does, rather than another OpenConsole.
+/// 2. `bundled_dir`, `conpty\` beside the executable.  The inbox conhost
+///    (10.0.26100.9549) access-violates in COOKED_READ_DATA when a TUI that
+///    used the alternate screen exits (OpenCode 2.x), killing the pane;
+///    OpenConsole 1.23.2510.08001 does not.  No such directory is the normal
+///    case for an install without one and is not logged as a problem.
+/// 3. kernel32.
+fn resolve_conpty(env_dir: Option<PathBuf>, bundled_dir: Option<PathBuf>) -> ConPtyApi {
+    let (dir, source) = match (env_dir, bundled_dir) {
+        (Some(dir), _) => (dir, ConPtySource::Directory),
+        (None, Some(dir)) if dir.exists() => (dir, ConPtySource::Bundled),
+        _ => return load_conpty_kernel32(),
+    };
+    match load_conpty_from_dir(&dir, source) {
+        Ok(api) => {
+            log::info!("ConPTY loaded from {} ({:?})", dir.display(), source);
+            api
+        }
+        Err(reason) => {
+            log::warn!(
+                "ConPTY directory {} not used ({}); falling back to kernel32",
+                dir.display(),
+                reason
+            );
+            load_conpty_kernel32()
+        }
+    }
+}
+
+/// `PSMUX_CONPTY_DIR` as a directory; unset and empty both mean "not named".
+fn conpty_dir_from_env(value: Option<OsString>) -> Option<PathBuf> {
+    value.filter(|v| !v.is_empty()).map(PathBuf::from)
+}
+
+fn bundled_conpty_dir() -> Option<PathBuf> {
     Some(std::env::current_exe().ok()?.parent()?.join("conpty"))
 }
 
-struct ConPty {
-    funcs: ConPtyFuncs,
-    /// True when `funcs` comes from the pinned conpty.dll, whose flag bits
-    /// differ from kernel32's.
-    bundled: bool,
-}
-
-fn load_conpty() -> ConPty {
-    // Prefer a pinned conpty.dll loaded by FULL PATH.  The inbox conhost.exe
-    // (10.0.26100.9549) access-violates in COOKED_READ_DATA when a TUI that
-    // used the alternate screen exits (OpenCode 2.x), which kills the pane.
-    // OpenConsole 1.23.2510.08001 does not.
-    //
-    // Never load "conpty.dll" by bare name: terminal emulators like WezTerm
-    // bundle their own copy, the DLL search order can pick it up when psmux
-    // runs inside them, and an untested OpenConsole.exe causes blank panes
-    // and broken I/O.
-    //
-    // OpenConsole.exe must be there too: without it conpty.dll silently
-    // launches the inbox conhost and hands it flags it does not understand.
-    if let Some(dir) = bundled_conpty_dir() {
-        let dll = dir.join("conpty.dll");
-        if dll.is_file() && dir.join("OpenConsole.exe").is_file() {
-            match ConPtyFuncs::open(&dll) {
-                Ok(funcs) => {
-                    return ConPty {
-                        funcs,
-                        bundled: true,
-                    }
-                }
-                Err(e) => log::warn!("failed to load {}: {:?}; using kernel32", dll.display(), e),
-            }
-        }
-    }
-    let funcs = ConPtyFuncs::open(Path::new("kernel32.dll")).expect(
-        "this system does not support conpty.  Windows 10 October 2018 or newer is required",
-    );
-    ConPty {
-        funcs,
-        bundled: false,
-    }
-}
-
 lazy_static! {
-    static ref CONPTY: ConPty = load_conpty();
+    static ref CONPTY: ConPtyApi = resolve_conpty(
+        conpty_dir_from_env(std::env::var_os("PSMUX_CONPTY_DIR")),
+        bundled_conpty_dir(),
+    );
+}
+
+/// Which ConPTY implementation this process loaded.  Diagnostics only.
+pub fn conpty_source() -> ConPtySource {
+    CONPTY.source
 }
 
 pub struct PsuedoCon {
@@ -118,7 +222,7 @@ unsafe impl Sync for PsuedoCon {}
 
 impl Drop for PsuedoCon {
     fn drop(&mut self) {
-        unsafe { (CONPTY.funcs.ClosePseudoConsole)(self.con) };
+        unsafe { (CONPTY.ClosePseudoConsole)(self.con) };
     }
 }
 
@@ -138,9 +242,10 @@ fn supports_passthrough_mode() -> bool {
         log::info!("ConPTY passthrough mode disabled via PSMUX_NO_PASSTHROUGH");
         return false;
     }
-    // The pinned conpty.dll has no passthrough flag: 0x8 is a text-width mode
+    // An OpenConsole conpty.dll (pinned or PSMUX_CONPTY_DIR, assumed 1.22+)
+    // has no passthrough flag: 0x8 is a text-width mode
     // there, and its host relays VT sequences unconditionally.
-    if CONPTY.bundled {
+    if CONPTY.source != ConPtySource::Kernel32 {
         return false;
     }
     let ver = unsafe {
@@ -179,7 +284,7 @@ fn supports_passthrough_mode() -> bool {
 fn base_flags() -> DWORD {
     let flags =
         PSUEDOCONSOLE_INHERIT_CURSOR | PSEUDOCONSOLE_RESIZE_QUIRK | PSEUDOCONSOLE_WIN32_INPUT_MODE;
-    if CONPTY.bundled {
+    if CONPTY.source != ConPtySource::Kernel32 {
         flags | PSEUDOCONSOLE_GLYPH_WIDTH_WCSWIDTH
     } else {
         flags
@@ -198,7 +303,7 @@ impl PsuedoCon {
         // only attempt it on known-good builds.
         if supports_passthrough_mode() {
             let result = unsafe {
-                (CONPTY.funcs.CreatePseudoConsole)(
+                (CONPTY.CreatePseudoConsole)(
                     size,
                     input.as_raw_handle() as _,
                     output.as_raw_handle() as _,
@@ -219,7 +324,7 @@ impl PsuedoCon {
         }
 
         let result = unsafe {
-            (CONPTY.funcs.CreatePseudoConsole)(
+            (CONPTY.CreatePseudoConsole)(
                 size,
                 input.as_raw_handle() as _,
                 output.as_raw_handle() as _,
@@ -250,7 +355,7 @@ impl PsuedoCon {
         let base_flags = base_flags();
 
         let result = unsafe {
-            (CONPTY.funcs.CreatePseudoConsole)(
+            (CONPTY.CreatePseudoConsole)(
                 size,
                 input.as_raw_handle() as _,
                 output.as_raw_handle() as _,
@@ -270,7 +375,7 @@ impl PsuedoCon {
     }
 
     pub fn resize(&self, size: COORD) -> Result<(), Error> {
-        let result = unsafe { (CONPTY.funcs.ResizePseudoConsole)(self.con, size) };
+        let result = unsafe { (CONPTY.ResizePseudoConsole)(self.con, size) };
         ensure!(
             result == S_OK,
             "failed to resize console to {}x{}: HRESULT: {}",
@@ -445,3 +550,7 @@ fn startup_info() -> STARTUPINFOEXW {
     si.StartupInfo.hStdError = INVALID_HANDLE_VALUE;
     si
 }
+
+#[cfg(test)]
+#[path = "psuedocon_tests.rs"]
+mod tests;
