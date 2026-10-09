@@ -177,6 +177,14 @@ impl<CB: crate::callbacks::Callbacks> vte::Perform for WrappedScreen<CB> {
                     .decsel(canonicalize_params_1(params, 0), unhandled),
                 'h' => self.screen.decset(params, unhandled),
                 'l' => self.screen.decrst(params, unhandled),
+                'p' if intermediates.get(1) == Some(&b'$') => {
+                    let mode = canonicalize_params_1(params, 0);
+                    if mode > 0 {
+                        let value = decrqm_private_value(&self.screen, mode);
+                        let reply = format!("[?{mode};{value}$y");
+                        self.screen.push_reply(reply.as_bytes());
+                    }
+                }
                 _ => {
                     self.callbacks.unhandled_csi(
                         &mut self.screen,
@@ -187,6 +195,13 @@ impl<CB: crate::callbacks::Callbacks> vte::Perform for WrappedScreen<CB> {
                     );
                 }
             },
+            // DECRQM for an ANSI mode: none are tracked, so "not recognised".
+            Some(b'$') if c == 'p' && intermediates.len() == 1 => {
+                let mode = canonicalize_params_1(params, 0);
+                if mode > 0 {
+                    self.screen.push_reply(format!("[{mode};0$y").as_bytes());
+                }
+            }
             Some(b'>') if c == 'c' && canonicalize_params_1(params, 0) == 0 => {
                 self.screen.push_reply(DA2_REPLY);
             }
@@ -366,6 +381,30 @@ const DA1_REPLY: &[u8] = b"[?61;6;7;21;22;23;24;28;32;42c";
 /// Not captured from a live host.
 const DA2_REPLY: &[u8] = b"[>0;10;1c";
 
+/// DECRQM value for a private mode, with tmux's semantics (input.c): 1 set,
+/// 2 reset, 4 permanently reset, 0 not recognised.  2026 (synchronized
+/// output) is deliberately 0: this parser does not implement it, and 0 is
+/// what the inbox console host answers.
+fn decrqm_private_value(screen: &crate::screen::Screen, mode: u16) -> u8 {
+    use crate::screen::{MouseProtocolEncoding as Enc, MouseProtocolMode as Mouse};
+    let onoff = |b: bool| if b { 1 } else { 2 };
+    let mouse = screen.mouse_protocol_mode();
+    let encoding = screen.mouse_protocol_encoding();
+    match mode {
+        1 => onoff(screen.application_cursor()),
+        3 => 4,
+        25 => onoff(!screen.hide_cursor()),
+        47 | 1047 | 1049 => onoff(screen.alternate_screen()),
+        1000 => onoff(mouse == Mouse::PressRelease),
+        1002 => onoff(mouse == Mouse::ButtonMotion),
+        1003 => onoff(mouse == Mouse::AnyMotion),
+        1005 => onoff(encoding == Enc::Utf8),
+        1006 => onoff(encoding == Enc::Sgr),
+        2004 => onoff(screen.bracketed_paste()),
+        _ => 0,
+    }
+}
+
 fn canonicalize_params_1(params: &vte::Params, default: u16) -> u16 {
     let first = params.iter().next().map_or(0, |x| *x.first().unwrap_or(&0));
     if first == 0 {
@@ -537,6 +576,59 @@ mod query_reply_tests {
         let reply = crate::program_status::QUERY_REPLY;
         assert_eq!(&replies[..reply.len()], reply);
         assert_eq!(&replies[reply.len()..], DA1_REPLY);
+    }
+
+    #[test]
+    fn decrqm_private_when_mode_set_then_reports_1() {
+        assert_eq!(replies_to(b"[?2004h[?2004$p"), b"[?2004;1$y");
+    }
+
+    #[test]
+    fn decrqm_private_when_mode_reset_then_reports_2() {
+        assert_eq!(replies_to(b"[?1049$p"), b"[?1049;2$y");
+    }
+
+    #[test]
+    fn decrqm_private_when_alt_screen_entered_in_same_batch_then_reports_set() {
+        assert_eq!(replies_to(b"[?1049h[?1049$p"), b"[?1049;1$y");
+    }
+
+    #[test]
+    fn decrqm_private_when_cursor_visible_then_reports_1() {
+        assert_eq!(replies_to(b"[?25$p"), b"[?25;1$y");
+    }
+
+    #[test]
+    fn decrqm_private_when_mouse_sgr_enabled_then_reports_1() {
+        assert_eq!(
+            replies_to(b"[?1002h[?1006h[?1002$p[?1006$p"),
+            b"[?1002;1$y[?1006;1$y"
+        );
+    }
+
+    #[test]
+    fn decrqm_private_when_deccolm_then_reports_permanently_reset() {
+        assert_eq!(replies_to(b"[?3$p"), b"[?3;4$y");
+    }
+
+    #[test]
+    fn decrqm_private_when_synchronized_output_then_reports_unrecognised() {
+        assert_eq!(replies_to(b"[?2026$p"), b"[?2026;0$y");
+    }
+
+    #[test]
+    fn decrqm_ansi_when_any_mode_then_reports_unrecognised() {
+        assert_eq!(replies_to(b"[4$p"), b"[4;0$y");
+    }
+
+    #[test]
+    fn decrqm_when_mode_zero_then_no_reply() {
+        assert!(replies_to(b"[?$p[$p").is_empty());
+    }
+
+    #[test]
+    fn decstr_when_received_then_no_decrqm_reply() {
+        assert!(replies_to(b"[!p").is_empty());
     }
 
     #[test]
