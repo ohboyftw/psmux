@@ -39,6 +39,33 @@ fn collect_notifications(node: &mut Node, out: &mut Vec<(String, String)>) {
     }
 }
 
+/// Fixed toast script.  Title and body arrive through environment variables,
+/// never through the script text: PowerShell treats U+2018-U+201B as quote
+/// characters too, so escaping `'` alone let pane output break out of the
+/// string and run commands.
+const TOAST_SCRIPT: &str = concat!(
+    "[Windows.UI.Notifications.ToastNotificationManager, Windows.UI.Notifications, ContentType = WindowsRuntime] > $null; ",
+    "$t = [Windows.UI.Notifications.ToastNotificationManager]::GetTemplateContent(",
+    "[Windows.UI.Notifications.ToastTemplateType]::ToastText02); ",
+    "$n = $t.GetElementsByTagName('text'); ",
+    "$n.Item(0).AppendChild($t.CreateTextNode($env:PSMUX_TOAST_TITLE)) > $null; ",
+    "$n.Item(1).AppendChild($t.CreateTextNode($env:PSMUX_TOAST_BODY)) > $null; ",
+    "$toast = [Windows.UI.Notifications.ToastNotification]::new($t); ",
+    "[Windows.UI.Notifications.ToastNotificationManager]::CreateToastNotifier('psmux').Show($toast)",
+);
+
+/// Build the PowerShell command that shows one toast.
+fn toast_command(title: &str, body: &str) -> std::process::Command {
+    let mut cmd = std::process::Command::new("powershell");
+    cmd.args(["-NoProfile", "-NonInteractive", "-Command", TOAST_SCRIPT])
+        .env("PSMUX_TOAST_TITLE", title)
+        .env("PSMUX_TOAST_BODY", body)
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null());
+    cmd
+}
+
 /// Fire a Windows toast notification via PowerShell.
 /// Spawns a detached process so it doesn't block the server loop.
 fn fire_toast_notification(title: &str, body: &str) {
@@ -46,32 +73,11 @@ fn fire_toast_notification(title: &str, body: &str) {
     if TOAST_IN_FLIGHT.swap(true, Ordering::AcqRel) {
         return;
     }
-    // Escape single quotes for PowerShell strings
-    let title_esc = title.replace('\'', "''");
-    let body_esc = body.replace('\'', "''");
-    let script = format!(
-        concat!(
-            "[Windows.UI.Notifications.ToastNotificationManager, Windows.UI.Notifications, ContentType = WindowsRuntime] > $null; ",
-            "$t = [Windows.UI.Notifications.ToastNotificationManager]::GetTemplateContent(",
-            "[Windows.UI.Notifications.ToastTemplateType]::ToastText02); ",
-            "$n = $t.GetElementsByTagName('text'); ",
-            "$n.Item(0).AppendChild($t.CreateTextNode('{}')) > $null; ",
-            "$n.Item(1).AppendChild($t.CreateTextNode('{}')) > $null; ",
-            "$toast = [Windows.UI.Notifications.ToastNotification]::new($t); ",
-            "[Windows.UI.Notifications.ToastNotificationManager]::CreateToastNotifier('psmux').Show($toast)",
-        ),
-        title_esc, body_esc,
-    );
+    let mut cmd = toast_command(title, body);
     std::thread::spawn(move || {
         use crate::platform::HideWindowCommandExt;
         crate::proc_stats::record_spawn(crate::proc_stats::SpawnKind::Other);
-        let _ = std::process::Command::new("powershell")
-            .args(["-NoProfile", "-NonInteractive", "-Command", &script])
-            .stdin(std::process::Stdio::null())
-            .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null())
-            .hide_window()
-            .status();
+        let _ = cmd.hide_window().status();
         TOAST_IN_FLIGHT.store(false, Ordering::Release);
     });
 }
@@ -505,3 +511,7 @@ pub(crate) const TMUX_COMMANDS: &[&str] = &[
     "wait-for (wait)",
     "wait-pane (waitp)",
 ];
+
+#[cfg(test)]
+#[path = "../../tests-rs/test_toast_command.rs"]
+mod test_toast_command;
