@@ -1,3 +1,4 @@
+use super::job::PaneJob;
 use super::WinChild;
 use crate::cmdbuilder::CommandBuilder;
 use crate::win::procthreadattr::ProcThreadAttributeList;
@@ -13,11 +14,13 @@ use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use std::{mem, ptr};
 use winapi::shared::minwindef::DWORD;
+use winapi::shared::winerror::ERROR_ACCESS_DENIED;
 use winapi::shared::winerror::{HRESULT, S_OK};
 use winapi::um::handleapi::*;
 use winapi::um::processthreadsapi::*;
 use winapi::um::winbase::{
-    CREATE_UNICODE_ENVIRONMENT, EXTENDED_STARTUPINFO_PRESENT, STARTF_USESTDHANDLES, STARTUPINFOEXW,
+    CREATE_SUSPENDED, CREATE_UNICODE_ENVIRONMENT, EXTENDED_STARTUPINFO_PRESENT,
+    STARTF_USESTDHANDLES, STARTUPINFOEXW,
 };
 use winapi::um::wincon::COORD;
 use winapi::um::winnt::HANDLE;
@@ -279,65 +282,166 @@ impl PsuedoCon {
     }
 
     pub fn spawn_command(&self, cmd: CommandBuilder) -> anyhow::Result<WinChild> {
-        let mut si: STARTUPINFOEXW = unsafe { mem::zeroed() };
-        si.StartupInfo.cb = mem::size_of::<STARTUPINFOEXW>() as u32;
-        // Explicitly set the stdio handles as invalid handles otherwise
-        // we can end up with a weird state where the spawned process can
-        // inherit the explicitly redirected output handles from its parent.
-        // For example, when daemonizing wezterm-mux-server, the stdio handles
-        // are redirected to a log file and the spawned process would end up
-        // writing its output there instead of to the pty we just created.
-        si.StartupInfo.dwFlags = STARTF_USESTDHANDLES;
-        si.StartupInfo.hStdInput = INVALID_HANDLE_VALUE;
-        si.StartupInfo.hStdOutput = INVALID_HANDLE_VALUE;
-        si.StartupInfo.hStdError = INVALID_HANDLE_VALUE;
+        let (exe, cmdline) = cmd.cmdline()?;
+        let mut launch = Launch {
+            exe,
+            cmdline,
+            env: cmd.environment_block(),
+            cwd: cmd.current_directory(),
+        };
+        let (pi, job) = match launch.create_in_job(self.con) {
+            Ok(created) => created,
+            Err(err) => {
+                let msg = format!(
+                    "CreateProcessW `{:?}` in cwd `{:?}` failed: {}",
+                    OsString::from_wide(&launch.cmdline),
+                    launch.cwd.as_ref().map(|c| OsString::from_wide(c)),
+                    err
+                );
+                log::error!("{}", msg);
+                bail!("{}", msg);
+            }
+        };
 
-        let mut attrs = ProcThreadAttributeList::with_capacity(1)?;
-        attrs.set_pty(self.con)?;
+        // Make sure we close out the thread handle so we don't leak it;
+        // we do this simply by making it owned
+        // SAFETY: CreateProcessW succeeded, so both handles are open and
+        // owned by us alone.
+        let _main_thread = unsafe { OwnedHandle::from_raw_handle(pi.hThread as _) };
+        // SAFETY: as above.
+        let proc = unsafe { OwnedHandle::from_raw_handle(pi.hProcess as _) };
+
+        Ok(WinChild {
+            proc: Mutex::new(proc),
+            _job: job,
+        })
+    }
+}
+
+/// Images for which CreateProcessW refused a job list (see create_in_job).
+static JOBLIST_REFUSED: Mutex<Vec<Vec<u16>>> = Mutex::new(Vec::new());
+
+/// Whether `exe` is known to refuse the job list attribute.  An app execution
+/// alias (a WindowsApps path, as the Store pwsh is launched) always does, so
+/// it skips the attempt that would otherwise cost each server's first spawn.
+fn joblist_refused(exe: &[u16]) -> bool {
+    let lower = String::from_utf16_lossy(exe).to_ascii_lowercase();
+    if lower.contains("\\windowsapps\\") {
+        return true;
+    }
+    JOBLIST_REFUSED
+        .lock()
+        .map(|v| v.iter().any(|e| e.as_slice() == exe))
+        .unwrap_or(false)
+}
+
+fn remember_joblist_refused(exe: &[u16]) {
+    if let Ok(mut v) = JOBLIST_REFUSED.lock() {
+        if !v.iter().any(|e| e.as_slice() == exe) {
+            v.push(exe.to_vec());
+        }
+    }
+}
+
+/// The CreateProcessW inputs for one pane process.
+struct Launch {
+    exe: Vec<u16>,
+    cmdline: Vec<u16>,
+    env: Vec<u16>,
+    cwd: Option<Vec<u16>>,
+}
+
+impl Launch {
+    /// Create the process on `con` inside a fresh [`PaneJob`], best way first:
+    ///
+    /// 1. The job list attribute: the process is born in its job, so nothing
+    ///    it starts can run outside it.
+    /// 2. Windows refuses a job list for some images with ERROR_ACCESS_DENIED
+    ///    (measured upstream for the WindowsApps alias of the Store pwsh when
+    ///    the caller is a detached server).  Those are created suspended,
+    ///    assigned to the job, then resumed.  The refused attempt leaves its
+    ///    job unusable for the assign, so this path gets a fresh one.
+    /// 3. Without a job, exactly as before the job existed.
+    fn create_in_job(
+        &mut self,
+        con: HPCON,
+    ) -> Result<(PROCESS_INFORMATION, Option<PaneJob>), IoError> {
+        let mut job = PaneJob::create();
+        if let Some(j) = job.as_ref().filter(|_| !joblist_refused(&self.exe)) {
+            match self.create(con, Some(j), 0) {
+                Ok(pi) => return Ok((pi, job)),
+                Err(e) => {
+                    if e.raw_os_error() == Some(ERROR_ACCESS_DENIED as i32) {
+                        remember_joblist_refused(&self.exe);
+                    }
+                    log::info!("CreateProcessW with a job list failed ({}); retrying", e);
+                    job = PaneJob::create();
+                }
+            }
+        }
+        if let Some(j) = job {
+            if let Ok(pi) = self.create(con, None, CREATE_SUSPENDED) {
+                let job = j.assign(pi.hProcess).then_some(j);
+                // SAFETY: pi.hThread is the open, suspended main thread of
+                // the process just created.
+                unsafe { ResumeThread(pi.hThread) };
+                return Ok((pi, job));
+            }
+        }
+        self.create(con, None, 0).map(|pi| (pi, None))
+    }
+
+    fn create(
+        &mut self,
+        con: HPCON,
+        job: Option<&PaneJob>,
+        extra: DWORD,
+    ) -> Result<PROCESS_INFORMATION, IoError> {
+        let mut attrs = ProcThreadAttributeList::with_capacity(if job.is_some() { 2 } else { 1 })
+            .map_err(IoError::other)?;
+        attrs.set_pty(con).map_err(IoError::other)?;
+        if let Some(j) = job {
+            attrs.set_job(j.handle()).map_err(IoError::other)?;
+        }
+        let mut si = startup_info();
         si.lpAttributeList = attrs.as_mut_ptr();
-
+        // SAFETY: PROCESS_INFORMATION is plain data that CreateProcessW fills.
         let mut pi: PROCESS_INFORMATION = unsafe { mem::zeroed() };
-
-        let (mut exe, mut cmdline) = cmd.cmdline()?;
-        let cmd_os = OsString::from_wide(&cmdline);
-
-        let cwd = cmd.current_directory();
-
+        // SAFETY: every buffer is NUL terminated and owned by `self`, the
+        // attribute list outlives the call, and bInheritHandles is FALSE:
+        // the pseudoconsole attribute connects the child's stdio by itself.
         let res = unsafe {
             CreateProcessW(
-                exe.as_mut_slice().as_mut_ptr(),
-                cmdline.as_mut_slice().as_mut_ptr(),
+                self.exe.as_mut_ptr(),
+                self.cmdline.as_mut_ptr(),
                 ptr::null_mut(),
                 ptr::null_mut(),
                 0,
-                EXTENDED_STARTUPINFO_PRESENT | CREATE_UNICODE_ENVIRONMENT,
-                cmd.environment_block().as_mut_slice().as_mut_ptr() as *mut _,
-                cwd.as_ref()
-                    .map(|c| c.as_slice().as_ptr())
-                    .unwrap_or(ptr::null()),
+                EXTENDED_STARTUPINFO_PRESENT | CREATE_UNICODE_ENVIRONMENT | extra,
+                self.env.as_mut_ptr() as *mut _,
+                self.cwd.as_ref().map_or(ptr::null(), |c| c.as_ptr()),
                 &mut si.StartupInfo,
                 &mut pi,
             )
         };
         if res == 0 {
-            let err = IoError::last_os_error();
-            let msg = format!(
-                "CreateProcessW `{:?}` in cwd `{:?}` failed: {}",
-                cmd_os,
-                cwd.as_ref().map(|c| OsString::from_wide(c)),
-                err
-            );
-            log::error!("{}", msg);
-            bail!("{}", msg);
+            return Err(IoError::last_os_error());
         }
-
-        // Make sure we close out the thread handle so we don't leak it;
-        // we do this simply by making it owned
-        let _main_thread = unsafe { OwnedHandle::from_raw_handle(pi.hThread as _) };
-        let proc = unsafe { OwnedHandle::from_raw_handle(pi.hProcess as _) };
-
-        Ok(WinChild {
-            proc: Mutex::new(proc),
-        })
+        Ok(pi)
     }
+}
+
+/// A STARTUPINFOEXW whose std handles are explicitly invalid.  Otherwise the
+/// child can inherit the parent's redirected stdio: when the server's stdio
+/// goes to a log file, the pane would write there instead of to the pty.
+fn startup_info() -> STARTUPINFOEXW {
+    // SAFETY: STARTUPINFOEXW is plain data; all-zero is its documented
+    // starting state.
+    let mut si: STARTUPINFOEXW = unsafe { mem::zeroed() };
+    si.StartupInfo.cb = mem::size_of::<STARTUPINFOEXW>() as u32;
+    si.StartupInfo.dwFlags = STARTF_USESTDHANDLES;
+    si.StartupInfo.hStdInput = INVALID_HANDLE_VALUE;
+    si.StartupInfo.hStdOutput = INVALID_HANDLE_VALUE;
+    si.StartupInfo.hStdError = INVALID_HANDLE_VALUE;
+    si
 }

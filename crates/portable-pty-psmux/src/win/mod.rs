@@ -12,6 +12,7 @@ use winapi::um::synchapi::WaitForSingleObject;
 use winapi::um::winbase::INFINITE;
 
 pub mod conpty;
+mod job;
 mod procthreadattr;
 mod psuedocon;
 
@@ -20,6 +21,9 @@ use filedescriptor::OwnedHandle;
 #[derive(Debug)]
 pub struct WinChild {
     proc: Mutex<OwnedHandle>,
+    /// The pane's own job.  Only held: dropping the `WinChild` closes it,
+    /// which ends whatever is left of the pane's process tree.
+    _job: Option<job::PaneJob>,
 }
 
 impl WinChild {

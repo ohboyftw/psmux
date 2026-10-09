@@ -118,6 +118,7 @@ features = [
     "consoleapi",
     "handleapi",
     "fileapi",
+    "jobapi2",
     "namedpipeapi",
     "synchapi",
     "libloaderapi",

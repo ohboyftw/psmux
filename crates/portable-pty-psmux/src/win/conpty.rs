@@ -13,10 +13,19 @@ use winapi::um::wincon::COORD;
 /// kernel transitions during high-throughput output (e.g. `cat large_file`).
 /// Using 64 KB matches Windows Terminal's approach and reduces syscall
 /// overhead for both input (mouse/keyboard) and output.
+///
+/// Both ends are created NON inheritable.  Nothing needs them inheritable:
+/// CreatePseudoConsole duplicates the conhost side ends into the conhost it
+/// starts, and pane children are created with bInheritHandles=FALSE.  An
+/// inheritable end would ride along into every child the server spawns with
+/// std::process::Command, which always passes bInheritHandles=TRUE
+/// (pipe-pane, run-shell, if-shell, `#()` status jobs, hooks), so a long
+/// running job child would hold the ends of every pane that existed when it
+/// started.  Ported from upstream psmux 021eeae.
 fn create_pipe_with_buffer(size: u32) -> anyhow::Result<(FileDescriptor, FileDescriptor)> {
     use std::os::windows::io::FromRawHandle;
     use std::ptr;
-    use winapi::shared::minwindef::TRUE;
+    use winapi::shared::minwindef::FALSE;
     use winapi::um::handleapi::INVALID_HANDLE_VALUE;
     use winapi::um::minwinbase::SECURITY_ATTRIBUTES;
     use winapi::um::namedpipeapi::CreatePipe;
@@ -25,7 +34,7 @@ fn create_pipe_with_buffer(size: u32) -> anyhow::Result<(FileDescriptor, FileDes
     let mut sa = SECURITY_ATTRIBUTES {
         nLength: std::mem::size_of::<SECURITY_ATTRIBUTES>() as u32,
         lpSecurityDescriptor: ptr::null_mut(),
-        bInheritHandle: TRUE as _,
+        bInheritHandle: FALSE as _,
     };
     let mut read: HANDLE = INVALID_HANDLE_VALUE;
     let mut write: HANDLE = INVALID_HANDLE_VALUE;
@@ -208,3 +217,7 @@ fn is_invalid_parameter(e: &anyhow::Error) -> bool {
     let msg = format!("{}", e);
     msg.contains("os error 87")
 }
+
+#[cfg(test)]
+#[path = "conpty_tests.rs"]
+mod tests;
