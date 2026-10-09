@@ -213,8 +213,18 @@ impl<CB: crate::callbacks::Callbacks> vte::Perform for WrappedScreen<CB> {
         }
     }
 
-    fn osc_dispatch(&mut self, params: &[&[u8]], _bel_terminated: bool) {
+    fn osc_dispatch(&mut self, params: &[&[u8]], bel_terminated: bool) {
         match params {
+            [b"7501", body @ ..] if !body.is_empty() => {
+                let body = body.join(&b';');
+                // ESC ] "7501" ";" body, then BEL or ESC \.
+                let seq_len = 7 + body.len() + if bel_terminated { 1 } else { 2 };
+                self.screen.handle_program_status(&body, seq_len);
+            }
+            [b"133", b"A", ..] => {
+                self.screen.prompt_start();
+                self.callbacks.unhandled_osc(&mut self.screen, params);
+            }
             [b"0", s] => {
                 self.callbacks.set_window_icon_name(&mut self.screen, s);
                 self.callbacks.set_window_title(&mut self.screen, s);
@@ -512,6 +522,21 @@ mod query_reply_tests {
         parser.process(b"[6n");
         let _ = parser.screen_mut().take_replies();
         assert!(parser.screen_mut().take_replies().is_empty());
+    }
+
+    #[test]
+    fn program_status_query_when_followed_by_da1_then_its_reply_comes_first() {
+        let expected = [crate::program_status::QUERY_REPLY, DA1_REPLY].concat();
+        assert_eq!(replies_to(b"\x1b]7501;?\x1b\\\x1b[c"), expected);
+    }
+
+    #[test]
+    fn program_status_query_when_batched_with_xtversion_and_kitty_query_then_its_reply_comes_first()
+    {
+        let replies = replies_to(b"\x1b]7501;?\x1b\\\x1b[>q\x1b[?u\x1b[c");
+        let reply = crate::program_status::QUERY_REPLY;
+        assert_eq!(&replies[..reply.len()], reply);
+        assert_eq!(&replies[reply.len()..], DA1_REPLY);
     }
 
     #[test]

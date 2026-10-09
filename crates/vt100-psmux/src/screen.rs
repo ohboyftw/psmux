@@ -130,6 +130,10 @@ pub struct Screen {
     /// position, device attributes).  Drained by the PTY reader thread and
     /// written to the child's input.
     replies: Vec<u8>,
+
+    /// OSC 7501 program status records.  Owned by the terminal, not a grid:
+    /// alternate-screen switches and soft reset leave it alone.
+    program_status: crate::program_status::Store,
 }
 
 impl Screen {
@@ -153,6 +157,7 @@ impl Screen {
             squelch_clear_pending: false,
             notifications: Vec::new(),
             replies: Vec::new(),
+            program_status: crate::program_status::Store::default(),
         }
     }
 
@@ -709,6 +714,60 @@ impl Screen {
         }
     }
 
+    /// The root OSC 7501 program status record (the one reported without an
+    /// `id`), if any.
+    #[must_use]
+    pub fn program_status(&self) -> Option<&crate::ProgramStatusRecord> {
+        self.program_status.root()
+    }
+
+    /// Every OSC 7501 record, sorted by id.  The root record has id `None`
+    /// and comes first.
+    pub fn program_status_records(
+        &self,
+    ) -> impl Iterator<Item = (Option<&str>, &crate::ProgramStatusRecord)> {
+        self.program_status.iter()
+    }
+
+    /// The app of the record at `id` (`None` = root), inherited from the
+    /// nearest ancestor record when the record has none of its own.
+    #[must_use]
+    pub fn program_status_app(&self, id: Option<&str>) -> Option<&str> {
+        self.program_status.effective_app(id)
+    }
+
+    /// A counter that increases on every change to the OSC 7501 records,
+    /// including clears, lifetime drops and full resets.  Never decreases.
+    #[must_use]
+    pub fn program_status_seq(&self) -> u64 {
+        self.program_status.seq()
+    }
+
+    /// Whether a valid OSC 7501 report has been applied since the last full
+    /// reset, i.e. the program speaks the protocol.
+    #[must_use]
+    pub fn program_status_seen(&self) -> bool {
+        self.program_status.seen()
+    }
+
+    /// Applies the protocol's lifetime rule for the pane's child exiting:
+    /// working, blocked and idle records are dropped; done and error survive.
+    pub fn program_status_on_process_exit(&mut self) {
+        self.program_status.end_of_run();
+    }
+
+    /// Handles an OSC 7501 body; queues the fixed reply for a support query.
+    pub(crate) fn handle_program_status(&mut self, body: &[u8], seq_len: usize) {
+        if self.program_status.handle_osc(body, seq_len) {
+            self.push_reply(crate::program_status::QUERY_REPLY);
+        }
+    }
+
+    /// OSC 133;A (new shell prompt): same lifetime rule as process exit.
+    pub(crate) fn prompt_start(&mut self) {
+        self.program_status.end_of_run();
+    }
+
     /// Push a desktop notification (called from `osc_dispatch`).
     pub(crate) fn push_notification(&mut self, title: String, body: String) {
         // Cap to 16 queued notifications to prevent memory growth
@@ -1154,7 +1213,10 @@ impl Screen {
 
     // ESC c
     pub(crate) fn ris(&mut self) {
+        let mut program_status = std::mem::take(&mut self.program_status);
+        program_status.reset();
         *self = Self::new(self.grid.size(), self.grid.scrollback_len());
+        self.program_status = program_status;
     }
 
     // csi codes
