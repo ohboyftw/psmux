@@ -306,6 +306,11 @@ $env:PSMUX_CONPTY_DIR = "C:\tools\openconsole"
 
 # Diagnosis only: start pane processes outside their kill-on-close job, so a
 # pane's leftover processes outlive the pane and the server, as before.
+# With the job on (the default), a program a pane launches ends when the pane
+# ends, even after `exit` (e.g. `notepad`, cmd's `start`, a build daemon).
+# To keep one running, detach it: `psmux new -d`, or a process started with
+# breakaway. Detached psmux servers themselves break away from any job that
+# allows it, so a server started from a pane or an SSH session outlives it.
 $env:PSMUX_NO_PANE_JOB = "1"
 
 # These are set INSIDE psmux panes (tmux-compatible):
