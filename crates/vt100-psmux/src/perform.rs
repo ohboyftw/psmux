@@ -230,6 +230,10 @@ impl<CB: crate::callbacks::Callbacks> vte::Perform for WrappedScreen<CB> {
 
     fn osc_dispatch(&mut self, params: &[&[u8]], bel_terminated: bool) {
         match params {
+            // vte keeps at most 16 OSC params and drops the rest unseen, so a
+            // full param list may hide an over-long report.  ';' is outside
+            // the value charset anyway, so no legal report gets here.
+            [b"7501", ..] if params.len() >= 16 => {}
             [b"7501", body @ ..] if !body.is_empty() => {
                 let body = body.join(&b';');
                 // ESC ] "7501" ";" body, then BEL or ESC \.
@@ -393,6 +397,8 @@ fn decrqm_private_value(screen: &crate::screen::Screen, mode: u16) -> u8 {
     match mode {
         1 => onoff(screen.application_cursor()),
         3 => 4,
+        9 => onoff(mouse == Mouse::Press),
+        1004 => onoff(screen.focus_reporting()),
         25 => onoff(!screen.hide_cursor()),
         47 | 1047 | 1049 => onoff(screen.alternate_screen()),
         1000 => onoff(mouse == Mouse::PressRelease),
@@ -581,6 +587,16 @@ mod query_reply_tests {
     #[test]
     fn decrqm_private_when_mode_set_then_reports_1() {
         assert_eq!(replies_to(b"[?2004h[?2004$p"), b"[?2004;1$y");
+    }
+
+    #[test]
+    fn decrqm_private_when_focus_reporting_set_then_reports_1() {
+        assert_eq!(replies_to(b"\x1b[?1004h\x1b[?1004$p"), b"\x1b[?1004;1$y");
+    }
+
+    #[test]
+    fn decrqm_private_when_x10_mouse_set_then_reports_1() {
+        assert_eq!(replies_to(b"\x1b[?9h\x1b[?9$p"), b"\x1b[?9;1$y");
     }
 
     #[test]

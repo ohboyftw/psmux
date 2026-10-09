@@ -43,6 +43,8 @@ pub(super) fn parse_report(body: &[u8]) -> Option<Report> {
     let id = parse_id(fields.id)?;
     let state = fields.state?;
     if state == b"clear" {
+        // A clear is still one report: an invalid field discards it whole.
+        build_record(ProgramState::Idle, &fields)?;
         return Some(Report {
             id,
             action: Action::Clear,

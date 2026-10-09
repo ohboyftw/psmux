@@ -573,3 +573,23 @@ fn is_descendant_when_prefix_without_slash_then_false() {
     assert!(!super::is_descendant("ab", "a"));
     assert!(!super::is_descendant("a", "a"));
 }
+
+#[test]
+fn clear_when_msg_is_invalid_base64_then_report_discarded() {
+    let parser = parser_with(&["state=working", "state=clear:msg=,"]);
+    assert_eq!(root_state(&parser), Some(ProgramState::Working));
+}
+
+#[test]
+fn clear_when_app_too_long_then_report_discarded() {
+    let app = "a".repeat(33);
+    let parser = parser_with(&["state=working", &format!("state=clear:app={app}")]);
+    assert_eq!(root_state(&parser), Some(ProgramState::Working));
+}
+
+#[test]
+fn report_when_vte_param_list_is_full_then_discarded() {
+    let body = format!("state=working{}{}", ";".repeat(15), "A".repeat(5000));
+    let parser = parser_with(&[&body]);
+    assert_eq!(root_state(&parser), None);
+}
