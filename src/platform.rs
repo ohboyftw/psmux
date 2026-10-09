@@ -99,6 +99,7 @@ pub fn spawn_server_hidden(exe: &std::path::Path, args: &[String]) -> std::io::R
     const SW_HIDE: u16 = 0;
     const CREATE_NEW_CONSOLE: u32 = 0x00000010;
     const CREATE_NEW_PROCESS_GROUP: u32 = 0x00000200;
+    const CREATE_BREAKAWAY_FROM_JOB: u32 = 0x01000000;
 
     // Build command line: "exe" arg1 arg2 ...
     // Each argument is quoted to handle spaces.
@@ -111,8 +112,6 @@ pub fn spawn_server_hidden(exe: &std::path::Path, args: &[String]) -> std::io::R
             cmdline.push_str(arg);
         }
     }
-    let mut cmdline_wide: Vec<u16> = cmdline.encode_utf16().chain(std::iter::once(0)).collect();
-
     let mut si: STARTUPINFOW = unsafe { std::mem::zeroed() };
     si.cb = std::mem::size_of::<STARTUPINFOW>() as u32;
     si.dwFlags = STARTF_USESHOWWINDOW;
@@ -120,20 +119,35 @@ pub fn spawn_server_hidden(exe: &std::path::Path, args: &[String]) -> std::io::R
 
     let mut pi: PROCESS_INFORMATION = unsafe { std::mem::zeroed() };
 
-    let ok = unsafe {
-        CreateProcessW(
-            std::ptr::null(),
-            cmdline_wide.as_mut_ptr(),
-            std::ptr::null(),
-            std::ptr::null(),
-            0, // don't inherit handles
-            CREATE_NEW_CONSOLE | CREATE_NEW_PROCESS_GROUP,
-            std::ptr::null(),
-            std::ptr::null(),
-            &si,
-            &mut pi,
-        )
-    };
+    // Leave the caller's job first: a server started from inside a pane must
+    // outlive that pane's kill-on-close job, as `tmux new -d` inside tmux
+    // does.  A job that forbids breakaway fails the call with
+    // ERROR_ACCESS_DENIED, and the server then starts inside it, as before.
+    let base_flags = CREATE_NEW_CONSOLE | CREATE_NEW_PROCESS_GROUP;
+    let mut ok = 0;
+    for flags in [base_flags | CREATE_BREAKAWAY_FROM_JOB, base_flags] {
+        // A fresh buffer per attempt: CreateProcessW may write into it.
+        let mut cmdline_wide: Vec<u16> = cmdline.encode_utf16().chain(std::iter::once(0)).collect();
+        // SAFETY: the command line is a NUL terminated buffer we own, `si`
+        // and `pi` are valid for the call, and no handles are inherited.
+        ok = unsafe {
+            CreateProcessW(
+                std::ptr::null(),
+                cmdline_wide.as_mut_ptr(),
+                std::ptr::null(),
+                std::ptr::null(),
+                0, // don't inherit handles
+                flags,
+                std::ptr::null(),
+                std::ptr::null(),
+                &si,
+                &mut pi,
+            )
+        };
+        if ok != 0 {
+            break;
+        }
+    }
 
     if ok == 0 {
         return Err(std::io::Error::last_os_error());
