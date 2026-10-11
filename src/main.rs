@@ -464,7 +464,9 @@ fn run_main() -> io::Result<()> {
             for name in crate::resurrection::list_resurrectable(&resurrect_dir) {
                 // Skip if a live session with this name was already printed
                 let port_file = crate::paths::port_file(&name);
-                if std::path::Path::new(&port_file).exists() {
+                if std::path::Path::new(&port_file).exists()
+                    || crate::session::is_warm_session(&name)
+                {
                     continue;
                 }
                 println!("{}: (resurrectable)", name);
@@ -544,40 +546,16 @@ fn run_main() -> io::Result<()> {
                     let config_content = cmds.join("\n");
                     std::fs::write(&tmp_config, &config_content).ok();
 
-                    // Build new-session args: -s <name> + source the temp config
-                    // The first pane's command and cwd come from the snapshot
-                    let first_cwd = snap
-                        .windows
-                        .first()
-                        .and_then(|w| w.pane_commands.first())
-                        .map(|pc| pc.cwd.clone());
-                    let first_cmd = snap
-                        .windows
-                        .first()
-                        .and_then(|w| w.pane_commands.first())
-                        .and_then(crate::resurrection::restore_command);
-
-                    // Reconstruct argv for new-session
-                    let mut new_args = vec![
-                        "new-session".to_string(),
-                        "-s".to_string(),
-                        session_name.clone(),
-                    ];
-                    if let Some(ref cwd) = first_cwd {
-                        new_args.push("-c".to_string());
-                        new_args.push(cwd.clone());
-                    }
-                    // Source the temp config on startup to create remaining windows/panes
                     eprintln!("Spawning session with {} setup commands...", cmds.len());
 
-                    // Instead of complex argv threading, just launch new-session
-                    // and source the config file through the control port after startup.
-                    // For MVP: create the session, then source.
+                    // Create the session with the first pane, then source the
+                    // config file to create the remaining windows and panes.
                     let exe = std::env::current_exe().unwrap_or_else(|_| "psmux".into());
                     let status = std::process::Command::new(&exe)
-                        .args(["new-session", "-d", "-s", &session_name])
-                        .args(first_cwd.iter().flat_map(|c| vec!["-c", c.as_str()]))
-                        .args(first_cmd.iter().flat_map(|c| vec!["--", c.as_str()]))
+                        .args(crate::resurrection::first_pane_new_session_args(
+                            &session_name,
+                            &snap,
+                        ))
                         .status();
 
                     if let Ok(s) = status {

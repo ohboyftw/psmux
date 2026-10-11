@@ -4983,12 +4983,17 @@ pub fn run_server(
                         }
                         CtrlReq::KillServer => {
                             // Write the snapshot synchronously: the debounced writer
-                            // thread would not run before unregister_and_exit ends the process, and
-                            // resurrect after kill-server needs each pane's agent app.
-                            let _ = crate::resurrection::save_snapshot_to(
-                                &crate::resurrection::build_snapshot(&app),
-                                &crate::resurrection::resurrect_dir(app.resurrect_dir.as_deref()),
-                            );
+                            // thread would not run before unregister_and_exit ends the
+                            // process, and resurrect after kill-server needs each pane's
+                            // agent app. Warm standby servers have nothing to resurrect.
+                            if !crate::session::is_warm_session(&app.session_name) {
+                                let _ = crate::resurrection::save_snapshot_to(
+                                    &crate::resurrection::build_snapshot(&app),
+                                    &crate::resurrection::resurrect_dir(
+                                        app.resurrect_dir.as_deref(),
+                                    ),
+                                );
+                            }
                             unregister_and_exit(&mut app)
                         }
                         CtrlReq::WaitFor(channel, op) => match op {
@@ -6340,7 +6345,7 @@ pub fn run_server(
             // state flips between records do not, so they never write.
             if transitions
                 .iter()
-                .any(|(_, t)| t.old.is_none() != t.new.is_none())
+                .any(|(_, t)| crate::resurrection::changes_resume_source(t))
             {
                 crate::resurrection::save_snapshot(&app);
             }

@@ -83,6 +83,80 @@ pub fn restore_command(pc: &PaneCommand) -> Option<String> {
     }
 }
 
+/// argv (without the executable) that recreates the snapshot's first pane.
+///
+/// The restore command is passed positionally, never after `--`: positional
+/// commands are shell-wrapped like `new-window`/`split-window` ones, while
+/// `--` spawns its argument as a raw program name, which fails for a command
+/// line such as `claude --continue` and for npm shims such as `pi.cmd`.
+pub fn first_pane_new_session_args(session_name: &str, snap: &SessionSnapshot) -> Vec<String> {
+    let mut args = vec![
+        "new-session".into(),
+        "-d".into(),
+        "-s".into(),
+        session_name.into(),
+    ];
+    let first = snap.windows.first().and_then(|w| w.pane_commands.first());
+    if let Some(pc) = first {
+        args.push("-c".into());
+        args.push(pc.cwd.clone());
+    }
+    args.extend(first.and_then(restore_command));
+    args
+}
+
+/// Whether an agent-state transition changes what resurrect would resume:
+/// an agent appearing in or leaving a pane does; flips between states do not.
+pub fn changes_resume_source(t: &crate::agent_state::AgentTransition) -> bool {
+    t.old.is_none() != t.new.is_none()
+}
+
+/// One row of the OS process table: pid, parent pid, lowercased image name.
+pub type ProcessRow = (u32, u32, String);
+
+fn is_shell_image(name: &str) -> bool {
+    matches!(
+        name,
+        "pwsh.exe" | "powershell.exe" | "cmd.exe" | "bash.exe" | "sh.exe"
+    )
+}
+
+fn is_console_host(name: &str) -> bool {
+    matches!(name, "conhost.exe" | "openconsole.exe")
+}
+
+/// The agent process of a pane whose child is `root`: `root` itself when the
+/// pane was spawned straight into a program, else the shallowest descendant
+/// that is neither a shell nor a console host.  Deeper processes (MCP
+/// servers, tool commands) are the agent's own children and may run in
+/// another directory.  `None` when no such process is alive.
+pub fn agent_pid(root: u32, table: &[ProcessRow]) -> Option<u32> {
+    let root_name = &table.iter().find(|r| r.0 == root)?.2;
+    if !is_shell_image(root_name) {
+        return Some(root);
+    }
+    let mut seen = std::collections::HashSet::from([root]);
+    let mut level = vec![root];
+    while !level.is_empty() {
+        let children: Vec<&ProcessRow> = table
+            .iter()
+            .filter(|r| level.contains(&r.1) && seen.insert(r.0))
+            .collect();
+        if let Some(r) = children
+            .iter()
+            .find(|r| !is_shell_image(&r.2) && !is_console_host(&r.2))
+        {
+            return Some(r.0);
+        }
+        level = children
+            .iter()
+            .filter(|r| is_shell_image(&r.2))
+            .map(|r| r.0)
+            .collect();
+    }
+    None
+}
+
 // ---------------------------------------------------------------------------
 // Functions
 // ---------------------------------------------------------------------------
@@ -210,50 +284,65 @@ fn serialize_tree(node: &Node) -> LayoutTreeNode {
     }
 }
 
+/// The process table, read once per snapshot and only if a pane needs it.
+type LazyProcessTable = std::cell::OnceCell<Vec<ProcessRow>>;
+
 /// Collect spawn metadata from leaf panes in DFS order.
-fn collect_pane_commands(node: &Node, out: &mut Vec<PaneCommand>) {
+fn collect_pane_commands(node: &Node, table: &LazyProcessTable, out: &mut Vec<PaneCommand>) {
     match node {
-        Node::Leaf(pane) => out.push(pane_command(pane)),
+        Node::Leaf(pane) => out.push(pane_command(pane, table)),
         Node::Split { children, .. } => {
             for child in children {
-                collect_pane_commands(child, out);
+                collect_pane_commands(child, table, out);
             }
         }
     }
 }
 
-/// Spawn metadata of one pane.  For a pane running a known agent the cwd is
-/// the foreground process's, because `--continue` is keyed on the directory
-/// the agent was started in, which can differ from the shell's spawn cwd.
-fn pane_command(pane: &crate::types::Pane) -> PaneCommand {
-    let resume = resume_command_for(&pane.agent_state.details().app);
-    let spawn_cwd = || {
-        pane.spawn_cwd
-            .as_ref()
-            .map(|p| p.to_string_lossy().to_string())
-            .unwrap_or_else(|| ".".to_string())
-    };
-    let cwd = resume
+/// Spawn metadata of one pane.  A live pane whose agent process is still
+/// running records the agent's `app` and the agent's own cwd, because
+/// `--continue` is keyed on the directory the agent was started in.  A dead
+/// pane, or one whose agent exited leaving a done/error record, records none.
+fn pane_command(pane: &crate::types::Pane, table: &LazyProcessTable) -> PaneCommand {
+    let app = &pane.agent_state.details().app;
+    let agent = resume_command_for(app)
+        .filter(|_| !pane.dead)
         .and(pane.child_pid)
-        .and_then(crate::platform::process_info::get_foreground_cwd)
-        .unwrap_or_else(spawn_cwd);
+        .and_then(|pid| {
+            agent_pid(
+                pid,
+                table.get_or_init(crate::platform::process_info::process_table),
+            )
+        });
+    let cwd = agent
+        .and_then(crate::platform::process_info::get_process_cwd)
+        .or_else(|| {
+            pane.spawn_cwd
+                .as_ref()
+                .map(|p| p.to_string_lossy().to_string())
+        })
+        .unwrap_or_else(|| ".".to_string());
+    let app = if agent.is_some() {
+        app.clone()
+    } else {
+        String::new()
+    };
     PaneCommand {
         command: pane.spawn_command.clone(),
         cwd,
         env: pane.spawn_env.clone(),
-        app: resume
-            .map(|_| pane.agent_state.details().app.clone())
-            .unwrap_or_default(),
-        resume_command: resume.map(str::to_string),
+        resume_command: resume_command_for(&app).map(str::to_string),
+        app,
     }
 }
 
 /// Build a complete snapshot from the current server state.
 pub fn build_snapshot(app: &AppState) -> SessionSnapshot {
+    let table = LazyProcessTable::new();
     let mut windows = Vec::new();
     for win in &app.windows {
         let mut pane_commands = Vec::new();
-        collect_pane_commands(&win.root, &mut pane_commands);
+        collect_pane_commands(&win.root, &table, &mut pane_commands);
         let layout_tree = serialize_tree(&win.root);
         windows.push(WindowSnapshot {
             name: win.name.clone(),
@@ -338,8 +427,9 @@ pub fn apply_snapshot(
 
 /// Best-effort save: build snapshot from AppState and write to disk.
 ///
-/// The snapshot is serialized on the calling thread (cheap — just cloning
-/// small metadata), then sent to a background writer thread.  Rapid
+/// The snapshot is built on the calling thread: cloning small metadata, plus
+/// one process-table snapshot and one cwd read per agent pane when any pane
+/// reports a known agent.  It is then sent to a background writer thread.  Rapid
 /// structural changes (split → resize → split) coalesce: the writer uses a
 /// 100ms debounce so at most ~10 writes/sec hit disk.
 pub fn save_snapshot(app: &AppState) {

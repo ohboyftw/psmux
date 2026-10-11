@@ -71,3 +71,122 @@ fn restore_command_when_resume_without_known_app_then_ignored() {
 fn restore_command_when_default_shell_pane_then_none() {
     assert_eq!(restore_command(&pane(None, "", None)), None);
 }
+
+fn snapshot_with_first_pane(pc: PaneCommand) -> SessionSnapshot {
+    SessionSnapshot {
+        version: 1,
+        session_name: "s".into(),
+        timestamp: 1,
+        windows: vec![WindowSnapshot {
+            name: "w".into(),
+            id: 0,
+            active_path: vec![],
+            layout_tree: LayoutTreeNode::Leaf { id: 0 },
+            pane_commands: vec![pc],
+        }],
+        active_window_idx: 0,
+    }
+}
+
+#[test]
+fn first_pane_args_when_agent_pane_then_command_is_positional_not_raw() {
+    let snap = snapshot_with_first_pane(pane(Some("pwsh"), "claude-code", None));
+    assert_eq!(
+        first_pane_new_session_args("s", &snap),
+        [
+            "new-session",
+            "-d",
+            "-s",
+            "s",
+            "-c",
+            "C:/work",
+            "claude --continue"
+        ]
+    );
+}
+
+#[test]
+fn first_pane_args_when_shell_pane_then_no_command() {
+    let snap = snapshot_with_first_pane(pane(None, "", None));
+    assert_eq!(
+        first_pane_new_session_args("s", &snap),
+        ["new-session", "-d", "-s", "s", "-c", "C:/work"]
+    );
+}
+
+fn transition(
+    old: Option<vt100::ProgramState>,
+    new: Option<vt100::ProgramState>,
+) -> crate::agent_state::AgentTransition {
+    crate::agent_state::AgentTransition {
+        old,
+        new,
+        record_id: None,
+        details: Default::default(),
+    }
+}
+
+#[test]
+fn changes_resume_source_when_state_flips_then_false() {
+    use vt100::ProgramState::{Idle, Working};
+    assert!(!changes_resume_source(&transition(
+        Some(Working),
+        Some(Idle)
+    )));
+}
+
+#[test]
+fn changes_resume_source_when_agent_appears_then_true() {
+    let t = transition(None, Some(vt100::ProgramState::Working));
+    assert!(changes_resume_source(&t));
+}
+
+#[test]
+fn changes_resume_source_when_agent_leaves_then_true() {
+    let t = transition(Some(vt100::ProgramState::Blocked), None);
+    assert!(changes_resume_source(&t));
+}
+
+fn row(pid: u32, ppid: u32, name: &str) -> ProcessRow {
+    (pid, ppid, name.into())
+}
+
+#[test]
+fn agent_pid_when_agent_has_deeper_tool_children_then_agent_itself() {
+    let table = [
+        row(10, 1, "pwsh.exe"),
+        row(11, 10, "conhost.exe"),
+        row(20, 10, "claude.exe"),
+        row(30, 20, "bash.exe"),
+        row(40, 30, "cargo.exe"),
+        row(50, 20, "node.exe"),
+    ];
+    assert_eq!(agent_pid(10, &table), Some(20));
+}
+
+#[test]
+fn agent_pid_when_npm_shim_runs_through_cmd_then_node_below_it() {
+    let table = [
+        row(10, 1, "pwsh.exe"),
+        row(15, 10, "cmd.exe"),
+        row(16, 15, "node.exe"),
+    ];
+    assert_eq!(agent_pid(10, &table), Some(16));
+}
+
+#[test]
+fn agent_pid_when_only_console_host_below_shell_then_none() {
+    let table = [row(10, 1, "pwsh.exe"), row(11, 10, "conhost.exe")];
+    assert_eq!(agent_pid(10, &table), None);
+}
+
+#[test]
+fn agent_pid_when_pane_spawned_agent_directly_then_root() {
+    let table = [row(20, 1, "claude.exe"), row(30, 20, "node.exe")];
+    assert_eq!(agent_pid(20, &table), Some(20));
+}
+
+#[test]
+fn agent_pid_when_root_has_exited_then_none() {
+    assert_eq!(agent_pid(10, &[row(20, 1, "claude.exe")]), None);
+}

@@ -339,8 +339,13 @@ pane's original command:
   command. Other `app` names are not recorded.
 - `--continue` resumes the most recent conversation of the current directory.
   psmux therefore restores the pane in the agent's own working directory, read
-  from the pane's foreground process when the snapshot is written, not in the
-  directory the pane's shell started in.
+  from the agent process when the snapshot is written: the first process below
+  the pane's shell that is not itself a shell. Deeper processes, such as MCP
+  servers or commands the agent runs, are not used, since they can run in
+  another directory.
+- `app` is recorded only while the agent process is still running in a live
+  pane. A done or error record that survives the agent's exit does not make
+  the pane resume, and neither does a pane kept by `remain-on-exit`.
 - Two agent panes in the same directory both resume that directory's most
   recent conversation. Options given when the agent was started (`--model`,
   teammate flags) are not carried over. Neither Claude Code nor Pi tells the
@@ -348,8 +353,14 @@ pane's original command:
 - Only agents running interactively report OSC 7501 (`pi --print` workers do
   not), so only those are resumed.
 - The snapshot is written when an agent appears in a pane or its last record
-  goes away (for example Claude Code sends `state=clear` when it exits), and
-  synchronously on `kill-server`. Changes between states never write it.
+  goes away (for example Claude Code sends `state=clear` when it exits), and,
+  for a session served by a background server, synchronously on
+  `kill-server`. Changes between states never write it.
+- The resume command runs through the pane's default shell in the agent's
+  directory. When that shell is `cmd.exe`, which looks in the current
+  directory before `PATH`, a `claude.bat` or `pi.cmd` placed in that
+  directory runs instead of the real agent. PowerShell does not search the
+  current directory.
 - When the resumed agent exits, the pane exits with it; it does not fall back
   to the shell that originally ran the agent.
 

@@ -2139,6 +2139,30 @@ pub mod process_info {
         }
     }
 
+    /// Every process on the machine as (pid, parent pid, lowercased image
+    /// name), from one toolhelp snapshot; empty if the snapshot fails.
+    pub fn process_table() -> Vec<(u32, u32, String)> {
+        let mut entries = Vec::with_capacity(512);
+        // SAFETY: the snapshot handle is checked before use and closed once;
+        // `pe` is a zeroed POD struct whose dw_size is set as the API requires.
+        unsafe {
+            let snap = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
+            if snap == INVALID_HANDLE || snap == 0 {
+                return entries;
+            }
+            let mut pe: PROCESSENTRY32W = std::mem::zeroed();
+            pe.dw_size = std::mem::size_of::<PROCESSENTRY32W>() as u32;
+            let mut ok = Process32FirstW(snap, &mut pe) != 0;
+            while ok {
+                let name = exe_name_from_entry(&pe);
+                entries.push((pe.th32_process_id, pe.th32_parent_process_id, name));
+                ok = Process32NextW(snap, &mut pe) != 0;
+            }
+            CloseHandle(snap);
+        }
+        entries
+    }
+
     /// Extract the lowercased executable name from a PROCESSENTRY32W.
     fn exe_name_from_entry(pe: &PROCESSENTRY32W) -> String {
         let nul = pe
@@ -2225,6 +2249,9 @@ pub mod process_info {
     }
     pub fn get_foreground_cwd(_pid: u32) -> Option<String> {
         None
+    }
+    pub fn process_table() -> Vec<(u32, u32, String)> {
+        Vec::new()
     }
     pub fn has_vt_bridge_descendant(_root_pid: u32) -> bool {
         false
