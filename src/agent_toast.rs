@@ -69,6 +69,7 @@ impl AgentToasts {
         self.enabled = on;
         if !on {
             self.pending.clear();
+            self.exited.clear();
         }
     }
 
@@ -116,6 +117,7 @@ impl AgentToasts {
 
     /// Records that the pending toast of `pane_id` was shown.
     pub fn mark_fired(&mut self, pane_id: usize, now: Instant) {
+        self.exited.remove(&pane_id);
         if let Some(toast) = self.pending.remove(&pane_id) {
             self.last_toast.insert(pane_id, (toast.state, now));
             self.last_fired = Some(now);
@@ -127,7 +129,9 @@ impl AgentToasts {
     /// Marks a pane whose child exited on its own, so its waiting toast
     /// outlives the pane leaving the window tree.
     pub fn note_exited(&mut self, pane_id: usize) {
-        self.exited.insert(pane_id);
+        if self.pending.contains_key(&pane_id) {
+            self.exited.insert(pane_id);
+        }
     }
 
     /// Drops the waiting toast of every pane that is neither in `live` nor
@@ -151,6 +155,7 @@ impl AgentToasts {
             .values()
             .max_by_key(|toast| (priority(toast.state), std::cmp::Reverse(toast.pane_id)))?
             .pane_id;
+        self.exited.remove(&id);
         self.pending.remove(&id)
     }
 
