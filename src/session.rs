@@ -242,6 +242,42 @@ fn remove_server_state(port_path: &std::path::Path) {
     }
 }
 
+/// Remove session `base`'s registry set when its port is no longer bound
+/// (Wave 2 bind-probe liveness); a live server's entry is never touched.
+pub fn remove_registry_set_if_dead(base: &str) {
+    let path = std::path::PathBuf::from(crate::paths::port_file(base));
+    if path.exists() && !port_file_is_live(&path) {
+        remove_server_state(&path);
+    }
+}
+
+/// After a kill-server: remove the file set of every `.port` the kill read
+/// (`registered`, path and contents at that moment) whose port is no longer
+/// bound. A server that was force-ended, or that never answered, removes
+/// nothing itself, and its dead entry would otherwise stay listed.
+///
+/// Only the sets the kill enumerated are considered, and only while the
+/// `.port` still holds what was read then: a server that started after the
+/// kill, or rewrote the file, is left alone. A process that was just ended
+/// releases its port a moment later, so a still-bound port is re-probed
+/// briefly before it is accepted as live.
+pub fn sweep_dead_registry_sets(registered: &[(std::path::PathBuf, String)]) {
+    for (path, contents) in registered {
+        let unchanged = || std::fs::read_to_string(path).is_ok_and(|now| now == *contents);
+        let mut live = port_file_is_live(path);
+        for _ in 0..10 {
+            if !live {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(20));
+            live = port_file_is_live(path);
+        }
+        if !live && unchanged() {
+            remove_server_state(path);
+        }
+    }
+}
+
 /// Kill any warm (standby) servers in the given namespace.
 /// Called when the last non-warm session exits so orphan warm servers don't
 /// linger indefinitely (#120, #138).  Skips if other non-warm sessions still
@@ -496,6 +532,34 @@ fn scan_servers_for_id(target_id: &str) -> Option<(String, u16, String)> {
     None
 }
 
+/// The session this invocation named with `-t`, as a port file base. Process
+/// local on purpose: `PSMUX_TARGET_SESSION` is inherited by every server and
+/// pane shell, so the env var alone cannot say whether THIS command asked for
+/// the session or merely inherited it.
+static EXPLICIT_TARGET_SESSION: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+
+/// Record that this invocation's `-t` named session `port_file_base`.
+pub fn set_explicit_target_session(port_file_base: &str) {
+    let _ = EXPLICIT_TARGET_SESSION.set(port_file_base.to_string());
+}
+
+fn explicit_target_session() -> Option<String> {
+    EXPLICIT_TARGET_SESSION.get().cloned()
+}
+
+/// Whether the env fallback may re-route `target` to the most recent real
+/// session.
+///
+/// Only an inherited warm name is re-routed: a pane shell started inside a
+/// standby keeps `PSMUX_TARGET_SESSION=__warm__` after the standby is claimed
+/// and renamed, and its commands mean the claimed session. A warm name the
+/// caller asked for with `-t` is never re-routed: `kill-session -t __warm__`
+/// used to land on the newest real session and kill it. It goes to that
+/// standby or fails with "no server running".
+fn env_target_redirects(target: &str, explicit: Option<&str>) -> bool {
+    is_warm_session(target) && explicit != Some(target)
+}
+
 /// Resolve which server (name, port, session-key) a control command should be
 /// sent to. Priority: (1) `-t <target>` parsed from the line — routes a session
 /// name to `<name>.port` directly, and scans live servers for `%pane` / `@window`
@@ -549,7 +613,7 @@ fn resolve_server_for_command(line: &str) -> io::Result<(String, u16, String)> {
     if debug {
         eprintln!("[route] env fallback: PSMUX_TARGET_SESSION -> {:?}", target);
     }
-    if is_warm_session(&target) {
+    if env_target_redirects(&target, explicit_target_session().as_deref()) {
         target = resolve_last_session_name().unwrap_or_else(|| "default".to_string());
         if debug {
             eprintln!("[route] warm resolved to {:?}", target);
@@ -1621,3 +1685,7 @@ mod one_shot_exchange_tests {
         assert_eq!(err.to_string(), "ERROR: Invalid session key");
     }
 }
+
+#[cfg(test)]
+#[path = "../tests-rs/test_warm_target_routing.rs"]
+mod tests_warm_target_routing;

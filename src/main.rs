@@ -15,6 +15,7 @@ mod format;
 mod help;
 mod hints;
 mod input;
+mod kill_server;
 mod layout;
 mod orchestrate;
 mod pane;
@@ -32,6 +33,7 @@ mod tree;
 mod types;
 mod util;
 mod wait_for;
+mod warm_reap;
 mod window_ops;
 
 #[allow(unused)]
@@ -63,9 +65,9 @@ use crate::platform::enable_virtual_terminal_processing;
 use crate::rendering::apply_cursor_style;
 use crate::server::run_server;
 use crate::session::{
-    cleanup_stale_port_files, kill_remaining_server_processes, read_session_key,
-    resolve_default_session_name, resolve_last_session_name, send_control,
-    send_control_with_response, send_control_with_response_timeout,
+    cleanup_stale_port_files, read_session_key, resolve_default_session_name,
+    resolve_last_session_name, send_control, send_control_with_response,
+    send_control_with_response_timeout,
 };
 use crate::ssh_input::{is_ssh_session, send_mouse_enable, InputSource};
 
@@ -211,6 +213,7 @@ fn run_main() -> io::Result<()> {
             );
             if has_explicit_session && !is_switch_client {
                 env::set_var("PSMUX_TARGET_SESSION", &port_file_base);
+                crate::session::set_explicit_target_session(&port_file_base);
             }
         }
     }
@@ -331,84 +334,7 @@ fn run_main() -> io::Result<()> {
     match cmd {
         // kill-server MUST be handled early before any potential fall-through
         "kill-server" => {
-            let psmux_dir = crate::paths::psmux_dir();
-            // Compute namespace prefix for -L filtering (matches list-sessions behavior)
-            let ns_prefix = l_socket_name.as_ref().map(|l| format!("{l}__"));
-            let mut streams: Vec<std::net::TcpStream> = Vec::new();
-            let mut stale_ports: Vec<std::path::PathBuf> = Vec::new();
-            if let Ok(entries) = std::fs::read_dir(&psmux_dir) {
-                for entry in entries.flatten() {
-                    let path = entry.path();
-                    if path.extension().map(|e| e == "port").unwrap_or(false) {
-                        if let Some(session_name) = path.file_stem().and_then(|s| s.to_str()) {
-                            // Apply -L namespace filtering:
-                            // With -L: only kill sessions under that namespace
-                            // Without -L: kill ALL sessions (tmux behavior)
-                            if let Some(ref pfx) = ns_prefix {
-                                if !session_name.starts_with(pfx.as_str()) {
-                                    continue;
-                                }
-                            }
-                            if let Ok(port_str) = std::fs::read_to_string(&path) {
-                                if let Ok(port) = port_str.trim().parse::<u16>() {
-                                    let addr = format!("127.0.0.1:{}", port);
-                                    let sess_key =
-                                        read_session_key(session_name).unwrap_or_default();
-                                    if let Ok(mut stream) = std::net::TcpStream::connect_timeout(
-                                        &addr.parse().unwrap(),
-                                        Duration::from_millis(1000),
-                                    ) {
-                                        let _ = stream.set_nodelay(true);
-                                        let _ = writeln!(stream, "AUTH {}", sess_key);
-                                        let _ = stream.flush();
-                                        let _ = std::io::Write::write_all(
-                                            &mut stream,
-                                            b"kill-server\n",
-                                        );
-                                        let _ = stream.flush();
-                                        // Shutdown write half to signal we're done sending.
-                                        // Keep read half open to detect server exit.
-                                        let _ = stream.shutdown(std::net::Shutdown::Write);
-                                        streams.push(stream);
-                                    } else {
-                                        // Server not reachable — stale port file
-                                        stale_ports.push(path.clone());
-                                    }
-                                }
-                            } else {
-                                stale_ports.push(path.clone());
-                            }
-                        }
-                    }
-                }
-            }
-            // Wait for each server to exit (connection close = server exited)
-            for mut stream in streams {
-                let _ = stream.set_read_timeout(Some(Duration::from_millis(3000)));
-                let mut buf = [0u8; 64];
-                // Read until EOF or error — server closing connection means it processed kill-server
-                loop {
-                    match std::io::Read::read(&mut stream, &mut buf) {
-                        Ok(0) => break,    // EOF — server closed connection
-                        Err(_) => break,   // timeout or error
-                        Ok(_) => continue, // drain any response
-                    }
-                }
-            }
-            // Clean up stale port/key files
-            for path in &stale_ports {
-                let _ = std::fs::remove_file(path);
-                // Also remove the corresponding .key file
-                let key_path = path.with_extension("key");
-                let _ = std::fs::remove_file(&key_path);
-            }
-            // Brief sleep then verify no processes remain; if any do, force-kill them.
-            // Only do the nuclear fallback when not using -L namespace filtering,
-            // because with -L we should only kill sessions in that namespace.
-            std::thread::sleep(Duration::from_millis(300));
-            if ns_prefix.is_none() {
-                kill_remaining_server_processes();
-            }
+            crate::kill_server::kill_server(l_socket_name.as_deref());
             return Ok(());
         }
         "ls" | "list-sessions" => {
@@ -731,6 +657,15 @@ fn run_main() -> io::Result<()> {
                 .position(|a| a == "--")
                 .map(|pos| args.iter().skip(pos + 1).cloned().collect())
                 .filter(|v: &Vec<String>| !v.is_empty());
+            // The server that spawned a warm standby (`pid:creation`), so the
+            // standby can tell that a kill-server ended it.
+            if let Some(spec) = args
+                .iter()
+                .position(|a| a == "--spawner")
+                .and_then(|i| args.get(i + 1))
+            {
+                crate::warm_reap::set_warm_spawner(spec);
+            }
             return run_server(
                 name,
                 server_socket_name,
@@ -1851,11 +1786,13 @@ fn run_main() -> io::Result<()> {
             if let Some(ref t) = target {
                 env::set_var("PSMUX_TARGET_SESSION", t);
             }
-            // Try to send kill command to server
-            if send_control("kill-session\n".to_string()).is_err() {
-                // Server not responding - clean up stale port file
-                let port_path = crate::paths::port_file(&session_name);
-                let _ = std::fs::remove_file(&port_path);
+            // A failure is reported, not swallowed: at rc 0 a kill that
+            // reached nothing (or the wrong server) looked like it worked.
+            // The registry set is removed only once its port is unbound, so
+            // a live server that merely stalled keeps its entry.
+            if let Err(e) = send_control("kill-session\n".to_string()) {
+                crate::session::remove_registry_set_if_dead(&session_name);
+                return Err(e);
             }
             return Ok(());
         }

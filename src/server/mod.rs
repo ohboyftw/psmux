@@ -376,6 +376,14 @@ fn spawn_one_warm_server(app: &AppState, warm_session_name: &str) -> bool {
         args.push("-y".into());
         args.push(area.height.to_string());
     }
+    // Tell the standby who spawned it, so that a kill-server which ends this
+    // server before the standby has registered still reaches the standby
+    // (`warm_reap::warm_standby_verdict`).
+    let self_pid = std::process::id();
+    if let Some(creation) = crate::warm_reap::process_creation_time(self_pid) {
+        args.push("--spawner".into());
+        args.push(crate::warm_reap::format_spawner(self_pid, creation));
+    }
     #[cfg(windows)]
     {
         if crate::platform::spawn_server_hidden(&exe, &args).is_ok() {
@@ -394,6 +402,23 @@ fn spawn_one_warm_server(app: &AppState, warm_session_name: &str) -> bool {
         let _ = cmd.spawn();
     }
     true
+}
+
+/// End this unclaimed standby: unregister it, end its panes, and exit. Same
+/// sequence as a kill-server, minus the reply.
+fn end_orphaned_standby(app: &mut AppState) -> ! {
+    let base = app.port_file_base();
+    let _ = std::fs::remove_file(crate::paths::port_file(&base));
+    let _ = std::fs::remove_file(crate::paths::key_file(&base));
+    let _ = std::fs::remove_file(crate::paths::version_file(&base));
+    let _ = std::fs::remove_file(crate::paths::pipe_file(&base));
+    crate::types::shutdown_persistent_streams();
+    tree::kill_all_children_batch(&mut app.windows);
+    if let Some(mut wp) = app.warm_pane.take() {
+        wp.child.kill().ok();
+    }
+    std::thread::sleep(Duration::from_millis(10));
+    std::process::exit(0);
 }
 
 /// Spawn standby "warm server" processes up to the configured pool size.
@@ -623,6 +648,16 @@ pub fn run_server(
     crate::resurrection::prune_snapshots_in(&crate::resurrection::resurrect_dir(None), 50);
     // Install console control handler to prevent termination on client detach
     install_console_ctrl_handler();
+
+    // A standby spawned by a server was spawned into a data directory that
+    // existed; if it is gone now somebody deleted it, and starting up (which
+    // creates the directory) would resurrect a namespace removed on purpose.
+    if crate::warm_reap::warm_spawner().is_some()
+        && crate::session::is_warm_session(&session_name)
+        && !std::path::Path::new(&crate::paths::psmux_dir()).is_dir()
+    {
+        return Ok(());
+    }
 
     let pty_system = native_pty_system();
 
@@ -1034,6 +1069,7 @@ pub fn run_server(
     // loop iteration wastes CPU.  Exited processes are still reaped promptly
     // (250ms is imperceptible to users).
     let mut last_reap = Instant::now();
+    let mut last_warm_orphan_check = Instant::now();
 
     // Coalesce the proactive server-push (see ~"Server-push" block below) to
     // ~30fps during sustained autonomous output (animations / token streaming).
@@ -6175,6 +6211,23 @@ pub fn run_server(
             if opened_at.elapsed() > Duration::from_millis(app.display_panes_time_ms) {
                 app.mode = Mode::Passthrough;
                 state_dirty = true;
+            }
+        }
+        // An unclaimed standby that a kill-server missed (it registered after
+        // the kill had enumerated the namespace) or whose data directory was
+        // deleted ends itself. Checked on this thread so a claim, which is
+        // handled here too, can never be undone halfway by the watchdog.
+        if is_warm_server(&app)
+            && last_warm_orphan_check.elapsed() >= crate::warm_reap::WARM_ORPHAN_CHECK_INTERVAL
+        {
+            last_warm_orphan_check = Instant::now();
+            let dir = crate::paths::psmux_dir();
+            let verdict = crate::warm_reap::check_this_standby(
+                std::path::Path::new(&dir),
+                app.socket_name.as_deref(),
+            );
+            if verdict != crate::warm_reap::WarmStandbyVerdict::Keep {
+                end_orphaned_standby(&mut app);
             }
         }
         // Check if all windows/panes have exited (throttled to every 250ms)
