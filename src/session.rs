@@ -263,16 +263,19 @@ pub fn remove_registry_set_if_dead(base: &str) {
 /// briefly before it is accepted as live.
 pub fn sweep_dead_registry_sets(registered: &[(std::path::PathBuf, String)]) {
     for (path, contents) in registered {
+        // A server that exited gracefully removed its own `.port`; that entry
+        // (or one rewritten since) is not ours to judge, so stop at once.
         let unchanged = || std::fs::read_to_string(path).is_ok_and(|now| now == *contents);
-        let mut live = port_file_is_live(path);
+        let probe = || unchanged().then(|| port_file_is_live(path));
+        let mut verdict = probe();
         for _ in 0..10 {
-            if !live {
+            if verdict != Some(true) {
                 break;
             }
             std::thread::sleep(Duration::from_millis(20));
-            live = port_file_is_live(path);
+            verdict = probe();
         }
-        if !live && unchanged() {
+        if verdict == Some(false) && unchanged() {
             remove_server_state(path);
         }
     }

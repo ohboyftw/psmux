@@ -6217,8 +6217,8 @@ pub fn run_server(
         // the kill had enumerated the namespace) or whose data directory was
         // deleted ends itself. Checked on this thread so a claim, which is
         // handled here too, can never be undone halfway by the watchdog.
-        if is_warm_server(&app)
-            && last_warm_orphan_check.elapsed() >= crate::warm_reap::WARM_ORPHAN_CHECK_INTERVAL
+        if last_warm_orphan_check.elapsed() >= crate::warm_reap::WARM_ORPHAN_CHECK_INTERVAL
+            && is_warm_server(&app)
         {
             last_warm_orphan_check = Instant::now();
             let dir = crate::paths::psmux_dir();

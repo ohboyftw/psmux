@@ -77,3 +77,14 @@ fn test_sweep_when_port_file_rewritten_since_kill_then_set_kept() {
     sweep_dead_registry_sets(&[(path, "1".to_string())]);
     assert!(dir.join("reborn.port").exists());
 }
+
+#[test]
+fn test_sweep_when_port_file_already_removed_then_returns_at_once() {
+    let dir = sweep_dir("graceful");
+    let (path, contents) = seed_set(&dir, "exited", free_port());
+    std::fs::remove_file(&path).expect("server removed its .port");
+    let started = std::time::Instant::now();
+    sweep_dead_registry_sets(&[(path, contents)]);
+    assert!(started.elapsed() < Duration::from_millis(150));
+    assert!(dir.join("exited.key").exists());
+}
