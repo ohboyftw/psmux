@@ -686,7 +686,9 @@ pub fn run_server(
     // port file to discover the server, and the client polls for it to know
     // the server is ready.
     let dir = crate::paths::psmux_dir();
-    // A spawned standby never creates the data directory (see above).
+    // A spawned standby skips this create (see the check above). The pane id
+    // reservation and the pipe listener still create the directory, so a
+    // delete inside that short window can still be undone.
     if !spawned_standby {
         let _ = std::fs::create_dir_all(&dir);
     }
