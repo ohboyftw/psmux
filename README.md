@@ -321,6 +321,7 @@ tv psmux-keys        # Browse key bindings
 | **[Key Bindings](docs/keybindings.md)** | Default keys and customization |
 | **[Scripting](docs/scripting.md)** | 92 commands, hooks, targets, pipe-pane, exec, wait-for, wait-pane |
 | **[Orchestrate](docs/orchestrate.md)** | DAG worker runner — plan.json schema, exit codes, state.json, recovery |
+| **[Pi Workers](docs/pi-performance.md)** | Running Pi workers in psmux — startup cost, completion signals per Pi mode, waiting on OSC 7501 state |
 | **[Configuration](docs/configuration.md)** | Config files, options, environment variables |
 | **[Plugins & Themes](docs/plugins.md)** | Plugin ecosystem — Catppuccin, Dracula, Nord, and more |
 | **[Mouse Over SSH](docs/mouse-ssh.md)** | SSH mouse support and Windows version requirements |
