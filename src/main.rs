@@ -71,6 +71,46 @@ use crate::session::{
 };
 use crate::ssh_input::{is_ssh_session, send_mouse_enable, InputSource};
 
+fn build_send_paste_control(cmd_args: &[&str]) -> io::Result<String> {
+    let mut payload: Option<&str> = None;
+    let mut i = 1;
+    while i < cmd_args.len() {
+        match cmd_args[i] {
+            "-t" => {
+                i += 1;
+                if i >= cmd_args.len() {
+                    return Err(io::Error::new(
+                        io::ErrorKind::InvalidInput,
+                        "send-paste -t requires a target",
+                    ));
+                }
+            }
+            value if payload.is_none() => payload = Some(value),
+            _ => {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    "send-paste requires exactly one UTF-8 base64 payload",
+                ));
+            }
+        }
+        i += 1;
+    }
+
+    let payload = payload
+        .filter(|value| crate::util::base64_decode(value).is_some())
+        .ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "send-paste requires exactly one UTF-8 base64 payload",
+            )
+        })?;
+    Ok(format!("send-paste {}\n", payload))
+}
+
+#[cfg(test)]
+#[path = "../tests-rs/test_send_paste_cli.rs"]
+mod test_send_paste_cli;
+
 fn main() {
     crash::install_crash_handler();
     if let Err(e) = run_main() {
@@ -1539,24 +1579,13 @@ fn run_main() -> io::Result<()> {
             send_control(cmd)?;
             return Ok(());
         }
-        // send-paste - Paste base64-encoded text to a pane
+        // Base64 is the protocol boundary: unlike send-keys -l, it cannot
+        // inject a second newline-delimited control command. It also avoids
+        // nesting the payload inside PowerShell -EncodedCommand, which
+        // crossed cmd.exe's 8191-character limit around 2 KiB of text.
         "send-paste" => {
-            let mut payload = String::new();
-            let mut i = 1;
-            while i < cmd_args.len() {
-                match cmd_args[i].as_str() {
-                    "-t" => {
-                        i += 1;
-                    } // consume target (handled globally)
-                    _ => {
-                        payload = cmd_args[i].to_string();
-                    }
-                }
-                i += 1;
-            }
-            if !payload.is_empty() {
-                send_control(format!("send-paste {}\n", payload))?;
-            }
+            let normalized: Vec<&str> = cmd_args.iter().map(|arg| arg.as_str()).collect();
+            send_control(build_send_paste_control(&normalized)?)?;
             return Ok(());
         }
         // select-pane - Select the active pane
