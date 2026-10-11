@@ -70,16 +70,26 @@ ready even when its output is silent. Otherwise, including when only `done` or
 `error` records are left, ready means the pane has produced output and then
 been silent for 500 ms; that is not prompt detection.
 `#{pane_agent_readiness}` shows the state the rule reached and
-`#{pane_agent_source}` tells you which rule applied. The server checks every
-100 ms for up to 30 seconds; if the pane never becomes ready, the keys are
-sent anyway, so the command does not fail on timeout. That includes an agent
-waiting at a `blocked` prompt: keys meant to answer it arrive after the
-30 seconds, so send those without `--wait-ready`. Name the pane by id
-(`-t %N` or `-t sess:.%N`). Without `-t`, or with a pane index such as
-`-t :0.1` or `-t sess:0.1`, there is no wait and the keys go out at once. The
-keys go to the `-t` pane, not to the pane that is active when they are sent.
-If that pane closes while the server waits, the command fails with
-"can't find pane" and the keys are not sent.
+`#{pane_agent_source}` tells you which rule applied.
+
+The wait happens on the server, not in the command. `send-keys` hands the
+request to the server and returns at once with exit code 0; it does not wait
+for the keys to go out and never sees the result. The server checks every
+100 ms for up to 30 seconds; if the pane never becomes ready, it sends the
+keys anyway. That includes an agent waiting at a `blocked` prompt: keys meant
+to answer it arrive after the 30 seconds, so send those without
+`--wait-ready`.
+
+Name the pane by id. A bare `-t %N` is looked up across the running servers,
+starting with your own session; when the pane belongs to another session,
+write `-t sess:.%N`. Without `-t`, or with a pane index such as `-t :0.1` or
+`-t sess:0.1`, there is no wait and the keys go out at once. The keys go to
+the `-t` pane, not to the pane that is active when they are sent.
+
+If the pane closes while the server waits, the server drops the keys and
+sends them nowhere, but `send-keys` has already exited 0, so a script that
+checks `$LASTEXITCODE` cannot see this. To make sure the pane is still there,
+check it before you send, with `wait-pane --ready` or `#{pane_ready}`.
 
 ## Pane Information
 

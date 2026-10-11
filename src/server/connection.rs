@@ -66,6 +66,9 @@ fn strip_ansi_escapes(s: &str) -> String {
 /// the real focus after it and drops the `-t` temp focus. Without the final
 /// `FocusPaneTempCheck`, the keys land in the originally active pane. Returns
 /// false when the pane is gone, so the keys must not be sent anywhere.
+///
+/// A missing pane polls as "no state", the same as a live pane with no output
+/// yet, so that case is told apart with `PaneExists` and ends the wait early.
 fn wait_ready_then_refocus(tx: &mpsc::Sender<CtrlReq>, pid: usize, limit: Duration) -> bool {
     let deadline = std::time::Instant::now() + limit;
     let (qtx, qrx) = mpsc::channel();
@@ -74,6 +77,9 @@ fn wait_ready_then_refocus(tx: &mpsc::Sender<CtrlReq>, pid: usize, limit: Durati
         if let Ok((_, readiness)) = qrx.recv_timeout(Duration::from_secs(2)) {
             if readiness.is_ready() {
                 break;
+            }
+            if readiness.state.is_none() && !pane_exists(tx, pid) {
+                return false;
             }
         }
         if std::time::Instant::now() >= deadline {
@@ -84,6 +90,14 @@ fn wait_ready_then_refocus(tx: &mpsc::Sender<CtrlReq>, pid: usize, limit: Durati
     let (check_tx, check_rx) = mpsc::channel();
     let _ = tx.send(CtrlReq::FocusPaneTempCheck(pid, check_tx));
     matches!(check_rx.recv_timeout(Duration::from_secs(2)), Ok(true))
+}
+
+/// Ask the server whether pane `pid` exists, without moving focus. A reply
+/// that never arrives counts as "exists", so the wait goes on to its limit.
+fn pane_exists(tx: &mpsc::Sender<CtrlReq>, pid: usize) -> bool {
+    let (exists_tx, exists_rx) = mpsc::channel();
+    let _ = tx.send(CtrlReq::PaneExists(pid, exists_tx));
+    !matches!(exists_rx.recv_timeout(Duration::from_secs(2)), Ok(false))
 }
 
 /// Handle a single TCP connection from a client.
@@ -1027,11 +1041,12 @@ pub(crate) fn handle_connection(
                 if wait_ready && pane_is_id {
                     if let Some(pid) = target_pane {
                         if !wait_ready_then_refocus(&tx, pid, Duration::from_secs(30)) {
+                            let pane_id_str = format!("%{pid}");
                             let _ = writeln!(
                                 write_stream,
                                 "{}{}",
                                 crate::types::UNRESOLVED_PANE_PREFIX,
-                                raw_target.as_deref().unwrap_or("")
+                                raw_target.as_deref().unwrap_or(&pane_id_str)
                             );
                             let _ = write_stream.flush();
                             line.clear();

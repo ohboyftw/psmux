@@ -1869,7 +1869,8 @@ pub fn run_server(
                             crate::tree::focus_pane_by_id_no_mru(&mut app, pid);
                         }
                         CtrlReq::FocusPaneTempCheck(pid, resp) => {
-                            if temp_focus_restore.is_none() {
+                            let took_restore_point = temp_focus_restore.is_none();
+                            if took_restore_point {
                                 let pane_id = crate::tree::get_active_pane_id(
                                     &app.windows[app.active_idx].root,
                                     &app.windows[app.active_idx].active_path,
@@ -1887,6 +1888,12 @@ pub fn run_server(
                                     &app.windows[app.active_idx].root,
                                     &app.windows[app.active_idx].active_path,
                                 ) == Some(pid);
+                            // A miss moved nothing, and the caller sends no
+                            // command after it. A restore point left here
+                            // would revert the next client's focus change.
+                            if !found && took_restore_point {
+                                temp_focus_restore = None;
+                            }
                             let _ = resp.send(found);
                         }
                         CtrlReq::FocusPaneByIndexTemp(idx) => {
