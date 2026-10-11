@@ -145,7 +145,11 @@ Pi 1.1.0 reports its state with OSC 7501 (the Program Status Protocol), but only
 
 In Pi 1.1.0 the program status reporter is built only by interactive mode. Print mode and RPC mode never send OSC 7501, and `PI_PROGRAM_STATUS=1` cannot change that. A `--print` worker in an orchestrate plan therefore has no `agent_state` in `state.json`, and orchestrate decides its result from the exit code alone. See [Orchestrate](orchestrate.md#agent-state).
 
-Interactive Pi reports only after the terminal answers its support query (`OSC 7501;?`). psmux answers that query itself, so inside a psmux pane you do not need `PI_PROGRAM_STATUS=1`. Pi's own documentation says tmux and screen do not forward these reports; that does not apply to psmux, which reads them directly. One exception: a pane opened as a popup does not send the reply, so Pi in a popup never reports. Pi's states are:
+Interactive Pi reports only after the terminal answers its support query (`OSC 7501;?`). psmux is built to answer that query itself and to read the reports directly, so inside a psmux pane you should not need `PI_PROGRAM_STATUS=1`. Pi's own documentation says tmux and screen do not forward these reports; psmux does not depend on forwarding. This round trip has not yet been confirmed with a live Pi run.
+
+The query, the reports and psmux's reply all cross the pane's ConPTY, so they arrive only when that ConPTY passes OSC sequences it does not know through in both directions. Older inbox conhost versions drop them. A newer conhost, or the OpenConsole bundle selected with `PSMUX_CONPTY_DIR`, is more likely to pass them. If `#{pane_agent_state}` stays empty after Pi starts, this is the likely cause. Setting `PI_PROGRAM_STATUS=1` then helps only with the query direction: Pi reports without waiting for an answer, but the reports still have to get through.
+
+Popups are a known gap. psmux currently does not answer the query in a popup and does not read a popup pane's agent state, so Pi in a popup does not report, and `PI_PROGRAM_STATUS=1` does not help there. Pi's states are:
 
 - `working`: a run or compaction is in progress.
 - `blocked`: an extension dialog or login waits for you.
@@ -155,7 +159,7 @@ Interactive Pi reports only after the terminal answers its support query (`OSC 7
 
 ### Wait for an interactive Pi run without polling
 
-Name the pane by id. Take the id from `new-window -d -P -F '#{pane_id}'`, or from `pane_id` in orchestrate's `state.json`. From outside the pane's session, use `session:.%N`. `wait-pane --until` exits `2` for a `window.pane` index target.
+Name the pane by id. Take the id from `new-window -d -P -F '#{pane_id}'`. Do not use an orchestrate worker for this: orchestrate waits for its workers to exit, and an interactive Pi worker does not exit until you close it. From outside the pane's session, use `session:.%N`. `wait-pane --until` exits `2` for a `window.pane` index target.
 
 `--until` is level-triggered and waits for one state. A pane that still shows `done` from its previous run satisfies `--until done` at once, so do not send a prompt and then wait for `done`. Wait in two steps instead:
 
@@ -165,17 +169,23 @@ psmux send-keys -t $pane 'Fix the failing test in src/parser.rs' Enter
 
 # 1. The run started. A short timeout catches a prompt that never started a run.
 psmux wait-pane -t $pane --until working --timeout 30000
-if ($LASTEXITCODE -ne 0) { throw "Pi did not start a run (rc $LASTEXITCODE)" }
+if ($LASTEXITCODE -ne 0) {
+    $state = psmux display-message -p -t $pane '#{pane_agent_state}'
+    throw "Pi did not report working (rc $LASTEXITCODE, state '$state')"
+}
 
-# 2. The run stopped. A reported working or blocked state keeps this waiting;
-#    done, error and a cancelled run (idle) let it return once the pane is quiet.
+# 2. The run stopped. A reported working or blocked state keeps this waiting.
+#    A reported idle (cancelled run) returns at once; done and error return
+#    once the pane has been quiet for 500 ms.
 psmux wait-pane -t $pane --until idle --timeout 1800000
 
 # 3. Read the outcome once.
-psmux display-message -p -t $pane '#{pane_agent_state}'   # done, error or idle
+psmux display-message -p -t $pane '#{pane_agent_state}'   # done, error, idle, or empty
 ```
 
-Step 3 reads `done` for a finished run, `error` for a run that failed, and `idle` for a cancelled run, which is the pane-side match for `aborted: true` on `agent_settled`. Exit code `1` from step 2 means the timeout passed; exit code `2` means the pane died or is gone.
+A timeout in step 1 does not always mean that no run started. Read the state it reports: `blocked` means a trust or login dialog is waiting for you; `done` or `error` means the run finished within one 100 ms sampling tick (an immediate provider failure can do this), so step 1 never saw `working`; and `idle` or `done` from an earlier run can also mean Pi handled the prompt without starting a run. An empty state means Pi is not reporting (see the ConPTY note above) or has exited.
+
+Step 3 reads `done` for a finished run, `error` for a run that failed, and `idle` for a cancelled run, which is the pane-side match for `aborted: true` on `agent_settled`. It reads empty if Pi exited and cleared its state. Exit code `1` from step 2 means the timeout passed; exit code `2` means the pane died or is gone.
 
 A run that stops for a dialog stays `blocked`, so step 2 keeps waiting. To act on that, run `psmux wait-pane -t $pane --until blocked` in a second waiter, or rely on the agent toasts, which are on by default (`set -g agent-toasts`; see [Agent state toasts](scripting.md#agent-state-toasts)). See [Waiting for an agent state](scripting.md#waiting-for-an-agent-state---until) for the full rules, including the 100 ms sampling interval.
 
