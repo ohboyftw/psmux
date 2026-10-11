@@ -2099,9 +2099,7 @@ pub fn expand_var(var: &str, app: &AppState, win_idx: usize) -> String {
         "pid" | "server_pid" => std::process::id().to_string(),
         "version" => VERSION.to_string(),
         "start_time" => app.created_at.timestamp().to_string(),
-        "socket_path" => {
-            crate::paths::psmux_dir_file("default")
-        }
+        "socket_path" => crate::paths::psmux_dir_file("default"),
 
         // ── Options as format variables ──
         "mouse" => {

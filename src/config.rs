@@ -998,16 +998,9 @@ pub fn parse_option_value(app: &mut AppState, key: &str, value: &str, _is_global
                     let plugins = crate::paths::psmux_dir_file("plugins");
                     let candidates = [
                         // Classic paths: <data dir>/plugins/
-                        format!(
-                            "{}\\{}\\plugin.conf",
-                            plugins,
-                            value.replace('/', "\\")
-                        ),
+                        format!("{}\\{}\\plugin.conf", plugins, value.replace('/', "\\")),
                         format!("{}\\{}\\plugin.conf", plugins, plugin_name),
-                        format!(
-                            "{}\\psmux-plugins\\{}\\plugin.conf",
-                            plugins, plugin_name
-                        ),
+                        format!("{}\\psmux-plugins\\{}\\plugin.conf", plugins, plugin_name),
                         // XDG paths: ~/.config/psmux/plugins/
                         format!(
                             "{}\\psmux\\plugins\\{}\\plugin.conf",
@@ -1046,10 +1039,7 @@ pub fn parse_option_value(app: &mut AppState, key: &str, value: &str, _is_global
                                 value.replace('/', "\\"),
                                 plugin_name
                             ),
-                            format!(
-                                "{}\\{}\\{}.ps1",
-                                plugins, plugin_name, plugin_name
-                            ),
+                            format!("{}\\{}\\{}.ps1", plugins, plugin_name, plugin_name),
                             format!(
                                 "{}\\psmux-plugins\\{}\\{}.ps1",
                                 plugins, plugin_name, plugin_name
@@ -1880,7 +1870,7 @@ fn parse_if_shell(app: &mut AppState, line: &str) {
     let false_cmd = positional.get(2);
 
     let success = if format_mode {
-            crate::proc_stats::record_spawn(crate::proc_stats::SpawnKind::Other);
+        crate::proc_stats::record_spawn(crate::proc_stats::SpawnKind::Other);
         let expanded = crate::format::expand_format(condition, app);
         !expanded.is_empty() && expanded != "0"
     } else if condition == "true" || condition == "1" {

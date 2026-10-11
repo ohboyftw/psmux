@@ -1936,8 +1936,7 @@ pub fn run_remote(
                                             quit = true;
                                         } else {
                                             // Kill another session by connecting to it
-                                            let port_path =
-                                                crate::paths::port_file(&sname);
+                                            let port_path = crate::paths::port_file(&sname);
                                             let key_path = crate::paths::key_file(&sname);
                                             if let Ok(port_str) =
                                                 std::fs::read_to_string(&port_path)

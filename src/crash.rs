@@ -49,7 +49,6 @@ pub fn crash_directory() -> PathBuf {
     }
 }
 
-
 /// A discovered crash report file.
 #[derive(Debug, Clone)]
 pub struct CrashEntry {

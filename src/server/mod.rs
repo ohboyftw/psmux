@@ -1905,10 +1905,8 @@ pub fn run_server(
                             }
                             hook_event = Some("client-detached");
                             if app.attached_clients == 0 && app.destroy_unattached {
-                                let regpath =
-                                    crate::paths::port_file(app.port_file_base());
-                                let keypath =
-                                    crate::paths::key_file(app.port_file_base());
+                                let regpath = crate::paths::port_file(app.port_file_base());
+                                let keypath = crate::paths::key_file(app.port_file_base());
                                 let _ = std::fs::remove_file(&regpath);
                                 let _ = std::fs::remove_file(&keypath);
                                 crate::types::shutdown_persistent_streams();
@@ -3510,13 +3508,10 @@ pub fn run_server(
                         CtrlReq::KillSession => {
                             // Remove port/key/version/pipe files FIRST so clients see the
                             // session as gone immediately, then kill processes.
-                            let regpath =
-                                crate::paths::port_file(app.port_file_base());
+                            let regpath = crate::paths::port_file(app.port_file_base());
                             let keypath = crate::paths::key_file(app.port_file_base());
-                            let verpath =
-                                crate::paths::version_file(app.port_file_base());
-                            let pipepath =
-                                crate::paths::pipe_file(app.port_file_base());
+                            let verpath = crate::paths::version_file(app.port_file_base());
+                            let pipepath = crate::paths::pipe_file(app.port_file_base());
                             let _ = std::fs::remove_file(&regpath);
                             let _ = std::fs::remove_file(&keypath);
                             let _ = std::fs::remove_file(&verpath);
@@ -4844,13 +4839,10 @@ pub fn run_server(
                         CtrlReq::KillServer => {
                             // Remove port/key/version/pipe files FIRST so clients see the
                             // session as gone immediately, then kill processes.
-                            let regpath =
-                                crate::paths::port_file(app.port_file_base());
+                            let regpath = crate::paths::port_file(app.port_file_base());
                             let keypath = crate::paths::key_file(app.port_file_base());
-                            let verpath =
-                                crate::paths::version_file(app.port_file_base());
-                            let pipepath =
-                                crate::paths::pipe_file(app.port_file_base());
+                            let verpath = crate::paths::version_file(app.port_file_base());
+                            let pipepath = crate::paths::pipe_file(app.port_file_base());
                             let _ = std::fs::remove_file(&regpath);
                             let _ = std::fs::remove_file(&keypath);
                             let _ = std::fs::remove_file(&verpath);

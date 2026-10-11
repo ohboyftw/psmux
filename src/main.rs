@@ -444,8 +444,7 @@ fn run_main() -> io::Result<()> {
                                             let _ =
                                                 s.set_read_timeout(Some(Duration::from_millis(50)));
                                             // Read session key and authenticate
-                                            let key_path =
-                                                crate::paths::key_file(base);
+                                            let key_path = crate::paths::key_file(base);
                                             if let Ok(key) = std::fs::read_to_string(&key_path) {
                                                 let _ = std::io::Write::write_all(
                                                     &mut s,

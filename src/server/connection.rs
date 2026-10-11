@@ -961,8 +961,11 @@ pub(crate) fn handle_connection(
                 // reason, with the command still exiting 0 (#562).
                 let end_of_opts = args.iter().position(|a| *a == "--");
                 let is_flag = |i: usize| end_of_opts.is_none_or(|eo| i < eo);
-                let has_flag =
-                    |flag: &str| args.iter().enumerate().any(|(i, a)| *a == flag && is_flag(i));
+                let has_flag = |flag: &str| {
+                    args.iter()
+                        .enumerate()
+                        .any(|(i, a)| *a == flag && is_flag(i))
+                };
                 // An operand is a key to deliver: anything past the marker, or
                 // else a token that is neither a flag nor a flag's value.
                 let is_operand = |i: usize, a: &str| -> bool {

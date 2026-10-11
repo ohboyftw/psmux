@@ -46,6 +46,9 @@ fn uppercase_u_ignores_a_trailing_value() {
 fn an_ordinary_set_is_still_recorded_as_user_set() {
     let mut app = mock_app();
     parse_set_option(&mut app, "set -g @x hello");
-    assert_eq!(app.user_options.get("@x").map(String::as_str), Some("hello"));
+    assert_eq!(
+        app.user_options.get("@x").map(String::as_str),
+        Some("hello")
+    );
     assert!(app.user_set_options.contains("@x"));
 }
