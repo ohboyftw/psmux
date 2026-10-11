@@ -128,8 +128,8 @@ line ends with `; blocked: <ids>`, and the human summary prints
 `agent=blocked` next to it.
 
 **Pi in `--print` mode reports nothing.** In Pi 1.1.0 the program status
-reporter is built only by interactive mode (`dist/modes/interactive/
-interactive-mode.js`); `print-mode.js` and `modes/rpc/` never reference it, and
+reporter is built only by interactive mode
+(`dist/modes/interactive/interactive-mode.js`); `print-mode.js` and `modes/rpc/` never reference it, and
 the support query is sent by the TUI terminal setup. `PI_PROGRAM_STATUS=1`
 only skips that query, so it cannot help a `--print` worker. Workers run as
 `node cli.js --print @task.md` therefore have no `agent_state`, and
