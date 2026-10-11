@@ -234,8 +234,9 @@ psmux wait-pane -t %3 --until blocked --timeout 600000
 `wait-pane -t %N --until STATE` and `wait-for -t %N --until STATE` wait
 for the pane's agent state, where STATE is one of `idle`, `working`,
 `blocked`, `done` or `error`. Exit codes: `0` the state was seen, `1`
-the `--timeout` passed first, `2` the pane is dead or gone (or STATE is
-not one of the five). `wait-for --json` gives `{kind:"error",reason:"pane
+the `--timeout` passed first, `2` the pane is dead or gone, including a
+target that no longer exists when the command runs (or STATE is not one
+of the five). `wait-for --json` gives `{kind:"error",reason:"pane
 is dead or gone"}` for `2`.
 
 - `--until idle` is `--ready`: the same rule as `#{pane_ready}`, a reported

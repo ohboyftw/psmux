@@ -6,7 +6,8 @@
 #
 # Expected RED on the pre-05 binary: wait-pane ignores --until and waits for
 # the child to exit (the idle case times out with rc 1 after the full 3 s
-# window), and wait-for takes `blocked` as a channel name and blocks on it.
+# window), and wait-for takes `blocked` as a channel name and blocks on it
+# with no timeout, so prove RED for that case under an external timeout.
 # Elapsed time, not only the rc, separates a correct verdict from those.
 # Not yet proven: this file has not been run (no psmux runs on the dev host).
 #
@@ -98,6 +99,13 @@ Test-Case "wait-pane --until working on a pane that dies returns rc 2, not a han
     $r = Measure-Wait @('wait-pane', '-t', "${S}:.$dying", '--until', 'working', '--timeout', '15000')
     if ($r.Rc -ne 2 -or $r.Ms -ge 10000) { Write-Host "    rc=$($r.Rc) ms=$($r.Ms)" -ForegroundColor DarkYellow }
     ($r.Rc -eq 2) -and ($r.Ms -lt 10000)
+}
+
+Test-Case "wait-pane --until on a pane that is already gone returns rc 2" {
+    if ($dying -notmatch '^%\d+$') { return $false }
+    $r = Measure-Wait @('wait-pane', '-t', "${S}:.$dying", '--until', 'idle', '--timeout', '3000')
+    if ($r.Rc -ne 2) { Write-Host "    rc=$($r.Rc) ms=$($r.Ms)" -ForegroundColor DarkYellow }
+    $r.Rc -eq 2
 }
 
 Remove-PsmuxSession $S

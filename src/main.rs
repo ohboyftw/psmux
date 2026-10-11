@@ -160,6 +160,18 @@ fn check_until_arg(cmd: &str, until: Option<&str>, ready: bool) {
     }
 }
 
+/// An `--until` wait on a pane that is already gone exits 2, as one that
+/// dies during the wait does; target resolution reports it as `NotFound`.
+fn until_gone_is_2(resp: io::Result<String>, until: bool) -> io::Result<String> {
+    match resp {
+        Err(e) if until && e.kind() == io::ErrorKind::NotFound => {
+            eprintln!("psmux: {e}");
+            std::process::exit(2);
+        }
+        other => other,
+    }
+}
+
 /// `psmux debug spawns`: print how many processes the target server has
 /// started, by kind, and the machine-wide zombie count.
 fn print_spawn_stats() -> io::Result<()> {
@@ -2940,7 +2952,10 @@ fn run_main() -> io::Result<()> {
                     .unwrap_or(3_600_000);
                 let read_timeout =
                     std::time::Duration::from_millis(timeout_ms.saturating_add(5_000));
-                let resp = send_control_with_response_timeout(cmd, Some(read_timeout))?;
+                let resp = until_gone_is_2(
+                    send_control_with_response_timeout(cmd, Some(read_timeout)),
+                    until.is_some(),
+                )?;
                 let trimmed = resp.trim();
                 // Exit-code mapping: success=0, timeout=1, error=2.
                 let exit_code = if json_mode {
@@ -3297,7 +3312,10 @@ fn run_main() -> io::Result<()> {
                     cmd.push_str(&format!(" --timeout {}", ms));
                 }
                 cmd.push('\n');
-                let resp = send_control_with_response_timeout(cmd, None)?;
+                let resp = until_gone_is_2(
+                    send_control_with_response_timeout(cmd, None),
+                    until.is_some(),
+                )?;
                 let code: i32 = resp.trim().parse().unwrap_or(1);
                 std::process::exit(code);
             } else {
