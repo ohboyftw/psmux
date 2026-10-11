@@ -645,6 +645,13 @@ pub fn run_server(
     window_name: Option<String>,
     init_size: Option<(u16, u16)>,
 ) -> io::Result<()> {
+    // From here on this process is the server: a console injection must leave
+    // it detached rather than move it into its parent's console, which for a
+    // cold start is the console of the client that spawned it (issue #761).
+    // Set here and not in the `server` argument dispatch so every way into the
+    // server loop gets it.
+    #[cfg(windows)]
+    crate::platform::mouse_inject::SERVER_PROCESS.store(true, std::sync::atomic::Ordering::Relaxed);
     // Keep only the newest 20 crash reports across runs.
     crate::crash::prune_crashes(20);
     // Same for resurrection snapshots, which are otherwise unbounded.
@@ -6365,3 +6372,7 @@ mod tests {
 #[cfg(test)]
 #[path = "../../tests-rs/test_issue169_manual_rename.rs"]
 mod test_issue169;
+
+#[cfg(test)]
+#[path = "../../tests-rs/test_issue761_server_console_detach.rs"]
+mod test_issue761;
