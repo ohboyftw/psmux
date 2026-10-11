@@ -75,6 +75,14 @@ path = "tests-rs/test_rails_smoke.rs"
 name = "test_cc_emit_lifecycle_singleton"
 path = "tests-rs/test_cc_emit_lifecycle_singleton.rs"
 
+# Embeds the application icon and the VS_VERSIONINFO block into the .exe
+# (issue #620). Windows hosts only: this is what build.rs's #[cfg(windows)]
+# arm links against. default-features would pull in a whole toml stack purely
+# to read `[package.metadata.winresource]`, which build.rs does not use because
+# it sets every field explicitly.
+[target.'cfg(windows)'.build-dependencies]
+winresource = { version = "=0.1.31", default-features = false }
+
 # Windows only
 [target.'cfg(not(windows))'.dependencies]
 [target.'cfg(windows)'.dependencies]
