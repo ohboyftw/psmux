@@ -1825,8 +1825,12 @@ fn run_main() -> io::Result<()> {
                         // Fallback: connection succeeded so session likely exists
                         std::process::exit(0);
                     } else {
-                        // Stale port file - clean it up
-                        let _ = std::fs::remove_file(&path);
+                        // A failed connect is not a death verdict: on Windows an
+                        // unanswered loopback connect times out long before it is
+                        // refused, and a live server slow to accept looks the
+                        // same. Reap only when the port is unbound, and then the
+                        // whole set, so no sidecar is stranded (#622, #530).
+                        crate::session::remove_registry_set_if_dead(&target);
                     }
                 }
             }

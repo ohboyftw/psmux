@@ -246,8 +246,12 @@ fn remove_server_state(port_path: &std::path::Path) {
 /// (Wave 2 bind-probe liveness); a live server's entry is never touched.
 pub fn remove_registry_set_if_dead(base: &str) {
     let path = std::path::PathBuf::from(crate::paths::port_file(base));
-    if path.exists() && !port_file_is_live(&path) {
-        remove_server_state(&path);
+    remove_registry_set_at_if_dead(&path);
+}
+
+fn remove_registry_set_at_if_dead(path: &std::path::Path) {
+    if path.exists() && !port_file_is_live(path) {
+        remove_server_state(path);
     }
 }
 
@@ -1724,3 +1728,7 @@ mod one_shot_exchange_tests {
 #[cfg(test)]
 #[path = "../tests-rs/test_warm_target_routing.rs"]
 mod tests_warm_target_routing;
+
+#[cfg(test)]
+#[path = "../tests-rs/test_issue622_hassession_reap.rs"]
+mod test_issue622_hassession_reap;
