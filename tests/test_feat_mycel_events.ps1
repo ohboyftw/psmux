@@ -33,5 +33,8 @@ Test-Case "killing a pane does not fail when mycel publishes pane/exited" {
 }
 
 Remove-PsmuxSession $S
+# Let the dying server publish its last event first, or it would start the
+# private bus again after the stop.
+Start-Sleep -Milliseconds 500
 $null = psmux bus stop 2>&1
 Write-Summary
