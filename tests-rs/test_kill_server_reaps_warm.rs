@@ -170,3 +170,75 @@ fn test_own_creation_when_queried_then_precedes_now() {
     assert!(own <= now_filetime());
     assert!(process_is_alive(std::process::id()));
 }
+
+#[test]
+fn test_stamp_and_enumerate_when_port_appears_after_first_stamp_then_listed() {
+    let dir = fresh_dir("stamp_before");
+    let mut calls = 0u64;
+    let listed = stamp_and_enumerate(&dir, KillScope::All, None, || {
+        calls += 1;
+        let late = if calls == 1 { "between" } else { "after" };
+        std::fs::write(dir.join(format!("{late}.port")), "1").expect("seed");
+        calls
+    });
+    let names: Vec<_> = listed
+        .iter()
+        .map(|(p, _)| p.file_stem().unwrap().to_owned())
+        .collect();
+    assert_eq!(names, vec![std::ffi::OsString::from("between")]);
+}
+
+#[test]
+fn test_stamp_and_enumerate_when_done_then_marker_holds_second_stamp() {
+    let dir = fresh_dir("stamp_after");
+    let mut calls = 0u64;
+    stamp_and_enumerate(&dir, KillScope::Namespace("ns"), Some("ns__"), || {
+        calls += 1;
+        calls * 100
+    });
+    assert_eq!(calls, 2);
+    assert_eq!(read_kill_marker(&dir, Some("ns")), Some(200));
+}
+
+#[test]
+fn test_stamp_and_enumerate_when_namespaced_then_other_namespaces_not_listed() {
+    let dir = fresh_dir("stamp_ns");
+    std::fs::write(dir.join("ns__work.port"), "1").expect("seed");
+    std::fs::write(dir.join("other__work.port"), "2").expect("seed");
+    let listed = stamp_and_enumerate(&dir, KillScope::Namespace("ns"), Some("ns__"), || 1);
+    assert_eq!(listed.len(), 1);
+    assert!(listed[0].0.ends_with("ns__work.port"));
+}
+
+#[test]
+fn test_write_marker_when_data_dir_missing_then_nothing_created() {
+    let dir = std::env::temp_dir().join(format!("psmux_marker_nodir_{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    write_kill_marker(&dir, KillScope::All, 1);
+    assert!(!dir.exists());
+}
+
+#[test]
+fn test_marker_path_when_namespace_has_path_characters_then_single_plain_file() {
+    let dir = PathBuf::from("d");
+    for ns in ["a/b", r"a\b", "a:b", "CON", ".."] {
+        let p = kill_marker_path(&dir, KillScope::Namespace(ns));
+        assert_eq!(p.parent(), Some(dir.join("killed").as_path()), "{ns}");
+        let name = p.file_name().unwrap().to_str().unwrap();
+        assert!(
+            name.strip_prefix("ns-")
+                .unwrap()
+                .bytes()
+                .all(|b| b.is_ascii_hexdigit()),
+            "{ns}"
+        );
+    }
+}
+
+#[test]
+fn test_marker_when_namespace_has_colon_then_round_trips() {
+    let dir = fresh_dir("marker_colon");
+    write_kill_marker(&dir, KillScope::Namespace("a:b"), 7);
+    assert_eq!(read_kill_marker(&dir, Some("a:b")), Some(7));
+    assert_eq!(read_kill_marker(&dir, Some("a_b")), None);
+}

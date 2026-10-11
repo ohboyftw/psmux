@@ -68,7 +68,8 @@ Get-ChildItem "$HOME\.psmux\*.port" | Select-Object Name
 # Send a command to the warm server
 psmux -t __warm__ list-windows
 
-# Kill just the warm session
+# Kill just the warm session. With no standby running this fails with
+# "no server running on session '__warm__'"; it never falls back to another session.
 psmux -t __warm__ kill-session
 
 # With -L namespace: warm session is stored as "<namespace>____warm__"

@@ -49,20 +49,32 @@ pub enum KillScope<'a> {
 
 /// The kill marker for `scope`, inside `dir/killed/`. Namespace markers carry an
 /// `ns-` prefix so that a namespace literally named `all` cannot collide with
-/// the everything marker. `-L` names are already used verbatim as `.port` file
-/// name prefixes, so they are legal file name characters here too.
+/// the everything marker, and the `-L` name is hex encoded: a name holding
+/// `/`, `\`, `:` (an NTFS stream) or a device name like `CON` would otherwise
+/// name another path, the marker write would fail silently, and that
+/// namespace's standby would leak.
 pub fn kill_marker_path(dir: &Path, scope: KillScope) -> PathBuf {
     let killed = dir.join("killed");
     match scope {
         KillScope::All => killed.join("all"),
-        KillScope::Namespace(ns) => killed.join(format!("ns-{ns}")),
+        KillScope::Namespace(ns) => {
+            let hex: String = ns.bytes().map(|b| format!("{b:02x}")).collect();
+            killed.join(format!("ns-{hex}"))
+        }
     }
 }
 
 /// Stamp `when` (a FILETIME) into the kill marker for `scope`. Written to a
 /// temporary file and renamed over the marker, so a standby reading it at the
 /// same moment sees the old stamp or the new one, never an empty file.
+///
+/// Nothing is written when `dir` does not exist: no standby can be registered
+/// there, and creating `killed/` would recreate a data directory somebody
+/// deleted on purpose.
 pub fn write_kill_marker(dir: &Path, scope: KillScope, when: u64) {
+    if !dir.is_dir() {
+        return;
+    }
     let path = kill_marker_path(dir, scope);
     let Some(parent) = path.parent() else { return };
     if std::fs::create_dir_all(parent).is_err() {
@@ -90,6 +102,44 @@ pub fn read_kill_marker(dir: &Path, ns: Option<&str>) -> Option<u64> {
         (Some(a), Some(b)) => Some(a.max(b)),
         (a, b) => a.or(b),
     }
+}
+
+/// The first half of a kill-server: stamp the kill marker for `scope`, read
+/// every `.port` in `dir` whose session falls under `ns_prefix` (all of them
+/// when `None`) with its contents, then stamp again. `now` supplies the stamps.
+///
+/// The order is the guarantee [`warm_standby_verdict`] rests on: a standby that
+/// registers after the first stamp is either in the returned list or sees a
+/// stamp newer than its own creation, and the second stamp is newer than every
+/// server the list holds.
+pub fn stamp_and_enumerate(
+    dir: &Path,
+    scope: KillScope,
+    ns_prefix: Option<&str>,
+    mut now: impl FnMut() -> u64,
+) -> Vec<(PathBuf, String)> {
+    write_kill_marker(dir, scope, now());
+    let registered = enumerate_registry(dir, ns_prefix);
+    write_kill_marker(dir, scope, now());
+    registered
+}
+
+/// Every `.port` file in `dir` whose session falls under `ns_prefix` (all of
+/// them when `None`), with its contents as read now.
+pub fn enumerate_registry(dir: &Path, ns_prefix: Option<&str>) -> Vec<(PathBuf, String)> {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return Vec::new();
+    };
+    entries
+        .flatten()
+        .map(|e| e.path())
+        .filter(|p| p.extension().is_some_and(|e| e == "port"))
+        .filter(|p| {
+            let stem = p.file_stem().and_then(|s| s.to_str()).unwrap_or("");
+            ns_prefix.is_none_or(|pfx| stem.starts_with(pfx))
+        })
+        .filter_map(|p| std::fs::read_to_string(&p).ok().map(|c| (p, c)))
+        .collect()
 }
 
 /// Render a process identity as `pid:creation`, the `--spawner` argument.

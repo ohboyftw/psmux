@@ -546,12 +546,14 @@ pub fn set_explicit_target_session(port_file_base: &str) {
     let _ = EXPLICIT_TARGET_SESSION.set(port_file_base.to_string());
 }
 
-fn explicit_target_session() -> Option<String> {
-    EXPLICIT_TARGET_SESSION.get().cloned()
+/// Whether the env target is a warm name this process inherited (from the
+/// standby its pane shell started in) rather than one asked for with `-t`.
+pub fn is_inherited_warm_target(target: &str) -> bool {
+    env_target_redirects(target, EXPLICIT_TARGET_SESSION.get().map(String::as_str))
 }
 
-/// Whether the env fallback may re-route `target` to the most recent real
-/// session.
+/// Whether the env fallback must re-route `target` to the session the caller
+/// is really in.
 ///
 /// Only an inherited warm name is re-routed: a pane shell started inside a
 /// standby keeps `PSMUX_TARGET_SESSION=__warm__` after the standby is claimed
@@ -563,75 +565,105 @@ fn env_target_redirects(target: &str, explicit: Option<&str>) -> bool {
     is_warm_session(target) && explicit != Some(target)
 }
 
-/// Resolve which server (name, port, session-key) a control command should be
-/// sent to. Priority: (1) `-t <target>` parsed from the line — routes a session
-/// name to `<name>.port` directly, and scans live servers for `%pane` / `@window`
-/// ids. (2) `PSMUX_TARGET_SESSION` env var. (3) `resolve_last_session_name`
-/// fallback when env is unset or points to a warm server.
+/// The non-warm session whose `.port` in `dir` holds the port named by a
+/// `TMUX` value (`<socket>,<port>,<session_idx>`). A claimed standby keeps its
+/// port under its new name, so this finds the session a pane shell is in.
+pub fn session_for_tmux_port(dir: &std::path::Path, tmux: &str) -> Option<String> {
+    let port = tmux.split(',').nth(1)?.trim().parse::<u16>().ok()?;
+    std::fs::read_dir(dir)
+        .ok()?
+        .flatten()
+        .map(|e| e.path())
+        .filter(|p| p.extension().is_some_and(|e| e == "port"))
+        .find(|p| {
+            std::fs::read_to_string(p)
+                .ok()
+                .and_then(|c| c.trim().parse::<u16>().ok())
+                == Some(port)
+        })
+        .and_then(|p| p.file_stem()?.to_str().map(str::to_string))
+        .filter(|base| !is_warm_session(base))
+}
+
+/// Everything the router reads from the process, gathered so routing can be
+/// tested against a temporary data directory.
+struct RouteEnv<'a> {
+    /// The data directory holding the `.port` / `.key` registry.
+    dir: &'a std::path::Path,
+    /// `PSMUX_TARGET_SESSION`.
+    env_target: Option<&'a str>,
+    /// The session this invocation named with `-t`.
+    explicit: Option<&'a str>,
+    /// `TMUX`, set inside a pane.
+    tmux: Option<&'a str>,
+}
+
+/// Session `name`'s registered server in `dir`: (name, port, key).
+fn registered_server(dir: &std::path::Path, name: &str) -> Option<(String, u16, String)> {
+    let port = std::fs::read_to_string(dir.join(format!("{name}.port")))
+        .ok()?
+        .trim()
+        .parse::<u16>()
+        .ok()?;
+    let key = std::fs::read_to_string(dir.join(format!("{name}.key")))
+        .map(|k| k.trim().to_string())
+        .unwrap_or_default();
+    Some((name.to_string(), port, key))
+}
+
+/// The session the env fallback routes to. An inherited warm name resolves
+/// through `TMUX` to the claimed session, or fails: guessing the newest
+/// session there could send a destructive command to the wrong one.
+fn env_route_target(r: &RouteEnv) -> io::Result<String> {
+    let target = r.env_target.filter(|s| !s.is_empty()).unwrap_or("default");
+    if !env_target_redirects(target, r.explicit) {
+        return Ok(target.to_string());
+    }
+    r.tmux
+        .and_then(|t| session_for_tmux_port(r.dir, t))
+        .ok_or_else(|| io::Error::other(format!("no server running on session '{target}'")))
+}
+
+/// Route a `-t` target: `%pane` / `@window` ids by scanning live servers, a
+/// session name (minus `:window.pane`) to its `.port`. `None` falls through to
+/// the env route; a warm name always does, so it is never guessed at.
+fn route_by_target(raw: &str, dir: &std::path::Path) -> Option<(String, u16, String)> {
+    if raw.starts_with('%') || raw.starts_with('@') {
+        return scan_servers_for_id(raw);
+    }
+    let name = raw.split(':').next().unwrap_or(raw);
+    if name.is_empty() || is_warm_session(name) {
+        return None;
+    }
+    registered_server(dir, name)
+}
+
+/// Resolve which server (name, port, session-key) a control command goes to:
+/// (1) `-t <target>` parsed from the line, (2) the env route.
+fn resolve_server_in(line: &str, r: &RouteEnv) -> io::Result<(String, u16, String)> {
+    if let Some(found) = parse_target_from_line(line).and_then(|raw| route_by_target(&raw, r.dir)) {
+        return Ok(found);
+    }
+    let target = env_route_target(r)?;
+    registered_server(r.dir, &target)
+        .ok_or_else(|| io::Error::other(format!("no server running on session '{target}'")))
+}
+
 fn resolve_server_for_command(line: &str) -> io::Result<(String, u16, String)> {
-    let debug = env::var("PSMUX_DEBUG_ROUTING").is_ok();
-    if debug {
-        eprintln!("[route] resolve for line={:?}", line);
+    let dir = std::path::PathBuf::from(crate::paths::psmux_dir());
+    let env_target = env::var("PSMUX_TARGET_SESSION").ok();
+    let tmux = env::var("TMUX").ok();
+    let route = RouteEnv {
+        dir: &dir,
+        env_target: env_target.as_deref(),
+        explicit: EXPLICIT_TARGET_SESSION.get().map(String::as_str),
+        tmux: tmux.as_deref(),
+    };
+    let resolved = resolve_server_in(line, &route);
+    if env::var("PSMUX_DEBUG_ROUTING").is_ok() {
+        eprintln!("[route] line={line:?} env={env_target:?} -> {resolved:?}");
     }
-    // (1) target hint from `-t`
-    if let Some(raw) = parse_target_from_line(line) {
-        if debug {
-            eprintln!("[route] -t target parsed: {:?}", raw);
-        }
-        if raw.starts_with('%') || raw.starts_with('@') {
-            if debug {
-                eprintln!("[route] scanning servers for id {}", raw);
-            }
-            if let Some(r) = scan_servers_for_id(&raw) {
-                if debug {
-                    eprintln!("[route] scan hit: session={} port={}", r.0, r.1);
-                }
-                return Ok(r);
-            }
-            if debug {
-                eprintln!("[route] scan miss");
-            }
-            // fall through — no live server owns that id; use env fallback so
-            // the server's own error message (or downstream command) surfaces.
-        } else {
-            // Session name; strip `:window[.pane]` suffix.
-            let name = raw.split(':').next().unwrap_or(&raw);
-            if !name.is_empty() && !is_warm_session(name) {
-                let path = crate::paths::port_file(name);
-                if let Some(port) = std::fs::read_to_string(&path)
-                    .ok()
-                    .and_then(|s| s.trim().parse::<u16>().ok())
-                {
-                    let key = read_session_key(name).unwrap_or_default();
-                    return Ok((name.to_string(), port, key));
-                }
-            }
-        }
-    }
-    // (2,3) env + warm fallback — preserves historical behaviour.
-    let mut target = env::var("PSMUX_TARGET_SESSION")
-        .ok()
-        .filter(|s| !s.is_empty())
-        .unwrap_or_else(|| "default".to_string());
-    if debug {
-        eprintln!("[route] env fallback: PSMUX_TARGET_SESSION -> {:?}", target);
-    }
-    if env_target_redirects(&target, explicit_target_session().as_deref()) {
-        target = resolve_last_session_name().unwrap_or_else(|| "default".to_string());
-        if debug {
-            eprintln!("[route] warm resolved to {:?}", target);
-        }
-    }
-    let path = crate::paths::port_file(&target);
-    let port = std::fs::read_to_string(&path)
-        .ok()
-        .and_then(|s| s.trim().parse::<u16>().ok())
-        .ok_or_else(|| io::Error::other(format!("no server running on session '{}'", target)))?;
-    let key = read_session_key(&target).unwrap_or_default();
-    if debug {
-        eprintln!("[route] env path: session={} port={}", target, port);
-    }
-    Ok((target, port, key))
+    resolved
 }
 
 pub fn send_control(line: String) -> io::Result<()> {

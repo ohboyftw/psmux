@@ -88,3 +88,69 @@ fn test_sweep_when_port_file_already_removed_then_returns_at_once() {
     assert!(started.elapsed() < Duration::from_millis(150));
     assert!(dir.join("exited.key").exists());
 }
+
+fn route<'a>(
+    dir: &'a std::path::Path,
+    env_target: &'a str,
+    explicit: Option<&'a str>,
+    tmux: Option<&'a str>,
+) -> RouteEnv<'a> {
+    RouteEnv {
+        dir,
+        env_target: Some(env_target),
+        explicit,
+        tmux,
+    }
+}
+
+#[test]
+fn test_route_when_inherited_warm_then_tmux_port_names_claimed_session() {
+    let dir = sweep_dir("route_tmux_hit");
+    seed_set(&dir, "work", 41001);
+    std::thread::sleep(Duration::from_millis(20));
+    seed_set(&dir, "other", 41002);
+    let tmux = "/tmp/psmux-1/default,41001,0";
+    let r = route(&dir, "__warm__", None, Some(tmux));
+    let (name, port, _) = resolve_server_in("kill-session\n", &r).expect("routed");
+    assert_eq!((name.as_str(), port), ("work", 41001));
+}
+
+#[test]
+fn test_route_when_inherited_warm_and_no_port_matches_tmux_then_err() {
+    let dir = sweep_dir("route_tmux_miss");
+    seed_set(&dir, "work", 41001);
+    let r = route(&dir, "__warm__", None, Some("/tmp/psmux-1/default,41999,0"));
+    let err = resolve_server_in("kill-session\n", &r).expect_err("must not guess");
+    assert!(err.to_string().contains("'__warm__'"), "{err}");
+}
+
+#[test]
+fn test_route_when_inherited_warm_and_tmux_port_is_warm_then_err() {
+    let dir = sweep_dir("route_tmux_warm");
+    seed_set(&dir, "__warm__", 41003);
+    seed_set(&dir, "work", 41001);
+    let r = route(&dir, "__warm__", None, Some("/tmp/psmux-1/default,41003,0"));
+    assert!(resolve_server_in("send-keys x\n", &r).is_err());
+}
+
+#[test]
+fn test_route_when_explicit_warm_and_no_standby_then_err_naming_warm() {
+    let dir = sweep_dir("route_explicit_warm");
+    let holder = std::net::TcpListener::bind(("127.0.0.1", 0)).expect("bind");
+    let port = holder.local_addr().expect("addr").port();
+    seed_set(&dir, "work", port);
+    let tmux = format!("/tmp/psmux-1/default,{port},0");
+    let r = route(&dir, "__warm__", Some("__warm__"), Some(&tmux));
+    let err = resolve_server_in("kill-session\n", &r).expect_err("must not reach work");
+    assert!(err.to_string().contains("'__warm__'"), "{err}");
+}
+
+#[test]
+fn test_route_when_explicit_warm_standby_registered_then_routed_to_it() {
+    let dir = sweep_dir("route_explicit_warm_live");
+    seed_set(&dir, "__warm__", 41004);
+    seed_set(&dir, "work", 41001);
+    let r = route(&dir, "__warm__", Some("__warm__"), None);
+    let (name, _, _) = resolve_server_in("kill-session\n", &r).expect("routed");
+    assert_eq!(name, "__warm__");
+}

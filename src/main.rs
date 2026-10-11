@@ -217,44 +217,17 @@ fn run_main() -> io::Result<()> {
             }
         }
     }
-    if env::var("PSMUX_TARGET_SESSION").is_err() {
-        // No explicit session from -t: try to resolve from TMUX env var (set inside psmux panes)
-        // TMUX format: /tmp/psmux-<pid>/<socket_name>,<port>,<session_idx>
+    // No explicit session from -t, or only a warm name inherited from the
+    // standby this pane shell started in: resolve from the TMUX env var (set
+    // inside psmux panes; `<socket>,<port>,<session_idx>`). A claimed standby
+    // keeps its port, so this finds the claimed session under its new name.
+    let inherited_warm = env::var("PSMUX_TARGET_SESSION")
+        .is_ok_and(|t| crate::session::is_inherited_warm_target(&t));
+    if env::var("PSMUX_TARGET_SESSION").is_err() || inherited_warm {
         if let Ok(tmux_val) = env::var("TMUX") {
-            // Extract the port from the TMUX value
-            let parts: Vec<&str> = tmux_val.split(',').collect();
-            if parts.len() >= 2 {
-                if let Ok(port) = parts[1].trim().parse::<u16>() {
-                    // Look up which session owns this port (port file base
-                    // already includes -L namespace prefix if applicable)
-                    let psmux_dir = crate::paths::psmux_dir();
-                    if let Ok(entries) = std::fs::read_dir(&psmux_dir) {
-                        for entry in entries.flatten() {
-                            let path = entry.path();
-                            if path.extension().map(|e| e == "port").unwrap_or(false) {
-                                if let Ok(port_str) = std::fs::read_to_string(&path) {
-                                    if let Ok(file_port) = port_str.trim().parse::<u16>() {
-                                        if file_port == port {
-                                            if let Some(port_file_base) =
-                                                path.file_stem().and_then(|s| s.to_str())
-                                            {
-                                                // Skip warm (standby) sessions — they are internal-only
-                                                if !crate::session::is_warm_session(port_file_base)
-                                                {
-                                                    env::set_var(
-                                                        "PSMUX_TARGET_SESSION",
-                                                        port_file_base,
-                                                    );
-                                                }
-                                            }
-                                            break;
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
+            let dir = std::path::PathBuf::from(crate::paths::psmux_dir());
+            if let Some(base) = crate::session::session_for_tmux_port(&dir, &tmux_val) {
+                env::set_var("PSMUX_TARGET_SESSION", base);
             }
         }
     }

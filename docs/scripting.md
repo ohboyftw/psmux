@@ -30,6 +30,11 @@ psmux kill-window
 psmux kill-session
 ```
 
+`kill-session` exits with code 1 and prints "no server running on session
+'<name>'" when it reaches no server, as tmux does. Before this it exited 0 even
+when nothing was killed, so a cleanup step that kills a session that may already
+be gone should not treat a non-zero exit as a failure.
+
 ## Sending Keys
 
 ```powershell

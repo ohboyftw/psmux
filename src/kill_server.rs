@@ -6,7 +6,7 @@ use std::net::TcpStream;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-use crate::warm_reap::{now_filetime, write_kill_marker, KillScope};
+use crate::warm_reap::{enumerate_registry, now_filetime, stamp_and_enumerate, KillScope};
 
 /// End every server in namespace `ns` (`-L`), or every server everywhere when
 /// `ns` is `None`.
@@ -17,10 +17,8 @@ use crate::warm_reap::{now_filetime, write_kill_marker, KillScope};
 pub fn kill_server(ns: Option<&str>) {
     let dir = PathBuf::from(crate::paths::psmux_dir());
     let scope = ns.map_or(KillScope::All, KillScope::Namespace);
-    write_kill_marker(&dir, scope, now_filetime());
     let ns_prefix = ns.map(|l| format!("{l}__"));
-    let registered = enumerate_scope(&dir, ns_prefix.as_deref());
-    write_kill_marker(&dir, scope, now_filetime());
+    let registered = stamp_and_enumerate(&dir, scope, ns_prefix.as_deref(), now_filetime);
 
     let streams: Vec<TcpStream> = registered
         .iter()
@@ -33,26 +31,14 @@ pub fn kill_server(ns: Option<&str>) {
     std::thread::sleep(Duration::from_millis(300));
     if ns.is_none() {
         crate::session::kill_remaining_server_processes();
+        // The nuclear kill also ends a standby that registered after the
+        // enumeration, before it could see the marker and unregister itself.
+        // Read the registry again so its set is swept too; the sweep still
+        // leaves any set whose port is bound.
+        crate::session::sweep_dead_registry_sets(&enumerate_registry(&dir, None));
+        return;
     }
     crate::session::sweep_dead_registry_sets(&registered);
-}
-
-/// Every `.port` file in `dir` whose session falls under `ns_prefix` (all of
-/// them when `None`), with its contents as read now.
-fn enumerate_scope(dir: &Path, ns_prefix: Option<&str>) -> Vec<(PathBuf, String)> {
-    let Ok(entries) = std::fs::read_dir(dir) else {
-        return Vec::new();
-    };
-    entries
-        .flatten()
-        .map(|e| e.path())
-        .filter(|p| p.extension().is_some_and(|e| e == "port"))
-        .filter(|p| {
-            let stem = p.file_stem().and_then(|s| s.to_str()).unwrap_or("");
-            ns_prefix.is_none_or(|pfx| stem.starts_with(pfx))
-        })
-        .filter_map(|p| std::fs::read_to_string(&p).ok().map(|c| (p, c)))
-        .collect()
 }
 
 /// Ask the server registered at `path` to exit. Returns the connection, whose

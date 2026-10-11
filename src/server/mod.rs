@@ -404,9 +404,10 @@ fn spawn_one_warm_server(app: &AppState, warm_session_name: &str) -> bool {
     true
 }
 
-/// End this unclaimed standby: unregister it, end its panes, and exit. Same
-/// sequence as a kill-server, minus the reply.
-fn end_orphaned_standby(app: &mut AppState) -> ! {
+/// Unregister this server, end its panes, and exit: what a kill-server does,
+/// and what an orphaned standby does to itself. The registry files go first so
+/// clients see the session gone at once.
+fn unregister_and_exit(app: &mut AppState) -> ! {
     let base = app.port_file_base();
     let _ = std::fs::remove_file(crate::paths::port_file(&base));
     let _ = std::fs::remove_file(crate::paths::key_file(&base));
@@ -414,9 +415,11 @@ fn end_orphaned_standby(app: &mut AppState) -> ! {
     let _ = std::fs::remove_file(crate::paths::pipe_file(&base));
     crate::types::shutdown_persistent_streams();
     tree::kill_all_children_batch(&mut app.windows);
+    // process::exit skips Drop, so the warm pane's child is ended by hand.
     if let Some(mut wp) = app.warm_pane.take() {
         wp.child.kill().ok();
     }
+    // TerminateProcess is synchronous; this is only for OS handle cleanup.
     std::thread::sleep(Duration::from_millis(10));
     std::process::exit(0);
 }
@@ -652,10 +655,9 @@ pub fn run_server(
     // A standby spawned by a server was spawned into a data directory that
     // existed; if it is gone now somebody deleted it, and starting up (which
     // creates the directory) would resurrect a namespace removed on purpose.
-    if crate::warm_reap::warm_spawner().is_some()
-        && crate::session::is_warm_session(&session_name)
-        && !std::path::Path::new(&crate::paths::psmux_dir()).is_dir()
-    {
+    let spawned_standby = crate::warm_reap::warm_spawner().is_some()
+        && crate::session::is_warm_session(&session_name);
+    if spawned_standby && !std::path::Path::new(&crate::paths::psmux_dir()).is_dir() {
         return Ok(());
     }
 
@@ -684,7 +686,10 @@ pub fn run_server(
     // port file to discover the server, and the client polls for it to know
     // the server is ready.
     let dir = crate::paths::psmux_dir();
-    let _ = std::fs::create_dir_all(&dir);
+    // A spawned standby never creates the data directory (see above).
+    if !spawned_standby {
+        let _ = std::fs::create_dir_all(&dir);
+    }
 
     // Generate a random session key for security
     let session_key: String = {
@@ -4872,29 +4877,7 @@ pub fn run_server(
                         CtrlReq::RemoveHook(hook) => {
                             app.hooks.remove(&hook);
                         }
-                        CtrlReq::KillServer => {
-                            // Remove port/key/version/pipe files FIRST so clients see the
-                            // session as gone immediately, then kill processes.
-                            let regpath = crate::paths::port_file(app.port_file_base());
-                            let keypath = crate::paths::key_file(app.port_file_base());
-                            let verpath = crate::paths::version_file(app.port_file_base());
-                            let pipepath = crate::paths::pipe_file(app.port_file_base());
-                            let _ = std::fs::remove_file(&regpath);
-                            let _ = std::fs::remove_file(&keypath);
-                            let _ = std::fs::remove_file(&verpath);
-                            let _ = std::fs::remove_file(&pipepath);
-                            crate::types::shutdown_persistent_streams();
-                            // Kill all child processes using a single process snapshot
-                            tree::kill_all_children_batch(&mut app.windows);
-                            // Kill warm pane's child (process::exit skips Drop)
-                            if let Some(mut wp) = app.warm_pane.take() {
-                                wp.child.kill().ok();
-                            }
-                            // TerminateProcess is synchronous on Windows — processes
-                            // are already dead.  Minimal delay for OS handle cleanup.
-                            std::thread::sleep(std::time::Duration::from_millis(10));
-                            std::process::exit(0);
-                        }
+                        CtrlReq::KillServer => unregister_and_exit(&mut app),
                         CtrlReq::WaitFor(channel, op) => match op {
                             WaitForOp::Lock => {
                                 let entry = app.wait_channels.entry(channel).or_insert_with(|| {
@@ -6227,7 +6210,7 @@ pub fn run_server(
                 app.socket_name.as_deref(),
             );
             if verdict != crate::warm_reap::WarmStandbyVerdict::Keep {
-                end_orphaned_standby(&mut app);
+                unregister_and_exit(&mut app);
             }
         }
         // Check if all windows/panes have exited (throttled to every 250ms)
