@@ -1,6 +1,6 @@
 //! `quote_windows_arg` must follow the CommandLineToArgvW / CRT rules, so the
 //! server reads back exactly the argument `new-session` passed. Included from
-//! `src/platform.rs`.
+//! `src/detached.rs`.
 
 use super::*;
 

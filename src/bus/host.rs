@@ -5,12 +5,13 @@
 //! answer is stale and is overwritten by the next host.
 
 use std::net::{Ipv4Addr, SocketAddr};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-use super::client::probe;
+use super::client::{probe, Client, ClientError, PROBE_CLIENT_ID};
 use super::discovery::{self, DEFAULT_PORT};
 use super::server::{start, BusConfig};
+use crate::detached::{spawn_detached, Console};
 
 /// How long a liveness probe waits for the Hello Ack.
 pub const PROBE_TIMEOUT: Duration = Duration::from_millis(1500);
@@ -92,12 +93,33 @@ pub fn parse_args(args: &[&str], mut loc: BusLocation) -> Result<BusLocation, St
     Ok(loc)
 }
 
+/// `psmux bus [--port N] [--discovery PATH]` hosts a bus;
+/// `psmux bus stop [...]` asks the live one to shut down.
+pub fn run_bus_command(words: &[&str]) -> std::io::Result<()> {
+    use std::io::{Error, ErrorKind};
+    let (stop, rest) = match words.split_first() {
+        Some((&"stop", rest)) => (true, rest),
+        _ => (false, words),
+    };
+    let loc = parse_args(rest, BusLocation::from_env())
+        .map_err(|e| Error::new(ErrorKind::InvalidInput, e))?;
+    if !stop {
+        return run_bus_process(&loc);
+    }
+    match stop_live_bus(&loc) {
+        Ok(true) => println!("mycel bus stopped"),
+        Ok(false) => println!("no mycel bus is running"),
+        Err(e) => return Err(Error::other(e.to_string())),
+    }
+    Ok(())
+}
+
 /// Run `psmux bus`: defer to a live bus if one answers, otherwise host on
 /// `127.0.0.1:<port>` until a Shutdown request. Losing a start race (the
 /// port is already bound) is not an error.
 pub fn run_bus_process(loc: &BusLocation) -> std::io::Result<()> {
     if let Some(addr) = find_live_bus(loc, PROBE_TIMEOUT) {
-        eprintln!("psmux bus: a mycel bus is already live at {addr}");
+        log(&format!("a mycel bus is already live at {addr}"));
         return Ok(());
     }
     let cfg = BusConfig::new(loc.local_addr(), loc.discovery_path.clone());
@@ -107,56 +129,54 @@ pub fn run_bus_process(loc: &BusLocation) -> std::io::Result<()> {
             Ok(())
         }
         Err(e) if is_port_taken(&e) => {
-            eprintln!("psmux bus: port {} is taken; not hosting", loc.port);
+            log(&format!("port {} is taken; not hosting", loc.port));
             Ok(())
         }
         Err(e) => Err(e),
     }
 }
 
+/// Run `psmux bus stop`: ask the live bus, if any, to shut down. Returns
+/// whether a bus answered. The next psmux event starts a new one unless
+/// `PSMUX_BUS=0` was set before the session servers started.
+pub fn stop_live_bus(loc: &BusLocation) -> Result<bool, ClientError> {
+    let Some(addr) = find_live_bus(loc, PROBE_TIMEOUT) else {
+        return Ok(false);
+    };
+    let mut client = Client::connect(addr, PROBE_CLIENT_ID, PROBE_TIMEOUT)?;
+    client.set_read_timeout(Some(PROBE_TIMEOUT))?;
+    client.shutdown("psmux bus stop")?;
+    Ok(true)
+}
+
 /// Start `exe bus --port P [--discovery PATH]` as a detached background
-/// process with no console window. On Windows it first tries to leave the
-/// caller's job, so the bus outlives the session server that started it
-/// (as `spawn_server_hidden` does); a job that forbids breakaway refuses
-/// that, and the bus then starts inside the job.
-pub fn spawn_bus_process(exe: &std::path::Path, loc: &BusLocation) -> std::io::Result<()> {
+/// process with no console window and no inherited handles, working in
+/// the user's home directory so it never pins the directory psmux was
+/// started from.
+pub fn spawn_bus_process(exe: &Path, loc: &BusLocation) -> std::io::Result<()> {
     let mut args = vec!["bus".to_owned(), "--port".to_owned(), loc.port.to_string()];
     if let Some(path) = &loc.discovery_path {
         args.push("--discovery".into());
         args.push(path.to_string_lossy().into_owned());
     }
-    #[cfg(windows)]
-    {
-        const CREATE_NEW_PROCESS_GROUP: u32 = 0x0000_0200;
-        const CREATE_BREAKAWAY_FROM_JOB: u32 = 0x0100_0000;
-        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
-        let base = CREATE_NO_WINDOW | CREATE_NEW_PROCESS_GROUP;
-        spawn_with_flags(exe, &args, base | CREATE_BREAKAWAY_FROM_JOB)
-            .or_else(|_| spawn_with_flags(exe, &args, base))
-    }
-    #[cfg(not(windows))]
-    {
-        bus_command(exe, &args).spawn().map(drop)
-    }
+    let cwd = bus_cwd(exe);
+    spawn_detached(exe, &args, Console::None, cwd.as_deref())
 }
 
-#[cfg(windows)]
-fn spawn_with_flags(exe: &std::path::Path, args: &[String], flags: u32) -> std::io::Result<()> {
-    use std::os::windows::process::CommandExt;
-    bus_command(exe, args)
-        .creation_flags(flags)
-        .spawn()
-        .map(drop)
+/// `%USERPROFILE%` (or `$HOME`), else the executable's directory, which
+/// the running image pins anyway.
+fn bus_cwd(exe: &Path) -> Option<PathBuf> {
+    std::env::var_os("USERPROFILE")
+        .or_else(|| std::env::var_os("HOME"))
+        .map(PathBuf::from)
+        .filter(|d| d.is_dir())
+        .or_else(|| exe.parent().map(Path::to_path_buf))
 }
 
-fn bus_command(exe: &std::path::Path, args: &[String]) -> std::process::Command {
-    use std::process::Stdio;
-    let mut cmd = std::process::Command::new(exe);
-    cmd.args(args)
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null());
-    cmd
+/// The bus runs without a console or stdio, so messages go to the server
+/// log (`PSMUX_DEBUG`) instead of stderr.
+fn log(msg: &str) {
+    crate::debug_log::server_log("bus", msg);
 }
 
 /// `AddrInUse`, or on Windows `PermissionDenied` when the holder used

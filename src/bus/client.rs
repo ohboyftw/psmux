@@ -80,6 +80,12 @@ impl Client {
         Ok(client)
     }
 
+    /// Bound how long a write may block. A write that times out leaves the
+    /// stream unusable (part of a frame may have been sent).
+    pub fn set_write_timeout(&self, timeout: Option<Duration>) -> io::Result<()> {
+        self.stream.set_write_timeout(timeout)
+    }
+
     /// Bound how long the next reads may block. `None` blocks forever. A
     /// read that times out leaves the stream unusable (see the codec).
     pub fn set_read_timeout(&self, timeout: Option<Duration>) -> io::Result<()> {
@@ -188,7 +194,8 @@ impl Client {
             Ok(_) => true,
             Err(e) => e.kind() != io::ErrorKind::WouldBlock,
         };
-        closed || self.stream.set_nonblocking(false).is_err()
+        let restored = self.stream.set_nonblocking(false).is_ok();
+        closed || !restored
     }
 
     /// Close the connection.
@@ -216,9 +223,13 @@ fn unexpected(msg: Msg) -> ClientError {
     }
 }
 
+/// Client id of liveness probes. The psmux bus announces no presence
+/// events for it.
+pub const PROBE_CLIENT_ID: &str = "psmux-bus-probe";
+
 /// True if a mycel server at `addr` answers Hello within `timeout`.
 pub fn probe(addr: SocketAddr, timeout: Duration) -> bool {
-    match Client::connect(addr, "psmux-bus-probe", timeout) {
+    match Client::connect(addr, PROBE_CLIENT_ID, timeout) {
         Ok(c) => {
             c.close();
             true

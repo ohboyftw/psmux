@@ -4,15 +4,18 @@
 //! ([`crate::bus::client`]). On each publish it reuses its connection, or
 //! looks for a live bus (discovery file first, then `127.0.0.1:4321`) and,
 //! if none answers, starts `psmux bus` once and waits for it. Set
-//! `PSMUX_BUS=0` to never start a bus (an existing one is still used).
+//! `PSMUX_BUS=0` to never start a bus (an existing one is still used). It
+//! is read once, when the session server starts: servers already running
+//! (warm-pool servers included) keep the value they started with.
 //!
 //! The bus is an optional observability channel: when it cannot be
 //! reached, events are dropped and the next attempt waits out a backoff,
 //! so a missing bus never costs more than one connect timeout per backoff.
 
 use std::collections::HashMap;
+use std::io;
 use std::net::SocketAddr;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::mpsc;
 use std::thread;
 use std::time::{Duration, Instant};
@@ -30,6 +33,13 @@ const POLL_TIMEOUT: Duration = Duration::from_millis(300);
 const START_WAIT: Duration = Duration::from_secs(8);
 /// Least time between two attempts to start a bus.
 const RESPAWN_INTERVAL: Duration = Duration::from_secs(30);
+/// Starts in a row that never produced a live bus before the long wait.
+const MAX_FAILED_STARTS: u32 = 3;
+/// Wait between starts once [`MAX_FAILED_STARTS`] is reached (a port held
+/// by something else, or a `psmux bus` that cannot run).
+const FAILED_START_COOLDOWN: Duration = Duration::from_secs(30 * 60);
+/// Longest a publish may block on a bus that stopped reading.
+const WRITE_TIMEOUT: Duration = Duration::from_secs(2);
 /// First and largest wait after a failed connect.
 const BACKOFF_MIN: Duration = Duration::from_secs(2);
 const BACKOFF_MAX: Duration = Duration::from_secs(60);
@@ -67,11 +77,10 @@ impl MycelBus {
     /// publish. `client_id` is reported as the `publisher` of every event
     /// (e.g. `"psmux@hostname"`).
     pub fn new(client_id: &str) -> Self {
-        Self::with_link(Link::new(
-            client_id,
-            BusLocation::from_env(),
-            autostart_exe(),
-        ))
+        let exe = std::env::current_exe().ok();
+        let bus_env = std::env::var("PSMUX_BUS").ok();
+        let autostart = autostart_exe(bus_env.as_deref(), exe).map(spawner);
+        Self::with_link(Link::new(client_id, BusLocation::from_env(), autostart))
     }
 
     fn with_link(mut link: Link) -> Self {
@@ -107,20 +116,30 @@ impl MycelBus {
     }
 }
 
+/// Starts a bus for a location.
+type Spawner = Box<dyn FnMut(&BusLocation) -> io::Result<()> + Send>;
+
+/// Start `psmux bus` from `exe`.
+fn spawner(exe: PathBuf) -> Spawner {
+    Box::new(move |loc: &BusLocation| spawn_bus_process(&exe, loc))
+}
+
 /// The publisher thread's connection state.
 struct Link {
     client_id: String,
     loc: BusLocation,
-    /// The psmux executable to start a bus with; `None` never starts one.
-    autostart: Option<PathBuf>,
+    /// Starts a bus; `None` never starts one.
+    autostart: Option<Spawner>,
     client: Option<Client>,
     retry_at: Option<Instant>,
     backoff: Duration,
     last_spawn: Option<Instant>,
+    /// Starts in a row that never produced a live bus.
+    failed_starts: u32,
 }
 
 impl Link {
-    fn new(client_id: &str, loc: BusLocation, autostart: Option<PathBuf>) -> Self {
+    fn new(client_id: &str, loc: BusLocation, autostart: Option<Spawner>) -> Self {
         Link {
             client_id: client_id.into(),
             loc,
@@ -129,6 +148,7 @@ impl Link {
             retry_at: None,
             backoff: BACKOFF_MIN,
             last_spawn: None,
+            failed_starts: 0,
         }
     }
 
@@ -158,6 +178,7 @@ impl Link {
                 self.client = Some(c);
                 self.retry_at = None;
                 self.backoff = BACKOFF_MIN;
+                self.failed_starts = 0;
                 true
             }
             None => {
@@ -177,22 +198,44 @@ impl Link {
             .find_map(|a| self.try_connect(a, CONNECT_TIMEOUT))
     }
 
+    /// Connect with a write timeout, so a bus that stops reading costs a
+    /// reconnect instead of a publisher thread blocked for good.
     fn try_connect(&self, addr: SocketAddr, timeout: Duration) -> Option<Client> {
-        Client::connect(addr, &self.client_id, timeout).ok()
+        let client = Client::connect(addr, &self.client_id, timeout).ok()?;
+        client.set_write_timeout(Some(WRITE_TIMEOUT)).ok()?;
+        Some(client)
     }
 
-    /// Start `psmux bus` (at most once per [`RESPAWN_INTERVAL`]) and wait
-    /// for it, or for whichever bus won a start race, to answer.
+    /// Start a bus (at most once per [`RESPAWN_INTERVAL`], or per
+    /// [`FAILED_START_COOLDOWN`] after [`MAX_FAILED_STARTS`] starts in a row
+    /// that never answered) and wait for it, or for whichever bus won a
+    /// start race, to answer.
     fn start_and_connect(&mut self) -> Option<Client> {
-        let exe = self.autostart.as_ref()?;
-        if self
-            .last_spawn
-            .is_some_and(|t| t.elapsed() < RESPAWN_INTERVAL)
-        {
+        if self.autostart.is_none() || !self.may_start() {
             return None;
         }
         self.last_spawn = Some(Instant::now());
-        if let Err(e) = spawn_bus_process(exe, &self.loc) {
+        let client = self.spawn_and_wait();
+        if client.is_some() {
+            self.failed_starts = 0;
+        } else {
+            self.failed_starts = self.failed_starts.saturating_add(1);
+        }
+        client
+    }
+
+    fn may_start(&self) -> bool {
+        let wait = if self.failed_starts >= MAX_FAILED_STARTS {
+            FAILED_START_COOLDOWN
+        } else {
+            RESPAWN_INTERVAL
+        };
+        self.last_spawn.is_none_or(|t| t.elapsed() >= wait)
+    }
+
+    fn spawn_and_wait(&mut self) -> Option<Client> {
+        let spawn = self.autostart.as_mut()?;
+        if let Err(e) = spawn(&self.loc) {
             crate::debug_log::server_log("mycel", &format!("cannot start psmux bus: {e}"));
             return None;
         }
@@ -212,16 +255,23 @@ impl Link {
     }
 }
 
-/// The executable to start a bus with: this process's own image, but only
-/// when it is psmux (not a test harness, which would read `bus` as a test
-/// filter), and only when `PSMUX_BUS` is not `0`.
-fn autostart_exe() -> Option<PathBuf> {
-    if std::env::var("PSMUX_BUS").is_ok_and(|v| v.trim() == "0") {
+/// The executable to start a bus with: `exe` (this process's own image),
+/// but only when it is psmux (not a test harness, which would read `bus` as
+/// a test filter), and only when `bus_env` (`PSMUX_BUS`) is not `0`.
+fn autostart_exe(bus_env: Option<&str>, exe: Option<PathBuf>) -> Option<PathBuf> {
+    if bus_env.is_some_and(|v| v.trim() == "0") {
         return None;
     }
-    let exe = std::env::current_exe().ok()?;
-    let stem = exe.file_stem()?.to_str()?.to_ascii_lowercase();
-    matches!(stem.as_str(), "psmux" | "pmux" | "tmux").then_some(exe)
+    let exe = exe?;
+    is_psmux_image(&exe).then_some(exe)
+}
+
+fn is_psmux_image(exe: &Path) -> bool {
+    let stem = exe.file_stem().and_then(|s| s.to_str()).unwrap_or("");
+    matches!(
+        stem.to_ascii_lowercase().as_str(),
+        "psmux" | "pmux" | "tmux"
+    )
 }
 
 /// Global mycel bus instance.

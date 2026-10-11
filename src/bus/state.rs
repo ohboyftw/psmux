@@ -11,9 +11,7 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use super::codec::{encode_frame, fits_in_frame};
-use super::proto::{
-    Ack, Envelope, Error, Event, Hello, Msg, Publish, Replay, StatusResp, TopicInfo,
-};
+use super::proto::{Ack, Envelope, Error, Event, Hello, Msg, Publish, StatusResp, TopicInfo};
 use super::queue::DEFAULT_EVENT_CAPACITY;
 use super::registry::{apply_hello, Registry};
 use super::ring::{overflow_reportable, BufferStore, RingConfig};
@@ -150,10 +148,7 @@ impl State {
         if !first {
             return Action::Continue;
         }
-        let payload = serde_json::json!({
-            "client_id": hello.client_id, "ts": now, "type": hello.client_type,
-        });
-        self.publish_system("$mycel/clients/connected", &payload, now);
+        self.announce_connected(hello, now);
         Action::Registered
     }
 
@@ -184,30 +179,6 @@ impl State {
         self.deliver_replay_gap(conn, &pattern, &earlier, now);
     }
 
-    /// After a Replay then Subscribe of the same pattern, deliver what was
-    /// published in between, after the Ack. Events an earlier subscription
-    /// of this connection already delivered live are skipped.
-    fn deliver_replay_gap(&mut self, conn: ConnId, pattern: &str, earlier: &[String], now: i64) {
-        let Some(marks) = self.take_marks(conn, pattern) else {
-            return;
-        };
-        let gap = self.store.events_after(pattern, &marks, now);
-        for event in gap {
-            if earlier.iter().any(|p| topic::matches(p, &event.topic)) {
-                continue;
-            }
-            if let Some(frame) = event_frame(event) {
-                self.push_event(conn, &frame);
-            }
-        }
-    }
-
-    fn take_marks(&mut self, conn: ConnId, pattern: &str) -> Option<HashMap<String, u64>> {
-        let list = self.marks.get_mut(&conn)?;
-        let i = list.iter().position(|(p, _)| p == pattern)?;
-        Some(list.remove(i).1)
-    }
-
     fn on_unsubscribe(&mut self, conn: ConnId, pattern: &str) {
         let Ok(pattern) = topic::validate_pattern(pattern) else {
             self.push_frame(conn, error_msg("invalid topic pattern"), false);
@@ -215,32 +186,6 @@ impl State {
         };
         self.subs.unsubscribe(conn, pattern);
         self.push_frame(conn, ack("unsubscribe"), false);
-    }
-
-    fn on_replay(&mut self, conn: ConnId, r: &Replay, now: i64) {
-        // An invalid pattern replays nothing but still completes, so the
-        // CLI and Python clients waiting for `replay_complete` return.
-        if let Ok(pattern) = topic::validate_pattern(&r.topic_pattern) {
-            let pattern = pattern.to_owned();
-            let events = self
-                .store
-                .replay(&pattern, r.since_unix_ms, r.max_events, now);
-            for frame in events.into_iter().filter_map(event_frame) {
-                self.push_frame_bytes(conn, frame, false);
-            }
-            let marks = self.store.sequence_marks(&pattern);
-            self.remember_marks(conn, pattern, marks);
-        }
-        self.push_frame(conn, ack("replay_complete"), false);
-    }
-
-    fn remember_marks(&mut self, conn: ConnId, pattern: String, marks: HashMap<String, u64>) {
-        let list = self.marks.entry(conn).or_default();
-        list.retain(|(p, _)| *p != pattern);
-        if list.len() >= MAX_MARKS_PER_CONN {
-            list.remove(0);
-        }
-        list.push((pattern, marks));
     }
 
     fn on_status(&mut self, conn: ConnId, now: i64) {
@@ -273,43 +218,6 @@ impl State {
             uptime_seconds: self.started.elapsed().as_secs(),
             total_events: self.total_events,
         }
-    }
-
-    /// Forget a connection. Returns `true` (and announces
-    /// `$mycel/clients/disconnected`) only the first time, and only for a
-    /// connection that completed Hello.
-    pub fn disconnect(&mut self, conn: ConnId, now: i64) -> bool {
-        let Some(rec) = self.registry.remove(&conn) else {
-            return false;
-        };
-        self.subs.remove_conn(conn);
-        self.marks.remove(&conn);
-        if !self.stopping {
-            let payload = serde_json::json!({ "client_id": rec.client_id, "ts": now });
-            self.publish_system("$mycel/clients/disconnected", &payload, now);
-        }
-        true
-    }
-
-    /// One `$mycel/clients/heartbeat` per registered client.
-    pub fn heartbeat(&mut self, now: i64) {
-        let ids: Vec<String> = self
-            .registry
-            .values()
-            .map(|r| r.client_id.clone())
-            .collect();
-        for id in ids {
-            let payload = serde_json::json!({ "client_id": id, "ts": now });
-            self.publish_system("$mycel/clients/heartbeat", &payload, now);
-        }
-    }
-
-    /// Announce `$mycel/server/started`.
-    pub fn server_started(&mut self, port: u16, bind: &str, now: i64) {
-        let payload = serde_json::json!({
-            "client_id": SERVER_PUBLISHER, "ts": now, "port": port, "bind": bind,
-        });
-        self.publish_system("$mycel/server/started", &payload, now);
     }
 
     /// The next frame for `conn`'s writer.
@@ -447,6 +355,9 @@ fn event_frame(event: Event) -> Option<Arc<[u8]>> {
     .ok()
     .map(Arc::from)
 }
+
+mod presence;
+mod replay;
 
 #[cfg(test)]
 #[path = "../../tests-rs/test_bus_state.rs"]

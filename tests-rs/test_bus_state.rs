@@ -3,7 +3,7 @@
 // gap, bounded queues and the overflow storm guard.
 
 use super::*;
-use crate::bus::proto::{Shutdown, StatusReq, Subscribe, Unsubscribe};
+use crate::bus::proto::{Replay, Shutdown, StatusReq, Subscribe, Unsubscribe};
 use prost::Message;
 
 const T0: i64 = 1_000_000;
@@ -427,4 +427,15 @@ fn heartbeat_publishes_one_event_per_client() {
     drain(&mut s, 1);
     s.heartbeat(T0);
     assert_eq!(event_topics(&drain(&mut s, 1)).len(), 2);
+}
+
+#[test]
+fn liveness_probe_announces_no_presence() {
+    let mut s = state();
+    hello(&mut s, 1, "monitor");
+    subscribe(&mut s, 1, "$mycel/#");
+    drain(&mut s, 1);
+    hello(&mut s, 2, crate::bus::client::PROBE_CLIENT_ID);
+    s.disconnect(2, T0);
+    assert!(event_topics(&drain(&mut s, 1)).is_empty());
 }

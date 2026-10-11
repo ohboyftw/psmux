@@ -123,7 +123,6 @@ glob = "0.3"
 base64 = "0.22"
 prost = "0.13.5"
 
-
 # Optional: spike — interprocess crate as named-pipe abstraction
 # (replaces hand-rolled Win32 named-pipe code in src/backend/pipe.rs).
 # Behind `interprocess-pipe` feature; default OFF.

@@ -9,6 +9,7 @@ pub mod bus;
 pub mod control;
 pub mod crash;
 pub mod debug_log;
+pub mod detached;
 pub mod hints;
 #[cfg(feature = "mycel")]
 pub mod mycel;

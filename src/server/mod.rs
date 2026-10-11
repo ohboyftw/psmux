@@ -820,7 +820,8 @@ pub fn run_server(
     > = std::sync::Arc::new(std::sync::RwLock::new(std::collections::HashMap::new()));
     let shared_aliases_main = shared_aliases.clone();
 
-    // Initialize mycel event bus (optional — only when built with --features mycel)
+    // Initialize the mycel publisher (the default-on `mycel` feature). The
+    // first publish finds or starts a bus; PSMUX_BUS=0 turns autostart off.
     #[cfg(feature = "mycel")]
     {
         let hostname = std::env::var("COMPUTERNAME")

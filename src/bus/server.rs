@@ -2,8 +2,10 @@
 //! connection, and a heartbeat thread, all sharing one [`State`].
 //!
 //! Started by `psmux bus`, or in-process by tests on an ephemeral port.
-//! The listener is a plain `std` bind, which on Windows does not set
-//! `SO_REUSEADDR`, so a second host cannot bind the same port.
+//! The listener is a plain `std` bind without `SO_REUSEADDR`, so a second
+//! plain bind of the port fails. On Windows a later socket that sets
+//! `SO_REUSEADDR` (the C++ server's asio listener does) can still bind it
+//! alongside, and the two servers then split clients between them.
 
 use std::collections::HashMap;
 use std::io::{self, Write};
@@ -12,7 +14,7 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard};
 use std::thread::{self, JoinHandle};
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use super::codec::{read_frame, FrameError};
 use super::discovery::{self, DiscoveryInfo};
@@ -34,12 +36,15 @@ pub struct BusConfig {
     /// Discovery file to write after bind and remove on stop. `None`
     /// writes nothing (tests).
     pub discovery_path: Option<PathBuf>,
-    /// Time a new connection has to send Hello.
+    /// Time a new connection has, from accept, to complete Hello.
     pub hello_timeout: Duration,
     /// Interval between heartbeat rounds.
     pub heartbeat_interval: Duration,
     /// Queue, history and connection limits.
     pub limits: Limits,
+    /// Control frames a connection may have waiting before its requests
+    /// stop being read.
+    pub control_backlog: usize,
 }
 
 impl BusConfig {
@@ -51,6 +56,7 @@ impl BusConfig {
             hello_timeout: Duration::from_secs(5),
             heartbeat_interval: Duration::from_secs(30),
             limits: Limits::default(),
+            control_backlog: MAX_CONTROL_BACKLOG,
         }
     }
 }
@@ -64,6 +70,7 @@ struct Shared {
     local_addr: SocketAddr,
     discovery: Option<(PathBuf, DiscoveryInfo)>,
     hello_timeout: Duration,
+    control_backlog: usize,
 }
 
 impl Shared {
@@ -133,23 +140,13 @@ pub fn now_ms() -> i64 {
 }
 
 /// Bind, write the discovery file, announce `$mycel/server/started`, and
-/// start serving. Fails if the port is taken.
+/// start serving. Fails if the port is taken. A discovery file that cannot
+/// be written is logged and skipped: clients also probe the port.
 pub fn start(cfg: BusConfig) -> io::Result<BusHandle> {
     let listener = TcpListener::bind(cfg.bind)?;
     let local_addr = listener.local_addr()?;
-    let discovery = write_discovery(cfg.discovery_path, local_addr.port())?;
-    let mut state = State::new(cfg.limits);
-    state.server_started(local_addr.port(), &local_addr.ip().to_string(), now_ms());
-    let shared = Arc::new(Shared {
-        state: Mutex::new(state),
-        wake: Condvar::new(),
-        stop: AtomicBool::new(false),
-        next_conn: AtomicU64::new(1),
-        streams: Mutex::new(HashMap::new()),
-        local_addr,
-        discovery,
-        hello_timeout: cfg.hello_timeout,
-    });
+    let discovery = write_discovery(cfg.discovery_path.clone(), local_addr.port());
+    let shared = new_shared(&cfg, local_addr, discovery);
     let accept = spawn_named("mycel-accept", {
         let shared = shared.clone();
         move || accept_loop(&shared, &listener)
@@ -165,17 +162,39 @@ pub fn start(cfg: BusConfig) -> io::Result<BusHandle> {
     })
 }
 
+fn new_shared(
+    cfg: &BusConfig,
+    local_addr: SocketAddr,
+    discovery: Option<(PathBuf, DiscoveryInfo)>,
+) -> Arc<Shared> {
+    let mut state = State::new(cfg.limits);
+    state.server_started(local_addr.port(), &local_addr.ip().to_string(), now_ms());
+    Arc::new(Shared {
+        state: Mutex::new(state),
+        wake: Condvar::new(),
+        stop: AtomicBool::new(false),
+        next_conn: AtomicU64::new(1),
+        streams: Mutex::new(HashMap::new()),
+        local_addr,
+        discovery,
+        hello_timeout: cfg.hello_timeout,
+        control_backlog: cfg.control_backlog,
+    })
+}
+
 /// Write the discovery file for a bus on `port`, if a path is given.
-fn write_discovery(
-    path: Option<PathBuf>,
-    port: u16,
-) -> io::Result<Option<(PathBuf, DiscoveryInfo)>> {
-    let Some(path) = path else {
-        return Ok(None);
-    };
+/// `None` when there is no path or the write failed.
+fn write_discovery(path: Option<PathBuf>, port: u16) -> Option<(PathBuf, DiscoveryInfo)> {
+    let path = path?;
     let info = DiscoveryInfo::for_local_bus(port);
-    discovery::write(&path, &info)?;
-    Ok(Some((path, info)))
+    match discovery::write(&path, &info) {
+        Ok(()) => Some((path, info)),
+        Err(e) => {
+            let msg = format!("cannot write {}: {e}; hosting anyway", path.display());
+            crate::debug_log::server_log("bus", &msg);
+            None
+        }
+    }
 }
 
 fn spawn_named(name: &str, f: impl FnOnce() + Send + 'static) -> io::Result<JoinHandle<()>> {
@@ -238,47 +257,75 @@ fn serve_conn(shared: &Arc<Shared>, stream: TcpStream, conn: ConnId) {
     let _ = stream.shutdown(NetShutdown::Both);
 }
 
+/// What the reader does after a frame.
+enum Next {
+    Read,
+    Registered,
+    Close,
+}
+
 /// Read and handle frames until the peer closes, the stream breaks, or
 /// the bus stops. Every frame that arrived before EOF is handled first.
-/// Returns whether the connection ever completed Hello.
+/// A connection that has not completed Hello by `hello_timeout` after
+/// accept is closed, whatever else it sends. Returns whether the
+/// connection ever completed Hello.
 fn read_requests(shared: &Arc<Shared>, stream: &TcpStream, conn: ConnId) -> bool {
     let mut registered = false;
-    let _ = stream.set_read_timeout(Some(shared.hello_timeout));
+    let hello_deadline = Instant::now() + shared.hello_timeout;
     let mut reader = stream;
     while !shared.stopping() {
+        if !registered && !arm_hello_timeout(stream, hello_deadline) {
+            break;
+        }
         let env = match read_frame(&mut reader) {
             Ok(Some(env)) => env,
             Err(FrameError::Decode(_)) => continue,
             Ok(None) | Err(_) => break,
         };
-        match handle_frame(shared, conn, env) {
-            Some(Action::Registered) => {
-                registered = true;
-                let _ = stream.set_read_timeout(None);
-                if start_writer(shared, stream, conn).is_err() {
-                    break;
-                }
-            }
-            Some(Action::Reject(bytes)) => {
-                let _ = (&*stream).write_all(&bytes);
-                break;
-            }
-            Some(Action::Shutdown) => {
-                finish_shutdown(shared);
-                break;
-            }
-            Some(Action::Continue) | None => {}
+        match apply(shared, stream, conn, handle_frame(shared, conn, env)) {
+            Next::Read => {}
+            Next::Registered => registered = true,
+            Next::Close => break,
         }
     }
     registered
+}
+
+/// Bound the next read by the time left until `deadline`. False once it
+/// has passed.
+fn arm_hello_timeout(stream: &TcpStream, deadline: Instant) -> bool {
+    let left = deadline.saturating_duration_since(Instant::now());
+    !left.is_zero() && stream.set_read_timeout(Some(left)).is_ok()
+}
+
+fn apply(shared: &Arc<Shared>, stream: &TcpStream, conn: ConnId, action: Option<Action>) -> Next {
+    match action {
+        Some(Action::Registered) => {
+            let _ = stream.set_read_timeout(None);
+            match start_writer(shared, stream, conn) {
+                Ok(()) => Next::Registered,
+                Err(_) => Next::Close,
+            }
+        }
+        Some(Action::Reject(bytes)) => {
+            let _ = (&*stream).write_all(&bytes);
+            Next::Close
+        }
+        Some(Action::Shutdown) => {
+            finish_shutdown(shared);
+            Next::Close
+        }
+        Some(Action::Continue) | None => Next::Read,
+    }
 }
 
 fn handle_frame(shared: &Shared, conn: ConnId, env: Envelope) -> Option<Action> {
     let msg = env.msg?;
     let mut state = shared.lock();
     // Back-pressure on requests: a client that keeps asking but never
-    // reads its replies stops being read until its writer catches up.
-    while state.queued_control(conn) >= MAX_CONTROL_BACKLOG && !shared.stopping() {
+    // reads its replies stops being read until its writer catches up. A
+    // writer that fails forgets the connection, which ends this wait.
+    while state.queued_control(conn) >= shared.control_backlog && !shared.stopping() {
         state = shared.wake.wait(state).unwrap_or_else(|p| p.into_inner());
     }
     let action = state.on_message(conn, msg, now_ms());
@@ -306,7 +353,8 @@ fn start_writer(shared: &Arc<Shared>, stream: &TcpStream, conn: ConnId) -> io::R
 }
 
 /// Write queued frames in order until the connection goes away. A failed
-/// write closes the socket so the reader runs the one disconnect path.
+/// write closes the socket and forgets the connection at once: its reader
+/// may be parked on back-pressure and would otherwise never reach EOF.
 fn write_frames(shared: &Shared, mut out: TcpStream, conn: ConnId) {
     loop {
         let Some(frame) = next_frame(shared, conn) else {
@@ -314,6 +362,8 @@ fn write_frames(shared: &Shared, mut out: TcpStream, conn: ConnId) {
         };
         if out.write_all(&frame.bytes).is_err() {
             let _ = out.shutdown(NetShutdown::Both);
+            shared.lock().disconnect(conn, now_ms());
+            shared.wake.notify_all();
             return;
         }
         shared.wake.notify_all();

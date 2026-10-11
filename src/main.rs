@@ -43,6 +43,7 @@ mod window_ops;
 #[allow(unused)]
 mod backend;
 mod bus;
+mod detached;
 #[cfg(feature = "mycel")]
 mod mycel;
 mod octal;
@@ -569,13 +570,10 @@ fn run_main() -> io::Result<()> {
             env::set_var("PSMUX_REMOTE_ATTACH", "1");
         }
         "bus" => {
-            // Internal command - host the mycel event bus (started on demand
-            // by a session server's first publish).
+            // Host the mycel event bus (started on demand by a session
+            // server's first publish), or `bus stop` to shut it down.
             let words: Vec<&str> = cmd_args.iter().skip(1).map(|s| s.as_str()).collect();
-            let loc = crate::bus::host::BusLocation::from_env();
-            let loc = crate::bus::host::parse_args(&words, loc)
-                .map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, e))?;
-            return crate::bus::host::run_bus_process(&loc);
+            return crate::bus::host::run_bus_command(&words);
         }
         "server" => {
             // Internal command - run headless server (used when spawning background server)

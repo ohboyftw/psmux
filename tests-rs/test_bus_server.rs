@@ -203,3 +203,84 @@ fn unknown_server_to_client_frames_are_ignored() {
     h.stop();
     h.join();
 }
+
+fn send_raw(raw: &mut TcpStream, msg: Msg) {
+    crate::bus::codec::write_frame(raw, &Envelope { msg: Some(msg) }).unwrap();
+}
+
+fn replay_all(pattern: &str) -> Msg {
+    Msg::Replay(crate::bus::proto::Replay {
+        topic_pattern: pattern.into(),
+        since_unix_ms: 0,
+        max_events: 0,
+    })
+}
+
+#[test]
+fn failed_write_disconnects_a_reader_parked_on_backlog() {
+    let mut cfg = config();
+    cfg.control_backlog = 2;
+    let h = start(cfg).unwrap();
+    let mut mon = client(&h, "monitor");
+    mon.subscribe("$mycel/clients/disconnected").unwrap();
+    let mut publ = client(&h, "big-pub");
+    for _ in 0..16 {
+        publ.publish("big/x", &vec![b'x'; 1 << 20], HashMap::new())
+            .unwrap();
+    }
+    let _ = publ.status().unwrap(); // every publish has been handled
+    let mut victim = TcpStream::connect(h.local_addr()).unwrap();
+    send_raw(
+        &mut victim,
+        Msg::Hello(crate::bus::proto::Hello {
+            client_id: "victim".into(),
+            client_type: "both".into(),
+        }),
+    );
+    // Never read: the writer blocks on a full socket, and the second
+    // Replay parks the reader on the control backlog.
+    send_raw(&mut victim, replay_all("big/#"));
+    send_raw(&mut victim, replay_all("big/#"));
+    thread::sleep(Duration::from_millis(300));
+    drop(victim);
+    let e = mon.next_event().unwrap();
+    let v: serde_json::Value = serde_json::from_slice(&e.payload).unwrap();
+    assert_eq!(v["client_id"], "victim");
+    h.stop();
+    h.join();
+}
+
+#[test]
+fn hello_deadline_counts_from_accept_not_from_the_last_frame() {
+    let mut cfg = config();
+    cfg.hello_timeout = Duration::from_millis(400);
+    let h = start(cfg).unwrap();
+    let mut raw = TcpStream::connect(h.local_addr()).unwrap();
+    let started = std::time::Instant::now();
+    // A non-Hello frame every 150 ms would reset a per-read timeout.
+    let closed = (0..20).any(|_| {
+        thread::sleep(Duration::from_millis(150));
+        let req = Msg::StatusReq(crate::bus::proto::StatusReq {});
+        crate::bus::codec::write_frame(&mut raw, &Envelope { msg: Some(req) }).is_err()
+    });
+    assert!(closed, "unauthenticated connection was never closed");
+    assert!(started.elapsed() < Duration::from_secs(2));
+    h.stop();
+    h.join();
+}
+
+#[test]
+fn discovery_write_failure_still_hosts() {
+    // A directory where the file should be makes the rename fail.
+    let path = temp_discovery("blocked");
+    std::fs::create_dir_all(&path).unwrap();
+    let h = start(BusConfig::new(
+        "127.0.0.1:0".parse().unwrap(),
+        Some(path.clone()),
+    ))
+    .unwrap();
+    assert!(client(&h, "check").status().is_ok());
+    h.stop();
+    h.join();
+    assert!(path.is_dir(), "the blocking directory is left alone");
+}
