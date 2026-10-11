@@ -157,32 +157,39 @@ triggers session teardown).
 Use the `mycel` CLI to subscribe to all psmux events at once:
 
 ```sh
-mycel sub 'psmux/>'
+mycel sub 'psmux/#'
 ```
 
 Or scope to a specific category:
 
 ```sh
-mycel sub 'psmux/pane/>'
-mycel sub 'psmux/exec/>'
-mycel sub 'psmux/session/>'
+mycel sub 'psmux/pane/#'
+mycel sub 'psmux/exec/#'
+mycel sub 'psmux/session/#'
 ```
 
-The `>` wildcard matches any number of trailing segments (NATS-style).
+`+` matches one level and `#` matches any number of trailing levels (MQTT
+style). `>` has no special meaning: `psmux/>` matches nothing.
 
 ---
 
-## Feature flag
+## The bus
 
-Mycel integration is gated behind the `mycel` cargo feature:
+psmux carries its own mycel bus. The first time a session server publishes,
+it looks for a live bus (the address in `~/.mycel/server`, then
+`127.0.0.1:4321`). If none answers, it starts `psmux bus` in the background,
+which listens on `127.0.0.1:4321` and writes `~/.mycel/server`. A standalone
+`mycel` server that is already running is used instead. The bus keeps
+running after the sessions end; `mycel stop` stops it (and only it).
 
-```sh
-cargo build --release --features mycel
-```
+| Variable | Effect |
+|----------|--------|
+| `PSMUX_BUS=0` | Never start a bus. An existing one is still used. |
+| `PSMUX_BUS_PORT` | Port to probe and to host on (default `4321`). |
+| `PSMUX_BUS_DISCOVERY` | Discovery file to read and write (default `~/.mycel/server`). |
 
-Without the feature, `publish_pane_event` calls are compiled out entirely — no
-runtime cost, no dependency on `mycel-client`. The published crates on
-crates.io do not enable `mycel` by default.
+The `mycel` cargo feature is on by default. Build with
+`--no-default-features` to compile the publishing out entirely.
 
 ---
 

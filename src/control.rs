@@ -156,7 +156,7 @@ pub enum LifecycleEvent<'a> {
 /// `app.control_clients` is owned by the main server thread (single-threaded
 /// `run_server` event loop). Threads that need to fan out lifecycle events
 /// without holding the App lock (e.g. CustomPaneBackend's dispatcher thread,
-/// mycel's tokio task) read this mirror.
+/// mycel's publisher thread) read this mirror.
 ///
 /// Stage 1B's `CtrlReq::ControlRegister` / `ControlDeregister` handlers MUST
 /// rebuild this snapshot inside the same critical section that mutates
