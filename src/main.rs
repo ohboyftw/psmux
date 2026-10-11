@@ -145,8 +145,9 @@ fn check_target_resolvable(target: &str) -> io::Result<()> {
     ))
 }
 
-/// Exit 2 with a usage line on a bad `--until` state or `--until` with `--ready`.
-fn check_until_arg(cmd: &str, until: Option<&str>, ready: bool) {
+/// Exit 2 with a usage line on a bad `--until` state, or on `--until` with
+/// another wait condition (`--ready`, `--file`, `--exit`, `--output`).
+fn check_until_arg(cmd: &str, until: Option<&str>, other_condition: bool) {
     let Some(name) = until else {
         return;
     };
@@ -154,18 +155,23 @@ fn check_until_arg(cmd: &str, until: Option<&str>, ready: bool) {
         eprintln!("{cmd}: --until expects idle|working|blocked|done|error, got '{name}'");
         std::process::exit(2);
     }
-    if ready {
-        eprintln!("{cmd}: --until and --ready cannot be combined (--ready is --until idle)");
+    if other_condition {
+        eprintln!("{cmd}: --until cannot be combined with another wait condition (--ready is --until idle)");
         std::process::exit(2);
     }
 }
 
 /// An `--until` wait on a pane that is already gone exits 2, as one that
 /// dies during the wait does; target resolution reports it as `NotFound`.
-fn until_gone_is_2(resp: io::Result<String>, until: bool) -> io::Result<String> {
+/// With `json`, stdout carries the same error outcome the server sends.
+fn until_gone_is_2(resp: io::Result<String>, until: bool, json: bool) -> io::Result<String> {
     match resp {
         Err(e) if until && e.kind() == io::ErrorKind::NotFound => {
             eprintln!("psmux: {e}");
+            if json {
+                let outcome = wait_until::until_outcome(wait_until::UNTIL_GONE, 0);
+                println!("{}", serde_json::to_string(&outcome).unwrap_or_default());
+            }
             std::process::exit(2);
         }
         other => other,
@@ -2907,7 +2913,9 @@ fn run_main() -> io::Result<()> {
                 i += 1;
             }
 
-            check_until_arg("wait-for", until.as_deref(), ready_mode);
+            let other_condition =
+                ready_mode || file_path.is_some() || exit_pid.is_some() || output_pat.is_some();
+            check_until_arg("wait-for", until.as_deref(), other_condition);
             let use_executor = file_path.is_some()
                 || exit_pid.is_some()
                 || output_pat.is_some()
@@ -2955,6 +2963,7 @@ fn run_main() -> io::Result<()> {
                 let resp = until_gone_is_2(
                     send_control_with_response_timeout(cmd, Some(read_timeout)),
                     until.is_some(),
+                    json_mode,
                 )?;
                 let trimmed = resp.trim();
                 // Exit-code mapping: success=0, timeout=1, error=2.
@@ -3315,6 +3324,7 @@ fn run_main() -> io::Result<()> {
                 let resp = until_gone_is_2(
                     send_control_with_response_timeout(cmd, None),
                     until.is_some(),
+                    false,
                 )?;
                 let code: i32 = resp.trim().parse().unwrap_or(1);
                 std::process::exit(code);

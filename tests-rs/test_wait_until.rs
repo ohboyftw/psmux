@@ -212,3 +212,38 @@ fn wait_until_when_server_answers_then_returns_its_code() {
     assert_eq!(wait_until(&tx, Some(7), Blocked, Some(100)), UNTIL_TIMEOUT);
     server.join().unwrap();
 }
+
+fn rpc_wait_state(pane_id: &str) -> String {
+    format!(
+        r#"{{"id":"1","method":"wait_for","params":{{"condition":"state","arg":"blocked","pane_id":"{pane_id}","timeout_ms":100}}}}"#
+    )
+}
+
+#[test]
+fn rpc_wait_for_state_when_pane_id_not_percent_n_then_invalid_params() {
+    let (tx, _rx) = mpsc::channel::<CtrlReq>();
+    let resp = crate::backend::dispatcher::dispatch_rpc(&rpc_wait_state("3"), &tx).unwrap();
+    let v: serde_json::Value = serde_json::from_str(&resp).unwrap();
+    assert_eq!(v["error"]["code"], -32602);
+}
+
+#[test]
+fn rpc_wait_for_state_when_server_answers_met_then_success_like_cli() {
+    let (tx, rx) = mpsc::channel::<CtrlReq>();
+    let server = std::thread::spawn(move || {
+        if let Ok(CtrlReq::WaitPaneUntil {
+            pane_id,
+            want,
+            resp,
+            ..
+        }) = rx.recv()
+        {
+            assert_eq!((pane_id, want), (Some(7), Blocked));
+            let _ = resp.send(UNTIL_MET);
+        }
+    });
+    let resp = crate::backend::dispatcher::dispatch_rpc(&rpc_wait_state("%7"), &tx).unwrap();
+    server.join().unwrap();
+    let v: serde_json::Value = serde_json::from_str(&resp).unwrap();
+    assert_eq!(v["result"]["kind"], "success");
+}

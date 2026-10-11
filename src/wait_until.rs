@@ -122,7 +122,8 @@ pub fn wait_state(
     until_outcome(code, start.elapsed().as_millis() as u64)
 }
 
-fn until_outcome(code: i32, elapsed_ms: u64) -> WaitOutcome {
+/// A [`wait_until`] code as a `wait-for` outcome.
+pub fn until_outcome(code: i32, elapsed_ms: u64) -> WaitOutcome {
     match code {
         UNTIL_MET => WaitOutcome::Success { elapsed_ms },
         UNTIL_TIMEOUT => WaitOutcome::Timeout { elapsed_ms },

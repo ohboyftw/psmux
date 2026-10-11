@@ -6476,3 +6476,7 @@ mod test_issue169;
 #[cfg(test)]
 #[path = "../../tests-rs/test_issue761_server_console_detach.rs"]
 mod test_issue761;
+
+#[cfg(test)]
+#[path = "../../tests-rs/test_wait_until_queue.rs"]
+mod test_wait_until_queue;

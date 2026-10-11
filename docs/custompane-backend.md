@@ -354,7 +354,7 @@ Block until a condition is met, then return. Replaces polling loops.
 | `"file"` | Absolute path | Wait for a file to appear on disk. |
 | `"output"` | Regex pattern | Wait for the pattern to match the pane's live screen. Requires `pane_id`. |
 | `"ready"` | — | Wait for the pane to be ready (`#{pane_ready}`: a reported `idle`, or output then 500 ms of silence). Without `pane_id`, the active pane. |
-| `"state"` | `idle`, `working`, `blocked`, `done` or `error` | Wait for the pane's agent state, as `wait-pane --until`: `idle` is `"ready"`, the others need a reported OSC 7501 state. A dead or pruned pane answers `{"kind":"error","reason":"pane is dead or gone"}`, unless it still holds the wanted `done`/`error` under remain-on-exit. Without `pane_id`, the active pane. |
+| `"state"` | `idle`, `working`, `blocked`, `done` or `error` | Wait for the pane's agent state, as `wait-pane --until`: `idle` is `"ready"`, the others need a reported OSC 7501 state. A dead or pruned pane answers `{"kind":"error","reason":"pane is dead or gone"}`, unless it still holds the wanted `done`/`error` under remain-on-exit. Without `pane_id`, the active pane; a `pane_id` that is not `%N` fails with `-32602`. |
 
 Default `timeout_ms` is 3 600 000 (1 hour).
 

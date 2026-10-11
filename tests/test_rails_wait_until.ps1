@@ -108,5 +108,25 @@ Test-Case "wait-pane --until on a pane that is already gone returns rc 2" {
     $r.Rc -eq 2
 }
 
+Test-Case "wait-for --until --json on a pane that is already gone prints kind=error, rc 2" {
+    if ($dying -notmatch '^%\d+$') { return $false }
+    $out = psmux wait-for -t "${S}:.$dying" --until idle --timeout 3000 --json 2>$null
+    $rc = $LASTEXITCODE
+    $json = try { $out | ConvertFrom-Json } catch { $null }
+    if ($rc -ne 2 -or -not $json) { Write-Host "    rc=$rc out=[$out]" -ForegroundColor DarkYellow }
+    ($rc -eq 2) -and $json -and ($json.kind -eq 'error')
+}
+
+Test-Case "wait-pane --until on a window.pane index target returns rc 2, not 1" {
+    $r = Measure-Wait @('wait-pane', '-t', "${S}:0.0", '--until', 'idle', '--timeout', '3000')
+    if ($r.Rc -ne 2) { Write-Host "    rc=$($r.Rc) ms=$($r.Ms)" -ForegroundColor DarkYellow }
+    $r.Rc -eq 2
+}
+
+Test-Case "wait-for --until with --output is rejected with rc 2" {
+    $r = Measure-Wait @('wait-for', '-t', $T, '--until', 'idle', '--output', 'x', '--timeout', '1500')
+    $r.Rc -eq 2
+}
+
 Remove-PsmuxSession $S
 Write-Summary

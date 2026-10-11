@@ -809,6 +809,15 @@ fn handle_wait_for(
         .map_err(|e| RpcErr::from((-32602, e)))?;
 
     let pane_id = p.pane_id.as_deref().and_then(parse_pane_id);
+    // A state wait can block for an hour, so a bad pane_id must not
+    // silently fall back to watching the active pane.
+    let is_state = matches!(condition, crate::wait_for::WaitCondition::State { .. });
+    if is_state && p.pane_id.is_some() && pane_id.is_none() {
+        return Err(RpcErr::from((
+            -32602,
+            "Invalid params: pane_id must be %N".to_string(),
+        )));
+    }
 
     let outcome = match condition {
         crate::wait_for::WaitCondition::Exit { pid } => {

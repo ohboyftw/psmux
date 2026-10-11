@@ -236,12 +236,14 @@ for the pane's agent state, where STATE is one of `idle`, `working`,
 `blocked`, `done` or `error`. Exit codes: `0` the state was seen, `1`
 the `--timeout` passed first, `2` the pane is dead or gone, including a
 target that no longer exists when the command runs (or STATE is not one
-of the five). `wait-for --json` gives `{kind:"error",reason:"pane
-is dead or gone"}` for `2`.
+of the five, or `--until` is combined with another wait condition).
+`wait-for --json` gives `{kind:"error",reason:"pane is dead or gone"}`
+for a dead or gone pane, whether it was gone before the call or died
+during the wait.
 
 - `--until idle` is `--ready`: the same rule as `#{pane_ready}`, a reported
-  `idle` or 500 ms of output silence. `--until` and `--ready` cannot be
-  combined. One difference: on a dead pane `--until idle` returns `2`,
+  `idle` or 500 ms of output silence. `--until` cannot be combined with
+  `--ready`, `--file`, `--exit` or `--output`. One difference: on a dead pane `--until idle` returns `2`,
   while `--ready` still judges the dead pane by its silence.
 - `--until working|blocked|done|error` waits for a **reported** state: the
   pane's worst-of OSC 7501 record, as `#{pane_agent_state}` shows it. Output
@@ -257,9 +259,12 @@ is dead or gone"}` for `2`.
   Without it, `done`/`error` vanish with the pane and the wait returns `2`.
 - `wait-pane --until` without `--timeout` blocks until the state is seen
   or the pane dies, like `wait-pane --ready`. `wait-for` defaults to a
-  one-hour timeout.
+  one-hour timeout. If the CLI is killed during such a wait, the server
+  keeps the waiter queued until the pane dies or reaches the state, so
+  give long waits a `--timeout`.
 - Name the pane by id (`%N`, or `sess:.%N` for another session). `wait-for`
-  without an id target watches the active pane; `wait-pane` needs one.
+  without an id target watches the active pane. `wait-pane --until` needs
+  an id: a `window.pane` index target exits `2`, not `1`.
 
 Use `wait-pane` when you spawned a command via `new-window --`,
 `split-window --`, or `exec` and want to block the CLI until it

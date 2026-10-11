@@ -1249,6 +1249,11 @@ pub(crate) fn handle_connection(
                         });
                     let _ = write!(write_stream, "{}", code);
                     let _ = write_stream.flush();
+                } else if until.is_some() {
+                    // --until needs a %N id; an index target is a usage error,
+                    // not a timeout, so it must not fall through to "1".
+                    let _ = write!(write_stream, "{}", crate::wait_until::UNTIL_GONE);
+                    let _ = write_stream.flush();
                 } else if let Some(pid) = pane_id {
                     if wait_ready {
                         // Poll Pane::readiness until the pane is idle.
