@@ -280,6 +280,34 @@ generate a per-invocation marker (e.g. `__DONE_$([guid]::NewGuid().Guid.Substrin
 rather than hardcoding `__DONE__` — otherwise a parallel pane's earlier
 output could short-circuit the wait.
 
+## Agent state toasts
+
+When a pane's agent reports a new OSC 7501 state, psmux shows a Windows
+toast if the pane's worst-of state (the one `#{pane_agent_state}` shows)
+becomes `blocked`, `error` or `done`. A `blocked` background task of a
+Claude Code session toasts even while the main session is `working`.
+Turn this off with `set -g agent-toasts off` (default `on`).
+
+- The heading names the app and the reason, for example
+  `claude-code needs permission`, `claude-code has a question`,
+  `Agent reported an error`. The text is `session %N: msg`, with the
+  record's `title` when it has no `msg`. Both are cleaned the same way as
+  `#{pane_agent_msg}` and are passed to PowerShell as environment
+  variables, never as part of a command.
+- `working` and `idle` never toast, and a pane whose program does not
+  report OSC 7501 never toasts, however much output it prints.
+- One pane does not toast the same state twice within 30 s, and waits at
+  least 5 s between any two of its toasts. Agent toasts as a whole are at
+  least 1 s apart, and only one toast (agent or OSC 99/777) is shown at a
+  time. A toast that has to wait is kept, not dropped: each pane keeps its
+  most important waiting toast (blocked > error > done).
+- A waiting `blocked` toast is dropped if the pane leaves `blocked` before
+  it is shown: the question was already answered. A waiting `done` or
+  `error` toast is still shown after the pane exits.
+- The server samples the state once per 100 ms, so a state held for less
+  than that can be missed. A pane's final state at exit is read when the
+  pane is reaped, so `done` followed by exit still toasts.
+
 ## Paste Buffers
 
 ```powershell

@@ -130,6 +130,7 @@ psmux split-window -- "C:/Program Files/Git/bin/bash.exe"
 | `silence-action` | Str | `other` | Action on window silence: `any`, `none`, `current`, `other` |
 | `bell-action` | Str | `any` | Bell action: `any`, `none`, `current`, `other` |
 | `visual-bell` | Bool | `off` | Visual bell indicator |
+| `agent-toasts` | Bool | `on` | Windows toast when an agent that reports OSC 7501 state blocks, finishes or fails (see [scripting.md](scripting.md#agent-state-toasts)) |
 | `allow-passthrough` | Str | `off` | Allow terminal passthrough sequences (`on`/`off`/`all`) |
 | `allow-rename` | Bool | `on` | Allow programs to set window title via escape sequences |
 | `allow-predictions` | Bool | `off` | Preserve PSReadLine prediction settings (see below) |

@@ -1147,6 +1147,11 @@ fn lookup_option(name: &str, app: &AppState) -> Option<String> {
         } else {
             "off".into()
         }),
+        "agent-toasts" => Some(if app.agent_toasts.enabled() {
+            "on".into()
+        } else {
+            "off".into()
+        }),
         "claude-code-force-interactive" => Some(if app.claude_code_force_interactive {
             "on".into()
         } else {

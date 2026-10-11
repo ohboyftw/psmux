@@ -17,7 +17,7 @@ pub(crate) fn drain_notifications(app: &mut AppState) {
         collect_notifications(&mut win.root, &mut notifs);
     }
     for (title, body) in notifs {
-        fire_toast_notification(&title, &body);
+        let _ = fire_toast_notification(&title, &body);
     }
 }
 
@@ -104,12 +104,24 @@ fn toast_command(title: &str, body: &str) -> std::process::Command {
     cmd
 }
 
+/// Shows the agent toast that is due, if any.  A toast that cannot fire
+/// because another toast is still in flight stays pending for the next tick.
+pub(crate) fn flush_agent_toasts(app: &mut AppState, now: std::time::Instant) {
+    let Some(toast) = app.agent_toasts.due(now) else {
+        return;
+    };
+    let pane_id = toast.pane_id;
+    if fire_toast_notification(&toast.title, &toast.body) {
+        app.agent_toasts.mark_fired(pane_id, now);
+    }
+}
+
 /// Fire a Windows toast notification via PowerShell.
 /// Spawns a detached process so it doesn't block the server loop.
-fn fire_toast_notification(title: &str, body: &str) {
-    // Skip if a previous notification is still in flight
+/// Returns false, showing nothing, while a previous toast is still in flight.
+fn fire_toast_notification(title: &str, body: &str) -> bool {
     if TOAST_IN_FLIGHT.swap(true, Ordering::AcqRel) {
-        return;
+        return false;
     }
     let mut cmd = toast_command(title, body);
     std::thread::spawn(move || {
@@ -118,6 +130,7 @@ fn fire_toast_notification(title: &str, body: &str) {
         let _ = cmd.hide_window().status();
         TOAST_IN_FLIGHT.store(false, Ordering::Release);
     });
+    true
 }
 
 /// Collect all leaf pane paths in tree order (for next/prev pane cycling).

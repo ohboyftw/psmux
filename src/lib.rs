@@ -3,6 +3,7 @@
 #![allow(dead_code)]
 
 pub mod agent_state;
+pub mod agent_toast;
 pub mod backend;
 pub mod control;
 pub mod crash;

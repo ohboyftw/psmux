@@ -561,6 +561,8 @@ pub fn prune_exited(
     n: Node,
     remain_on_exit: crate::types::RemainOnExit,
     control_clients: &[crate::control::ControlClient],
+    toasts: &mut crate::agent_toast::AgentToasts,
+    session_name: &str,
 ) -> Option<Node> {
     let mut exited: Vec<ExitedPaneInfo> = Vec::new();
     let result = prune_exited_inner(n, remain_on_exit, &mut exited);
@@ -571,6 +573,7 @@ pub fn prune_exited(
     for info in &exited {
         if let Some(t) = &info.status {
             crate::server::helpers::emit_status_transition(control_clients, info.pane_id, t);
+            toasts.offer(info.pane_id, t, session_name, std::time::Instant::now());
         }
         let event = crate::backend::protocol::ContextExitedEvent {
             method: "context_exited".into(),
@@ -1096,7 +1099,13 @@ pub fn reap_children(app: &mut AppState) -> io::Result<(bool, bool)> {
                 children: vec![],
             },
         );
-        match prune_exited(root, remain, &app.control_clients) {
+        match prune_exited(
+            root,
+            remain,
+            &app.control_clients,
+            &mut app.agent_toasts,
+            &app.session_name,
+        ) {
             Some(new_root) => {
                 let leaves_after = count_panes(&new_root);
                 if leaves_after < leaves_before {

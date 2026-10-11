@@ -3,6 +3,7 @@
 #![allow(dead_code)]
 
 mod agent_state;
+mod agent_toast;
 mod app;
 mod cli;
 mod client;

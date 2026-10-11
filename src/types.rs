@@ -805,6 +805,8 @@ pub struct AppState {
     pub bell_action: String,
     /// visual-bell: show visual indicator on bell
     pub visual_bell: bool,
+    /// agent-toasts: desktop toasts when an OSC 7501 agent blocks, finishes or fails
+    pub agent_toasts: crate::agent_toast::AgentToasts,
     /// Command prompt history
     pub command_history: Vec<String>,
     /// Command prompt history index (for up/down navigation)
@@ -1047,6 +1049,7 @@ impl AppState {
             monitor_silence: 0,
             bell_action: "any".to_string(),
             visual_bell: false,
+            agent_toasts: crate::agent_toast::AgentToasts::default(),
             command_history: Vec::new(),
             command_history_idx: 0,
             status_interval: 15,
