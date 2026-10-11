@@ -5618,6 +5618,7 @@ pub fn run_server(
                                                 },
                                                 shell_name: p.shell_name.clone(),
                                                 metadata: meta,
+                                                program_status: crate::backend::protocol::ProgramStatusInfo::from_cache(&p.agent_state),
                                             });
                                         }
                                         Node::Split { children, .. } => {

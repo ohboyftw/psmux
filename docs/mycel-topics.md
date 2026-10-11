@@ -31,9 +31,12 @@ shell.
 **Status:** implemented.
 **When:** a pane is first ready by the `#{pane_ready}` rule: its reported
 OSC 7501 state is `idle`, or, with nothing reported or only `done` and
-`error` records left, it produced output and then was silent for 500 ms. The same signal as the JSON-RPC `context_ready`
-push event (`ready_signal: "reported"` or `"output_stable"`). This is not
-prompt detection. Fires once per pane.
+`error` records left, it produced output and then was silent for 500 ms. The
+same signal as the JSON-RPC `context_ready` push event
+(`ready_signal: "reported"` or `"output_stable"`). This is not prompt
+detection. Fires once per pane process: once after the pane is created and
+once more after `respawn-pane`, never again when the pane later goes busy and
+settles. To follow an agent turn by turn, subscribe to `psmux/pane/status`.
 **Payload:**
 ```json
 { "pane_id": "%3", "elapsed_ms": 842 }
@@ -42,6 +45,32 @@ prompt detection. Fires once per pane.
 pane settle.
 **Source:** `src/server/mod.rs` server tick (emits
 `LifecycleEvent::PaneReady` right after the `context_ready` RPC push),
+published by `publish_lifecycle_to_mycel` in `src/control.rs`.
+
+### psmux/pane/status
+**Status:** implemented.
+**When:** a pane's reported OSC 7501 agent state changes. The state is the
+worst of all the pane's records (blocked > error > working > done > idle).
+Only reported state counts: output on a pane that does not report never
+publishes here, and a progress-only update is not a change. Mirrors the
+JSON-RPC `state_changed` push event.
+**Payload:**
+```json
+{ "pane_id": "%3", "state": "blocked", "previous_state": "working",
+  "record_id": "t1", "kind": "permission", "app": "claude-code" }
+```
+`state` and `previous_state` are `idle`, `working`, `done`, `blocked`,
+`error`, or `null` when the pane has no record (never `"clear"`). Unlike the
+`state_changed` push, which omits them when empty, `record_id`, `kind` and
+`app` are always present here and are `null` when empty. `title`, `msg` and
+`progress` are never published.
+The server samples the state once per 100 ms tick, so a state held for less
+than one tick can be missed, and several changes within one tick publish as
+one (or none, when the pane ends where it began). When a pane's process exits,
+the final change is published before `psmux/pane/exited`; without
+`remain-on-exit` a report written just before the exit can be lost.
+**Source:** `emit_status_transition` in `src/server/helpers.rs` (server tick
+and `prune_exited`), which emits `LifecycleEvent::PaneStatusChanged`,
 published by `publish_lifecycle_to_mycel` in `src/control.rs`.
 
 ### psmux/pane/exited

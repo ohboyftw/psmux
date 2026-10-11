@@ -239,7 +239,7 @@ See [docs/power-pack-tools.md](docs/power-pack-tools.md) for the full tool stack
 > - **JSON-RPC `wait_for`** — Same conditions available via the CustomPaneBackend named pipe
 >
 > **Mycel Event Bus:**
-> - **7 `psmux/*` topics** — `pane/created`, `pane/ready`, `pane/exited`, `exec/completed`, `session/created`, `session/renamed`, `session/killed`
+> - **8 `psmux/*` topics** — `pane/created`, `pane/ready`, `pane/status`, `pane/exited`, `exec/completed`, `session/created`, `session/renamed`, `session/killed`
 > - **Fire-and-forget** — Non-blocking publish to mycel server when built with `--features mycel`
 > - **Deprecation shim** — `psmux/pane/died` still published alongside `psmux/pane/exited` for one release
 >

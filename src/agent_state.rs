@@ -61,6 +61,11 @@ impl AgentStateCache {
         self.worst
     }
 
+    /// Id of the child record that carries the worst state; `None` for the root.
+    pub fn worst_id(&self) -> Option<&str> {
+        self.worst_id.as_deref()
+    }
+
     /// Fields of the worst-of record; all empty when there is no record.
     pub fn details(&self) -> &AgentRecordDetails {
         &self.details

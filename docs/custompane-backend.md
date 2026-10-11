@@ -188,13 +188,27 @@ Return all active pane contexts.
       "title": "worker-1",
       "shell_name": "claude",
       "metadata": {"name": "worker-1", "role": "coder", "color": "blue",
-                   "effort": null, "max_turns": null, "disallowed_tools": null}
+                   "effort": null, "max_turns": null, "disallowed_tools": null},
+      "program_status": {"state": "blocked", "record_id": "t1",
+                         "kind": "permission", "app": "claude-code"}
     }
   ]
 }
 ```
 
 `cwd`, `title`, and `shell_name` are omitted when not available.
+
+`program_status` is the pane's OSC 7501 agent state, the worst of all its
+records (blocked > error > working > done > idle), the same value as
+`#{pane_agent_state}`. It is omitted, never `null`, when the pane has reported
+nothing or its last record was cleared, so older clients that do not know the
+field still parse the response. Inside it, `state` is always present;
+`record_id` (the child record that carries the state, absent for the root),
+`kind` (`permission|question|auth`), `progress` (0-100) and `app` are omitted
+when empty. `title` and `msg` are never sent; read `#{pane_agent_title}` and
+`#{pane_agent_msg}` instead. The server samples the state once per 100 ms, so
+the value can be up to one tick old. A dead pane kept by `remain-on-exit` still
+shows `done` or `error`; process exit removes `working`, `blocked` and `idle`.
 
 ---
 
@@ -454,11 +468,16 @@ externally).
 
 ### `context_ready`
 
-Fired once per pane, the first time it is ready by the same rule as
+Fired the first time a pane is ready by the same rule as
 `#{pane_ready}`: its reported OSC 7501 state is `idle`
 (`ready_signal: "reported"`), or, with nothing reported or only `done` and
-`error` records left, it produced output and was then silent for 500 ms (`ready_signal: "output_stable"`). It is not
-prompt detection.
+`error` records left, it produced output and was then silent for 500 ms
+(`ready_signal: "output_stable"`). It is not prompt detection.
+
+It fires once per pane process: once after the pane is created and once more
+after `respawn-pane`. It does not fire again when the pane goes busy and then
+becomes ready again later. To follow an agent turn by turn, use
+[`state_changed`](#state_changed).
 
 ```json
 {
@@ -470,6 +489,54 @@ prompt detection.
   }
 }
 ```
+
+### `state_changed`
+
+Fired when a pane's reported OSC 7501 agent state changes. The state is the
+worst of all the pane's records (blocked > error > working > done > idle), so
+a blocked background task under a working main session gives `blocked`.
+Listed in the `initialize` capabilities as `"state_changed"`.
+
+```json
+{
+  "method": "state_changed",
+  "params": {
+    "context_id": "%3",
+    "state": "blocked",
+    "previous_state": "working",
+    "record_id": "t1",
+    "kind": "permission",
+    "app": "claude-code"
+  }
+}
+```
+
+- `state` and `previous_state` are `idle`, `working`, `done`, `blocked` or
+  `error`, or `null` when the pane has no record (before its first report,
+  after `state=clear`, or after process exit removed it). The value is never
+  `"clear"`.
+- `record_id`, `kind` and `app` are omitted when empty: `record_id` is absent
+  when the root record carries the state, `kind` is only on blocked records
+  that name one, and `app` is inherited from the nearest ancestor record.
+- `title`, `msg` and `progress` are never sent. A progress-only update is not
+  a change and sends nothing. Read `#{pane_agent_msg}` or `list`'s
+  `program_status` for detail.
+- Only reported state counts. Output on a pane that does not report OSC 7501
+  never fires this event; use `context_ready` or `wait_for` `"ready"` there.
+- **Sampling loss.** The server reads each pane's state once per 100 ms tick
+  and compares it with the last value it sent. A state held for less than one
+  tick (a quick `done` then `idle`, a short `blocked`) can be missed. Several
+  changes within one tick arrive as one event from the state before them to
+  the state after them, or as no event when the pane ends where it began.
+- **Exit.** When a pane's process exits, the server sends the final change
+  (for example `working` to `null`, or `working` to `done`) before
+  `context_exited`, also for panes that are then removed. This is best
+  effort: without `remain-on-exit`, output the pane wrote just before it
+  exited may not have been read yet, and a last report in it is lost.
+
+The same change is published on mycel as
+[`psmux/pane/status`](mycel-topics.md#psmuxpanestatus), where empty
+`record_id`, `kind` and `app` are sent as `null` rather than omitted.
 
 ### `exec_completed`
 

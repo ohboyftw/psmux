@@ -251,6 +251,46 @@ pub struct ContextInfo {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub shell_name: Option<String>,
     pub metadata: Option<AgentMetadata>,
+    /// The pane's reported OSC 7501 state; absent when nothing is reported.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub program_status: Option<ProgramStatusInfo>,
+}
+
+/// A pane's worst-of OSC 7501 record as `list` reports it.  `title` and
+/// `msg` are left out, as in `state_changed`.
+#[derive(Debug, Serialize)]
+pub struct ProgramStatusInfo {
+    /// `idle|working|done|blocked|error`.
+    pub state: String,
+    /// Id of the child record that carries the state; absent for the root.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub record_id: Option<String>,
+    /// `permission|question|auth`; only on blocked records that name one.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub kind: Option<String>,
+    /// Progress 0-100, when reported.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub progress: Option<u8>,
+    /// Reporting app, inherited from the nearest ancestor record.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub app: Option<String>,
+}
+
+impl ProgramStatusInfo {
+    /// Reads the pane's cache (never the parser); `None` when no record is left.
+    pub fn from_cache(cache: &crate::agent_state::AgentStateCache) -> Option<Self> {
+        use crate::agent_state::{kind_label, state_label};
+        let state = cache.worst()?;
+        let d = cache.details();
+        let non_empty = |s: &str| (!s.is_empty()).then(|| s.to_owned());
+        Some(Self {
+            state: state_label(Some(state)).to_owned(),
+            record_id: cache.worst_id().map(str::to_owned),
+            kind: non_empty(kind_label(d.kind)),
+            progress: d.progress,
+            app: non_empty(&d.app),
+        })
+    }
 }
 
 #[derive(Debug, Serialize)]
@@ -395,3 +435,7 @@ impl RpcResponse {
 #[cfg(test)]
 #[path = "../../tests-rs/test_state_changed_event.rs"]
 mod state_changed_event_tests;
+
+#[cfg(test)]
+#[path = "../../tests-rs/test_context_program_status.rs"]
+mod context_program_status_tests;
