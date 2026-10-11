@@ -453,14 +453,27 @@ so a state held for less than one tick (a quick `done` then `idle`, or a short
 with a fresh terminal, so the value is empty until the program reports again.
 
 The choose-tree overlay (`prefix + w`) shows the same state
-as a glyph after each row: `!` blocked, `✗` error, `●` working, `✓` done and
-`○` idle, with no glyph when nothing is reported. A window row shows the worst
-state of its panes and a session header the worst of its windows, so a blocked
-pane in a collapsed session still marks that session. While the `prefix + w`
-overlay is open it asks every session for its tree again about once a second,
-so a glyph changes within about a second of the server's 100 ms sample. The
-cursor stays on the same row when the list changes. A server older than this
-feature reports no state, and its rows show no glyph.
+as a glyph at the start of each row: `!` blocked, `✗` error, `●` working, `✓`
+done and `○` idle, with a blank when nothing is reported. The glyph comes first
+so a long pane title that runs past the overlay's edge never hides it. A window
+row shows the worst state of its panes and a session header the worst of its
+windows, so a blocked pane in a collapsed session still marks that session.
+While the `prefix + w` overlay is open it asks every session for its tree again
+about once a second, all sessions at once, so a glyph changes within about a
+second plus the time the slowest session takes to answer (at most 150 ms) of
+the server's 100 ms sample. The cursor stays on the same row when the list
+changes. A session that misses a refresh keeps its rows; it is dropped after
+three missed refreshes in a row, or at once when its server is gone. If no
+session answers when the overlay opens, it lists the current session's windows
+and panes from the last layout the client received, without glyphs, because
+those states may be old. A server older than this feature reports no state,
+and its rows show no glyph.
+
+The glyphs need a font that has them. `●` and `○` are East Asian Ambiguous
+width, so under a CJK code page, or a font that draws them two cells wide, the
+overlay's right border can shift by a cell. `✓` and `✗` are missing from
+Consolas, so the classic console host may draw a box instead; Windows
+Terminal's default Cascadia fonts have all five.
 
 The `kind`, `progress`, `app`, `title` and `msg` variables describe the same
 record that `#{pane_agent_state}` shows. Their text is cleaned before it is

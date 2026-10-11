@@ -201,7 +201,7 @@ pub struct CapturePaneJson {
 }
 
 /// One pane in `list-tree` output.
-#[derive(Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PaneInfo {
     pub id: usize,
     pub title: String,
@@ -212,7 +212,7 @@ pub struct PaneInfo {
     pub agent_state: String,
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct WinTree {
     pub id: usize,
     pub name: String,

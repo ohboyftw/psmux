@@ -998,8 +998,20 @@ pub struct TreeEntry {
 }
 
 /// A window row as `list_all_sessions_tree` takes it for the current
-/// session: name, pane count, size, active, worst-of agent state.
-pub type CurrentWindow = (String, usize, String, bool, &'static str);
+/// session.
+#[derive(Clone, Debug)]
+pub struct CurrentWindow {
+    /// Window name.
+    pub name: String,
+    /// Number of panes in the window.
+    pub panes: usize,
+    /// Size as `WIDTHxHEIGHT`.
+    pub size: String,
+    /// True for the session's active window.
+    pub active: bool,
+    /// Worst-of agent state of the window's panes; empty when none reports.
+    pub agent: &'static str,
+}
 
 /// List all running sessions and their windows for choose-tree display.
 /// Queries each running server via its TCP port for window list info.
@@ -1058,18 +1070,18 @@ pub fn list_all_sessions_tree(
         });
         if is_current {
             // Use local data for the current session (fast, no IPC)
-            for (i, (wname, panes, size, is_active, agent)) in current_windows.iter().enumerate() {
+            for (i, w) in current_windows.iter().enumerate() {
                 tree.push(TreeEntry {
                     session_name: name.clone(),
                     session_port: *port,
                     is_session_header: false,
                     window_index: Some(i),
-                    window_name: wname.clone(),
-                    window_panes: *panes,
-                    window_size: size.clone(),
+                    window_name: w.name.clone(),
+                    window_panes: w.panes,
+                    window_size: w.size.clone(),
                     is_current_session: true,
-                    is_active_window: *is_active,
-                    agent_state: agent,
+                    is_active_window: w.active,
+                    agent_state: w.agent,
                 });
             }
         } else {
@@ -1085,8 +1097,7 @@ pub fn list_all_sessions_tree(
 fn query_session_windows(name: &str, port: u16) -> Vec<TreeEntry> {
     let key = read_session_key(name).unwrap_or_default();
     let addr = format!("127.0.0.1:{}", port);
-    let Ok(resp) = send_auth_cmd_response(&addr, &key, b"list-windows -F \"#{window_index}:#{window_name}:#{window_panes}:#{window_width}x#{window_height}:#{window_active}:#{window_agent_state}\"
-") else {
+    let Ok(resp) = send_auth_cmd_response(&addr, &key, b"list-windows -F \"#{window_index}:#{window_name}:#{window_panes}:#{window_width}x#{window_height}:#{window_active}:#{window_agent_state}\"\n") else {
         return Vec::new();
     };
     resp.lines()

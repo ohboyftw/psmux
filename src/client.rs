@@ -776,13 +776,17 @@ pub fn run_remote(
         if quit && !got_frame {
             break;
         }
-        // choose-tree overlay: refresh agent glyphs about once a second.  A
-        // poll no session answered in time keeps the rows already shown.
-        let polled = tree_poller.poll(tree_chooser, &current_session);
-        if let Some(sessions) = polled.filter(|s| !s.is_empty()) {
-            let rows = crate::tree_chooser::build_rows(&sessions, &current_session);
-            tree_selected = crate::tree_chooser::reselect(&tree_entries, tree_selected, &rows);
-            tree_entries = rows;
+        // choose-tree overlay: refresh agent glyphs about once a second.
+        if let Some(sessions) = tree_poller.poll(tree_chooser, &current_session) {
+            if let Some((rows, selected)) = crate::tree_chooser::refreshed_rows(
+                &tree_entries,
+                tree_selected,
+                &sessions,
+                &current_session,
+            ) {
+                tree_entries = rows;
+                tree_selected = selected;
+            }
         }
 
         // ── STEP 1: Poll events with adaptive timeout ────────────────────
@@ -1531,7 +1535,7 @@ pub fn run_remote(
                                         );
                                         tree_selected = 0;
                                         tree_scroll = 0;
-                                        tree_poller.restart();
+                                        tree_poller.restart(sessions);
                                     }
                                     KeyCode::Char('s') => {
                                         session_chooser = true;
@@ -3562,12 +3566,7 @@ pub fn run_remote(
                     } else {
                         Style::default()
                     };
-                    let mut spans = vec![Span::styled(entry.label.clone(), label_style)];
-                    if let Some(glyph) = crate::tree_chooser::glyph_span(entry.agent) {
-                        spans.push(Span::styled(" ", label_style));
-                        spans.push(glyph);
-                    }
-                    lines.push(Line::from(spans));
+                    lines.push(crate::tree_chooser::row_line(entry, label_style));
                 }
                 let para = Paragraph::new(Text::from(lines));
                 f.render_widget(para, inner);

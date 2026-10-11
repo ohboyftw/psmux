@@ -256,7 +256,13 @@ pub fn build_choose_tree(app: &AppState) -> Vec<crate::session::TreeEntry> {
                 app.last_window_area.width, app.last_window_area.height
             );
             let agent = crate::agent_state::state_label(crate::tree::window_agent_state(&w.root));
-            (w.name.clone(), panes, size, i == app.active_idx, agent)
+            crate::session::CurrentWindow {
+                name: w.name.clone(),
+                panes,
+                size,
+                active: i == app.active_idx,
+                agent,
+            }
         })
         .collect();
     list_all_sessions_tree(&app.session_name, &current_windows)
