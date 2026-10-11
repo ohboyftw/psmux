@@ -51,6 +51,36 @@ pub struct PaneCommand {
     pub command: Option<String>,
     pub cwd: String,
     pub env: Vec<(String, String)>,
+    /// OSC 7501 `app` of the agent running in the pane, kept only when it is
+    /// a key of [`resume_command_for`]; empty otherwise.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub app: String,
+    /// The command resurrect will run for `app`, written for readers of the
+    /// file.  Restore recomputes it from `app` and never runs this string.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resume_command: Option<String>,
+}
+
+/// The command that resumes an agent, keyed by its OSC 7501 `app` name.
+///
+/// Both agents resume the most recent conversation of the current directory,
+/// so the pane is restored in the agent's cwd.  `app` comes from the pane
+/// and only selects a row here; a pane can never supply the command.
+pub fn resume_command_for(app: &str) -> Option<&'static str> {
+    match app {
+        "claude-code" => Some("claude --continue"),
+        "pi" => Some("pi --continue"),
+        _ => None,
+    }
+}
+
+/// The command resurrect runs for `pc`: the agent's resume command when the
+/// pane ran a known agent, else the pane's original command.
+pub fn restore_command(pc: &PaneCommand) -> Option<String> {
+    match resume_command_for(&pc.app) {
+        Some(cmd) => Some(cmd.to_string()),
+        None => pc.command.clone(),
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -183,23 +213,38 @@ fn serialize_tree(node: &Node) -> LayoutTreeNode {
 /// Collect spawn metadata from leaf panes in DFS order.
 fn collect_pane_commands(node: &Node, out: &mut Vec<PaneCommand>) {
     match node {
-        Node::Leaf(pane) => {
-            let cwd = pane
-                .spawn_cwd
-                .as_ref()
-                .map(|p| p.to_string_lossy().to_string())
-                .unwrap_or_else(|| ".".to_string());
-            out.push(PaneCommand {
-                command: pane.spawn_command.clone(),
-                cwd,
-                env: pane.spawn_env.clone(),
-            });
-        }
+        Node::Leaf(pane) => out.push(pane_command(pane)),
         Node::Split { children, .. } => {
             for child in children {
                 collect_pane_commands(child, out);
             }
         }
+    }
+}
+
+/// Spawn metadata of one pane.  For a pane running a known agent the cwd is
+/// the foreground process's, because `--continue` is keyed on the directory
+/// the agent was started in, which can differ from the shell's spawn cwd.
+fn pane_command(pane: &crate::types::Pane) -> PaneCommand {
+    let resume = resume_command_for(&pane.agent_state.details().app);
+    let spawn_cwd = || {
+        pane.spawn_cwd
+            .as_ref()
+            .map(|p| p.to_string_lossy().to_string())
+            .unwrap_or_else(|| ".".to_string())
+    };
+    let cwd = resume
+        .and(pane.child_pid)
+        .and_then(crate::platform::process_info::get_foreground_cwd)
+        .unwrap_or_else(spawn_cwd);
+    PaneCommand {
+        command: pane.spawn_command.clone(),
+        cwd,
+        env: pane.spawn_env.clone(),
+        app: resume
+            .map(|_| pane.agent_state.details().app.clone())
+            .unwrap_or_default(),
+        resume_command: resume.map(str::to_string),
     }
 }
 
@@ -370,11 +415,15 @@ mod tests {
                         command: Some("nvim".into()),
                         cwd: "/home/user/project".into(),
                         env: vec![("TERM".into(), "xterm-256color".into())],
+                        app: "claude-code".into(),
+                        resume_command: Some("claude --continue".into()),
                     },
                     PaneCommand {
                         command: None,
                         cwd: "/home/user".into(),
                         env: vec![],
+                        app: String::new(),
+                        resume_command: None,
                     },
                 ],
             }],
@@ -406,6 +455,10 @@ mod tests {
         fs::remove_dir_all(&tmp).ok();
     }
 }
+
+#[cfg(test)]
+#[path = "../tests-rs/test_resurrection_resume.rs"]
+mod test_resurrection_resume;
 
 #[cfg(test)]
 mod test_snapshot_pruning {

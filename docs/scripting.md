@@ -321,6 +321,38 @@ Turn this off with `set -g agent-toasts off` (default `on`).
   server exits, ignoring the limits above. A toast that was already being
   started in that same moment may not appear.
 
+## Resuming agents after a restart (`resurrect`)
+
+psmux saves a snapshot of each session's layout, and `psmux resurrect <name>`
+rebuilds the session from it. When a pane was running an agent that reports
+its state with OSC 7501, the snapshot records the agent's `app` name, and
+resurrect starts the agent's resume command in that pane instead of the
+pane's original command:
+
+| `app` | Command run on resurrect |
+|-------|--------------------------|
+| `claude-code` | `claude --continue` |
+| `pi` | `pi --continue` |
+
+- The command comes only from this table. The `app` name is reported by the
+  pane, so any program in the pane can pick a row, but it can never supply the
+  command. Other `app` names are not recorded.
+- `--continue` resumes the most recent conversation of the current directory.
+  psmux therefore restores the pane in the agent's own working directory, read
+  from the pane's foreground process when the snapshot is written, not in the
+  directory the pane's shell started in.
+- Two agent panes in the same directory both resume that directory's most
+  recent conversation. Options given when the agent was started (`--model`,
+  teammate flags) are not carried over. Neither Claude Code nor Pi tells the
+  terminal its session id, so a resume by id is not possible.
+- Only agents running interactively report OSC 7501 (`pi --print` workers do
+  not), so only those are resumed.
+- The snapshot is written when an agent appears in a pane or its last record
+  goes away (for example Claude Code sends `state=clear` when it exits), and
+  synchronously on `kill-server`. Changes between states never write it.
+- When the resumed agent exits, the pane exits with it; it does not fall back
+  to the shell that originally ran the agent.
+
 ## Paste Buffers
 
 ```powershell

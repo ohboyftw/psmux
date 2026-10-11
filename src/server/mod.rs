@@ -4981,7 +4981,16 @@ pub fn run_server(
                         CtrlReq::RemoveHook(hook) => {
                             app.hooks.remove(&hook);
                         }
-                        CtrlReq::KillServer => unregister_and_exit(&mut app),
+                        CtrlReq::KillServer => {
+                            // Write the snapshot synchronously: the debounced writer
+                            // thread would not run before unregister_and_exit ends the process, and
+                            // resurrect after kill-server needs each pane's agent app.
+                            let _ = crate::resurrection::save_snapshot_to(
+                                &crate::resurrection::build_snapshot(&app),
+                                &crate::resurrection::resurrect_dir(app.resurrect_dir.as_deref()),
+                            );
+                            unregister_and_exit(&mut app)
+                        }
                         CtrlReq::WaitFor(channel, op) => match op {
                             WaitForOp::Lock => {
                                 let entry = app.wait_channels.entry(channel).or_insert_with(|| {
@@ -6326,7 +6335,16 @@ pub fn run_server(
             let notifs = helpers::take_notifications(&mut app);
             // Sample OSC 7501 state before reap_children prunes exited panes,
             // push each reported transition and offer it as a toast.
-            for (pane_id, t) in helpers::collect_program_status(&mut app) {
+            let transitions = helpers::collect_program_status(&mut app);
+            // An agent appearing or leaving changes what resurrect resumes;
+            // state flips between records do not, so they never write.
+            if transitions
+                .iter()
+                .any(|(_, t)| t.old.is_none() != t.new.is_none())
+            {
+                crate::resurrection::save_snapshot(&app);
+            }
+            for (pane_id, t) in transitions {
                 helpers::emit_status_transition(&app.control_clients, pane_id, &t);
                 app.agent_toasts
                     .offer(pane_id, &t, &app.session_name, last_reap);

@@ -502,9 +502,10 @@ fn run_main() -> io::Result<()> {
                     for (wi, ws) in snap.windows.iter().enumerate() {
                         for (pi, pc) in ws.pane_commands.iter().enumerate() {
                             let cwd_flag = format!("-c \"{}\"", pc.cwd.replace('"', "\\\""));
+                            let command = crate::resurrection::restore_command(pc);
                             if pi == 0 && wi > 0 {
                                 // New window for 2nd+ windows
-                                if let Some(ref cmd) = pc.command {
+                                if let Some(ref cmd) = command {
                                     cmds.push(format!(
                                         "new-window {} \"{}\"",
                                         cwd_flag,
@@ -515,7 +516,7 @@ fn run_main() -> io::Result<()> {
                                 }
                             } else if pi > 0 {
                                 // Split for 2nd+ panes in a window
-                                if let Some(ref cmd) = pc.command {
+                                if let Some(ref cmd) = command {
                                     cmds.push(format!(
                                         "split-window {} \"{}\"",
                                         cwd_flag,
@@ -554,7 +555,7 @@ fn run_main() -> io::Result<()> {
                         .windows
                         .first()
                         .and_then(|w| w.pane_commands.first())
-                        .and_then(|pc| pc.command.clone());
+                        .and_then(crate::resurrection::restore_command);
 
                     // Reconstruct argv for new-session
                     let mut new_args = vec![
