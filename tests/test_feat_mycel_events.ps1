@@ -1,21 +1,19 @@
 # Feature bench: mycel event bus (psmux/* topics)
-# Requires psmux built with --features mycel and mycel server running.
+# The mycel feature is on by default and psmux starts its own bus. This test
+# gives the session a private bus on a free port with a temp discovery file,
+# so it never touches the user's bus on 4321 or ~/.mycel/server, and stops
+# that bus at the end.
 . $PSScriptRoot/_harness.ps1
 
 Write-Host "== mycel events ==" -ForegroundColor Cyan
 
-# Probe whether mycel is wired into this build
-$mycelProbe = psmux help 2>&1 | Out-String
-$hasMycel = $mycelProbe -match 'mycel|event bus'
-if (-not $hasMycel) {
-    # Fallback probe: check for PSMUX_MYCEL env var hint or mycel binary on PATH
-    $hasMycel = (Get-Command mycel -ErrorAction SilentlyContinue) -ne $null
-}
-if (-not $hasMycel) {
-    Write-Host "  i mycel not detected (build without --features mycel or no CLI) — skipping" -ForegroundColor Cyan
-    Write-Summary
-    return
-}
+$probe = [System.Net.Sockets.TcpListener]::new([System.Net.IPAddress]::Loopback, 0)
+$probe.Start()
+$busPort = $probe.LocalEndpoint.Port
+$probe.Stop()
+$env:PSMUX_BUS = $null
+$env:PSMUX_BUS_PORT = "$busPort"
+$env:PSMUX_BUS_DISCOVERY = Join-Path $env:TEMP "psmux-test-bus-$PID\server"
 
 $S = New-IsolatedSession "mycel-events"
 
@@ -35,4 +33,5 @@ Test-Case "killing a pane does not fail when mycel publishes pane/exited" {
 }
 
 Remove-PsmuxSession $S
+$null = psmux bus stop 2>&1
 Write-Summary

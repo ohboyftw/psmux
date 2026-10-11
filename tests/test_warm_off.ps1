@@ -7,6 +7,12 @@
 $ErrorActionPreference = "Stop"
 $PSMUX_DIR = "$env:USERPROFILE\.psmux"
 
+# Keep tests off the user's mycel bus: start none and find none. Port 0
+# never connects, and the discovery file below never exists.
+$env:PSMUX_BUS = '0'
+$env:PSMUX_BUS_PORT = '0'
+$env:PSMUX_BUS_DISCOVERY = Join-Path $env:TEMP 'psmux-test-no-bus\server'
+
 $pass = 0
 $fail = 0
 $total = 0

@@ -13,6 +13,12 @@ param(
 $ErrorActionPreference = "Continue"
 $startTime = Get-Date
 
+# Keep tests off the user's mycel bus: start none and find none. Port 0
+# never connects, and the discovery file below never exists.
+$env:PSMUX_BUS = '0'
+$env:PSMUX_BUS_PORT = '0'
+$env:PSMUX_BUS_DISCOVERY = Join-Path $env:TEMP 'psmux-test-no-bus\server'
+
 # ── Logging setup ──────────────────────────────────────────────
 # All logs go to $env:TEMP\psmux-test-logs\ (never inside the repo).
 # Each run gets a timestamped folder with:
@@ -172,12 +178,18 @@ function Show-ProgressDashboard {
     }
 }
 
+function Get-TestPsmux {
+    Get-Process psmux -ErrorAction SilentlyContinue |
+        Where-Object { $_.CommandLine -notmatch '\sbus(\s|$)' }
+}
+
 function Clean-Server {
     # Gracefully ask all servers to exit
     try { & $PSMUX kill-server 2>&1 | Out-Null } catch {}
     Start-Sleep -Milliseconds 500
-    # Force-kill any lingering processes
-    Get-Process psmux -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+    # Force-kill any lingering processes, but never a `psmux bus` (the
+    # user's event bus, which these tests do not use)
+    Get-TestPsmux | Stop-Process -Force -ErrorAction SilentlyContinue
     # Wait for OS to release TCP ports and file handles
     Start-Sleep -Seconds 3
     # Remove stale port/key files
@@ -187,10 +199,10 @@ function Clean-Server {
     Remove-Item "$env:USERPROFILE\.psmux.conf" -Force -ErrorAction SilentlyContinue
     Remove-Item "$env:USERPROFILE\.psmuxrc" -Force -ErrorAction SilentlyContinue
     # Verify no psmux processes remain
-    $remaining = Get-Process psmux -ErrorAction SilentlyContinue
+    $remaining = Get-TestPsmux
     if ($remaining) {
         Start-Sleep -Seconds 2
-        Get-Process psmux -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+        Get-TestPsmux | Stop-Process -Force -ErrorAction SilentlyContinue
         Start-Sleep -Seconds 1
     }
 }

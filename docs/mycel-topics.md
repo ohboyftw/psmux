@@ -1,8 +1,9 @@
 # Mycel Topic Schema — psmux
 
 psmux publishes pane, exec, and session lifecycle events on the
-[mycel](https://github.com/mycel-bus) pub/sub bus when built with the optional
-`mycel` cargo feature. This document is the authoritative schema for every
+[mycel](https://github.com/mycel-bus) pub/sub bus. The `mycel` cargo feature
+that does this is on by default, and psmux hosts the bus itself (see
+[The bus](#the-bus)). This document is the authoritative schema for every
 `psmux/*` topic.
 
 All payloads are JSON. `pane_id` is rendered as `%N` (e.g. `"%3"`), matching the
@@ -179,17 +180,48 @@ psmux carries its own mycel bus. The first time a session server publishes,
 it looks for a live bus (the address in `~/.mycel/server`, then
 `127.0.0.1:4321`). If none answers, it starts `psmux bus` in the background,
 which listens on `127.0.0.1:4321` and writes `~/.mycel/server`. A standalone
-`mycel` server that is already running is used instead. The bus keeps
-running after the sessions end; `mycel stop` stops it (and only it).
+`mycel` server that is already running is used instead.
+
+The bus is its own `psmux.exe` process. It has no window, works in your home
+directory, and keeps running after every session has ended, so
+`kill-server` does not release `psmux.exe`. Stop it before you rebuild or
+upgrade psmux, or the build or installer cannot replace the file:
+
+```powershell
+psmux bus stop        # or: mycel stop
+```
+
+`psmux bus stop` asks whatever bus answers (a psmux bus or a standalone
+`mycel` server) to shut down. The bus is not gone for good: the next event
+any running session publishes starts it again, within about 30 seconds. To
+keep it stopped, set `PSMUX_BUS=0` before starting psmux. Session servers
+read it once when they start, so servers already running (warm-pool ones
+included) keep starting the bus until they exit.
+
+Running `mycel start` while a psmux bus is up is not refused. On Windows the
+standalone server's listener sets `SO_REUSEADDR` and binds the same port,
+and the two servers then split clients between them. Run `psmux bus stop`
+and set `PSMUX_BUS=0` first if you want the standalone server.
+
+If `~/.mycel/server` cannot be written, the bus still runs and clients find
+it on the port. After three starts in a row that never produced a live bus
+(for example, another program holds port 4321), a session server waits 30
+minutes before it tries again. The liveness probes that `psmux bus` and
+`psmux bus stop` make connect as `psmux-bus-probe`, and the psmux bus
+announces no `$mycel/clients/*` events for them.
 
 | Variable | Effect |
 |----------|--------|
-| `PSMUX_BUS=0` | Never start a bus. An existing one is still used. |
+| `PSMUX_BUS=0` | Never start a bus. An existing one is still used. Read when a session server starts. |
 | `PSMUX_BUS_PORT` | Port to probe and to host on (default `4321`). |
 | `PSMUX_BUS_DISCOVERY` | Discovery file to read and write (default `~/.mycel/server`). |
 
 The `mycel` cargo feature is on by default. Build with
 `--no-default-features` to compile the publishing out entirely.
+
+Test scripts must not touch your real bus: `tests/_harness.ps1`,
+`tests/run_all_tests.ps1` and the warm-pool tests set `PSMUX_BUS=0` and point
+`PSMUX_BUS_PORT` and `PSMUX_BUS_DISCOVERY` at values that nothing uses.
 
 ---
 

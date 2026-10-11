@@ -22,6 +22,12 @@ $env:PSMUX_TARGET_FULL = $null
 $env:TMUX = $null
 $env:PSMUX_ACTIVE = $null
 
+# Keep tests off the user's mycel bus: start none and find none. Port 0
+# never connects, and the discovery file below never exists.
+$env:PSMUX_BUS = '0'
+$env:PSMUX_BUS_PORT = '0'
+$env:PSMUX_BUS_DISCOVERY = Join-Path $env:TEMP 'psmux-test-no-bus\server'
+
 # Per-run counters (script-scoped — one counter set per dot-sourcing file)
 if (-not (Get-Variable -Scope Script -Name RailsBenchCounters -ErrorAction SilentlyContinue)) {
     $script:RailsBenchCounters = @{ Total = 0; Pass = 0; Fail = 0; Failures = @() }
