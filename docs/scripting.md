@@ -76,7 +76,7 @@ sent anyway, so the command does not fail on timeout. That includes an agent
 waiting at a `blocked` prompt: keys meant to answer it arrive after the
 30 seconds, so send those without `--wait-ready`. Name the pane by id
 (`-t %N` or `-t sess:.%N`). Without `-t`, or with a pane index such as
-`-t 1` or `-t sess:0.1`, there is no wait and the keys go out at once. The
+`-t :0.1` or `-t sess:0.1`, there is no wait and the keys go out at once. The
 keys go to the `-t` pane, not to the pane that is active when they are sent.
 If that pane closes while the server waits, the command fails with
 "can't find pane" and the keys are not sent.
