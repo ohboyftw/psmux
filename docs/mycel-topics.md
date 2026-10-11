@@ -7,9 +7,11 @@ that does this is on by default, and psmux hosts the bus itself (see
 `psmux/*` topic.
 
 All payloads are JSON. `pane_id` is rendered as `%N` (e.g. `"%3"`), matching the
-CLI's `-t %N` targeting. Every publish goes through
-[`src/mycel.rs`](../src/mycel.rs) and is non-blocking — if the mycel server is
-unreachable, the event is dropped silently.
+CLI's `-t %N` targeting. Every event is published from one function,
+`publish_lifecycle_to_mycel` in [`src/control.rs`](../src/control.rs), which
+`emit_lifecycle` calls from the trigger sites listed below. Publishing never
+blocks a session server: if no bus answers and none can be started, the event
+is dropped.
 
 ---
 
@@ -25,11 +27,10 @@ window).
 ```
 `command` is the spawn command string, or `""` when the pane runs the default
 shell.
-**Source:** `src/pane.rs:335` (new-window/new-session path), `src/pane.rs:922`
-(split-window path).
+**Trigger:** `src/pane.rs` (the new-window/new-session path and the
+split-window path).
 
 ### psmux/pane/ready
-**Status:** implemented.
 **When:** a pane is first ready by the `#{pane_ready}` rule: its reported
 OSC 7501 state is `idle`, or, with nothing reported or only `done` and
 `error` records left, it produced output and then was silent for 500 ms. The
@@ -44,12 +45,10 @@ settles. To follow an agent turn by turn, subscribe to `psmux/pane/status`.
 ```
 `elapsed_ms` is measured from pane creation to the moment the server saw the
 pane settle.
-**Source:** `src/server/mod.rs` server tick (emits
-`LifecycleEvent::PaneReady` right after the `context_ready` RPC push),
-published by `publish_lifecycle_to_mycel` in `src/control.rs`.
+**Trigger:** `src/server/mod.rs` (the server tick, where `context_ready` is
+pushed).
 
 ### psmux/pane/status
-**Status:** implemented.
 **When:** a pane's reported OSC 7501 agent state changes. The state is the
 worst of all the pane's records (blocked > error > working > done > idle).
 Only reported state counts: output on a pane that does not report never
@@ -70,86 +69,76 @@ than one tick can be missed, and several changes within one tick publish as
 one (or none, when the pane ends where it began). When a pane's process exits,
 the final change is published before `psmux/pane/exited`; without
 `remain-on-exit` a report written just before the exit can be lost.
-**Source:** `emit_status_transition` in `src/server/helpers.rs` (server tick
-and `prune_exited`), which emits `LifecycleEvent::PaneStatusChanged`,
-published by `publish_lifecycle_to_mycel` in `src/control.rs`.
+**Trigger:** `src/server/helpers.rs` (`emit_status_transition`, from the
+server tick and `prune_exited`).
 
 ### psmux/pane/exited
 **When:** the pane's child process has exited and the pane is being pruned
 from the window tree. Replaces `psmux/pane/died` (see deprecation note below).
-**Payload (current):**
+**Payload:**
 ```json
 { "pane_id": "%3", "exit_code": 0 }
-```
-**Payload (Phase 2 target, Task 11 enrichment):**
-```json
-{ "pane_id": "%3", "exit_code": 0, "elapsed_ms": 12480, "command": "cargo test" }
 ```
 `exit_code` may be `null` if the process status could not be determined.
-`elapsed_ms` + `command` will be added once the publish site is wired to the
-same `ExitedPaneInfo` data used by the `context_exited` JSON-RPC push event.
-**Source:** `src/tree.rs:563`.
+Adding `elapsed_ms` and `command` (as the `context_exited` JSON-RPC push event
+carries) is planned, not done.
+**Trigger:** `src/tree.rs` (pane pruning).
 
 ### psmux/pane/died
-**Status:** DEPRECATED — dual-published alongside `psmux/pane/exited` as a
+**Status:** DEPRECATED — published right after every `psmux/pane/exited` as a
 one-release shim so existing subscribers (e.g. canopy listeners) don't break.
-Will be removed in the release after Phase 2 ships. Use `psmux/pane/exited`
-instead.
-**When:** same trigger as `psmux/pane/exited` — pane process exit.
-**Payload:** identical to the current `psmux/pane/exited` payload:
+Use `psmux/pane/exited` instead.
+**When:** same trigger as `psmux/pane/exited`.
+**Payload:** identical to `psmux/pane/exited`:
 ```json
 { "pane_id": "%3", "exit_code": 0 }
 ```
-**Source:** `src/tree.rs:563`.
 
 ---
 
 ## Exec lifecycle
 
 ### psmux/exec/completed
-**Status:** planned, landing in Phase 2 (Task 9).
 **When:** a command launched via the JSON-RPC `exec` method (or the CLI mirror
-`psmux exec -t %N -- <cmd>`) has finished. Mirrors the `exec_completed`
+`psmux exec -t %N -- <cmd>`) has finished, alongside the `exec_completed`
 JSON-RPC push event.
 **Payload:**
 ```json
-{ "pane_id": "%3", "pid": 18472, "exit_code": 0, "elapsed_ms": 3412, "command": "cargo check" }
+{ "pane_id": "%3", "pid": 0, "exit_code": 0, "elapsed_ms": 3412, "command": "cargo check" }
 ```
-**Source:** `src/backend/dispatcher.rs` (co-publishes alongside the
-`exec_completed` RPC push).
+`pane_id` is the exec context id. `pid` is always `0` for now.
+**Trigger:** `src/backend/dispatcher.rs` (the dispatcher thread).
 
 ---
 
 ## Session lifecycle
 
+`client_id` is `psmux@<COMPUTERNAME>`, the id the session server connects to
+the bus with. It is also the `publisher` of every psmux event.
+
 ### psmux/session/created
-**Status:** planned, landing in Phase 2 (Task 10).
-**When:** a new session is created via `new-session`.
+**When:** a session server starts a new session.
 **Payload:**
 ```json
 { "session_name": "work", "client_id": "psmux@hostname" }
 ```
-`client_id` is the identifier passed to `MycelBus::new` at server startup.
-**Source:** `src/server/mod.rs` (new-session handler).
+**Trigger:** `src/server/mod.rs` (server start).
 
 ### psmux/session/renamed
-**Status:** planned, landing in Phase 2 (Task 10).
 **When:** a session is renamed via `rename-session`.
 **Payload:**
 ```json
 { "session_name": "work", "old_name": "scratch", "client_id": "psmux@hostname" }
 ```
-**Source:** `src/server/mod.rs` (rename-session handler).
+**Trigger:** `src/server/mod.rs` (rename-session handler).
 
 ### psmux/session/killed
-**Status:** planned, landing in Phase 2 (Task 10).
-**When:** a session is killed via `kill-session` (or the last pane exits and
-triggers session teardown).
+**When:** a session is killed via `kill-session`.
 **Payload:**
 ```json
 { "session_name": "work", "client_id": "psmux@hostname" }
 ```
-**Source:** `src/server/mod.rs` (kill-session handler).
+**Trigger:** `src/server/mod.rs` (kill-session handler).
 
 ---
 
@@ -172,6 +161,30 @@ mycel sub 'psmux/session/#'
 `+` matches one level and `#` matches any number of trailing levels (MQTT
 style). `>` has no special meaning: `psmux/>` matches nothing.
 
+### Topic rules on the psmux bus
+
+The psmux bus speaks the same wire protocol as the standalone C++ `mycel`
+server, so `mycel` CLI, Python, Rust and MCP clients work against it
+unchanged. A few rules are stricter or fixed:
+
+- A wildcard must be a whole level and `#` must be the last level. A
+  Subscribe or Unsubscribe with a pattern such as `a+` or `a/#/b` gets an
+  `Error` reply instead of an `Ack`. A Publish to a topic containing `+` or
+  `#` is dropped.
+- A wildcard in the first level never matches a topic that starts with `$`,
+  as in MQTT. That covers `+/...` as well as `#`, and replay as well as live
+  delivery, so `mycel replay '#'` no longer returns `$mycel/*` heartbeats.
+  Subscribe to `$mycel/#` to see them.
+- Unsubscribe removes only the named pattern (the C++ server removed all of
+  the connection's subscriptions).
+- Each connection queues at most 1000 live events. When a subscriber falls
+  behind, the oldest queued events are dropped and counted in the status
+  reply (`ClientInfo` field 7, `events_dropped`). Acks, status replies and
+  replay batches are never dropped.
+- A Replay followed by a Subscribe of the same pattern also delivers the
+  events published between the two, so `mycel sub --replay` no longer loses
+  them.
+
 ---
 
 ## The bus
@@ -181,6 +194,13 @@ it looks for a live bus (the address in `~/.mycel/server`, then
 `127.0.0.1:4321`). If none answers, it starts `psmux bus` in the background,
 which listens on `127.0.0.1:4321` and writes `~/.mycel/server`. A standalone
 `mycel` server that is already running is used instead.
+
+A bus is live only if it answers a Hello. A `~/.mycel/server` whose address
+does not answer (left behind by a crash, for example) is stale: it is ignored
+and the next bus to start overwrites it. `~/.mycel/server` means
+`%USERPROFILE%\.mycel\server`, falling back to `$HOME`, as every mycel client
+reads it. A psmux bus binds `127.0.0.1:4321` without `SO_REUSEADDR`, writes
+the file only after the bind succeeds, and removes it when it stops cleanly.
 
 The bus is its own `psmux.exe` process. It has no window, works in your home
 directory, and keeps running after every session has ended, so
@@ -222,6 +242,11 @@ The `mycel` cargo feature is on by default. Build with
 Test scripts must not touch your real bus: `tests/_harness.ps1`,
 `tests/run_all_tests.ps1` and the warm-pool tests set `PSMUX_BUS=0` and point
 `PSMUX_BUS_PORT` and `PSMUX_BUS_DISCOVERY` at values that nothing uses.
+
+`scripts/mycel_bus_conformance.ps1` checks a freshly built `psmux bus`
+against the real Python mycel client. It runs the bus on a free port with a
+temporary `USERPROFILE`, so it never touches your `~/.mycel/server` or the
+bus on 4321, and it stops only the bus process it started.
 
 ---
 
