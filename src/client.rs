@@ -776,10 +776,11 @@ pub fn run_remote(
         if quit && !got_frame {
             break;
         }
-        // choose-tree overlay: refresh agent glyphs about once a second.
-        if let Some(sessions) = tree_poller.poll(tree_chooser, &current_session) {
-            let rows =
-                crate::tree_chooser::rows_or_fallback(&sessions, &current_session, &last_tree);
+        // choose-tree overlay: refresh agent glyphs about once a second.  A
+        // poll no session answered in time keeps the rows already shown.
+        let polled = tree_poller.poll(tree_chooser, &current_session);
+        if let Some(sessions) = polled.filter(|s| !s.is_empty()) {
+            let rows = crate::tree_chooser::build_rows(&sessions, &current_session);
             tree_selected = crate::tree_chooser::reselect(&tree_entries, tree_selected, &rows);
             tree_entries = rows;
         }
