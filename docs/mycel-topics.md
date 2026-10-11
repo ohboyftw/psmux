@@ -30,8 +30,8 @@ shell.
 ### psmux/pane/ready
 **Status:** implemented.
 **When:** a pane is first ready by the `#{pane_ready}` rule: its reported
-OSC 7501 state is `idle`, or, with nothing reported, it produced output and
-then was silent for 500 ms. The same signal as the JSON-RPC `context_ready`
+OSC 7501 state is `idle`, or, with nothing reported or only `done` and
+`error` records left, it produced output and then was silent for 500 ms. The same signal as the JSON-RPC `context_ready`
 push event (`ready_signal: "reported"` or `"output_stable"`). This is not
 prompt detection. Fires once per pane.
 **Payload:**

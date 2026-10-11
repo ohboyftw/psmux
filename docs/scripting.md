@@ -384,7 +384,8 @@ returns and `send-keys --wait-ready` waits its full 30 seconds. psmux does not
 inject OSC 133 prompts, so the record goes only when the pane's process exits,
 the shell prompt emits OSC 133 A, or the terminal is reset. To recover, run
 `psmux clear-history -t <pane>`, or print `ESC c` in the pane (for example
-`[Console]::Write([char]27 + 'c')` in pwsh), or send `state=clear` yourself.
+`[Console]::Write([char]27 + 'c')` in pwsh), or send `state=clear` yourself (with `:id=<id>` for a child record; a bare
+`state=clear` removes only the root record).
 
 ## Advanced Commands
 

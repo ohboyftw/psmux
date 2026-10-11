@@ -455,8 +455,8 @@ externally).
 
 Fired once per pane, the first time it is ready by the same rule as
 `#{pane_ready}`: its reported OSC 7501 state is `idle`
-(`ready_signal: "reported"`), or, with nothing reported, it produced output
-and was then silent for 500 ms (`ready_signal: "output_stable"`). It is not
+(`ready_signal: "reported"`), or, with nothing reported or only `done` and
+`error` records left, it produced output and was then silent for 500 ms (`ready_signal: "output_stable"`). It is not
 prompt detection.
 
 ```json
