@@ -59,6 +59,33 @@ fn strip_ansi_escapes(s: &str) -> String {
     out
 }
 
+/// Block until pane `pid` is ready or `limit` passes, then focus it again for
+/// the keys that follow.
+///
+/// Each `QueryPaneState` poll is a non-temp request, so the server restores
+/// the real focus after it and drops the `-t` temp focus. Without the final
+/// `FocusPaneTempCheck`, the keys land in the originally active pane. Returns
+/// false when the pane is gone, so the keys must not be sent anywhere.
+fn wait_ready_then_refocus(tx: &mpsc::Sender<CtrlReq>, pid: usize, limit: Duration) -> bool {
+    let deadline = std::time::Instant::now() + limit;
+    let (qtx, qrx) = mpsc::channel();
+    loop {
+        let _ = tx.send(CtrlReq::QueryPaneState(pid, qtx.clone()));
+        if let Ok((_, readiness)) = qrx.recv_timeout(Duration::from_secs(2)) {
+            if readiness.is_ready() {
+                break;
+            }
+        }
+        if std::time::Instant::now() >= deadline {
+            break; // timeout: deliver the keys anyway
+        }
+        std::thread::sleep(Duration::from_millis(100));
+    }
+    let (check_tx, check_rx) = mpsc::channel();
+    let _ = tx.send(CtrlReq::FocusPaneTempCheck(pid, check_tx));
+    matches!(check_rx.recv_timeout(Duration::from_secs(2)), Ok(true))
+}
+
 /// Handle a single TCP connection from a client.
 /// Parses auth, optional TARGET/PERSISTENT flags, then dispatches commands
 /// to the main server event loop via the `tx` channel.
@@ -995,26 +1022,20 @@ pub(crate) fn handle_connection(
                         repeat_count = count_str.parse::<usize>().unwrap_or(1).max(1);
                     }
                 }
-                // --wait-ready: poll pane readiness before delivering keys.
-                // Same predicate as wait-pane --ready (Pane::readiness).
-                if wait_ready {
+                // --wait-ready: poll readiness, then put the -t focus back on the
+                // target. Only a pane id can be polled; an index is not an id.
+                if wait_ready && pane_is_id {
                     if let Some(pid) = target_pane {
-                        let deadline =
-                            std::time::Instant::now() + std::time::Duration::from_secs(30);
-                        let (qtx, qrx) = mpsc::channel();
-                        loop {
-                            let _ = tx.send(CtrlReq::QueryPaneState(pid, qtx.clone()));
-                            if let Ok((_, readiness)) =
-                                qrx.recv_timeout(std::time::Duration::from_secs(2))
-                            {
-                                if readiness.is_ready() {
-                                    break;
-                                }
-                            }
-                            if std::time::Instant::now() >= deadline {
-                                break; // timeout — deliver keys anyway
-                            }
-                            std::thread::sleep(std::time::Duration::from_millis(100));
+                        if !wait_ready_then_refocus(&tx, pid, Duration::from_secs(30)) {
+                            let _ = writeln!(
+                                write_stream,
+                                "{}{}",
+                                crate::types::UNRESOLVED_PANE_PREFIX,
+                                raw_target.as_deref().unwrap_or("")
+                            );
+                            let _ = write_stream.flush();
+                            line.clear();
+                            continue;
                         }
                     }
                 }
@@ -2729,3 +2750,7 @@ pub(crate) fn handle_connection(
         }
     } // end command loop
 }
+
+#[cfg(test)]
+#[path = "../../tests-rs/test_send_keys_wait_ready.rs"]
+mod send_keys_wait_ready_tests;
