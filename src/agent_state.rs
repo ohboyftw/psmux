@@ -202,6 +202,33 @@ pub fn kind_label(kind: Option<BlockedKind>) -> &'static str {
     }
 }
 
+/// Worst of `states` (blocked > error > working > done > idle); `None` when
+/// no state is set.  choose-tree rolls panes up into windows and sessions
+/// with it.
+pub fn worst_of(states: impl IntoIterator<Item = Option<ProgramState>>) -> Option<ProgramState> {
+    states.into_iter().flatten().max_by_key(|&s| rank(s))
+}
+
+/// Worst of state labels as `#{pane_agent_state}` prints them.  A label
+/// outside the closed set, such as an older server's empty value, counts as
+/// no record.
+pub fn worst_label<'a>(labels: impl IntoIterator<Item = &'a str>) -> &'static str {
+    state_label(worst_of(labels.into_iter().map(parse_state)))
+}
+
+/// The one-cell glyph choose-tree shows for a state; empty when there is
+/// no record.
+pub fn state_glyph(state: Option<ProgramState>) -> &'static str {
+    match state {
+        None => "",
+        Some(ProgramState::Idle) => "○",
+        Some(ProgramState::Working) => "●",
+        Some(ProgramState::Done) => "✓",
+        Some(ProgramState::Blocked) => "!",
+        Some(ProgramState::Error) => "✗",
+    }
+}
+
 /// Milliseconds of output silence after which a non-reporting pane is idle.
 pub const OUTPUT_STABLE_MS: u64 = 500;
 

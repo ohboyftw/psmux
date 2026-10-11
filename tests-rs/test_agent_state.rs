@@ -455,3 +455,59 @@ fn exit_when_working_then_final_event_clears_details() {
     assert_eq!(t.new, None);
     assert_eq!(t.details, AgentRecordDetails::default());
 }
+
+#[test]
+fn worst_of_when_every_state_present_then_blocked() {
+    use ProgramState::*;
+    let all = [
+        Some(Idle),
+        Some(Done),
+        None,
+        Some(Working),
+        Some(Blocked),
+        Some(Error),
+    ];
+    assert_eq!(worst_of(all), Some(Blocked));
+}
+
+#[test]
+fn worst_of_when_error_and_working_then_error() {
+    use ProgramState::*;
+    assert_eq!(
+        worst_of([Some(Working), Some(Error), Some(Done)]),
+        Some(Error)
+    );
+}
+
+#[test]
+fn worst_of_when_working_and_done_then_working() {
+    use ProgramState::*;
+    assert_eq!(
+        worst_of([Some(Done), Some(Idle), Some(Working)]),
+        Some(Working)
+    );
+}
+
+#[test]
+fn worst_of_when_no_state_then_none() {
+    assert_eq!(worst_of([None, None]), None);
+    assert_eq!(worst_of(std::iter::empty()), None);
+}
+
+#[test]
+fn worst_label_when_unknown_labels_then_ignored() {
+    assert_eq!(worst_label(["", "#{pane_agent_state}", "done"]), "done");
+    assert_eq!(worst_label(["", "bogus"]), "");
+}
+
+#[test]
+fn state_glyph_when_each_state_then_one_distinct_char() {
+    let states = ["idle", "working", "done", "blocked", "error"];
+    let glyphs: Vec<&str> = states.iter().map(|s| state_glyph(parse_state(s))).collect();
+    for g in &glyphs {
+        assert_eq!(g.chars().count(), 1, "glyph {g:?}");
+    }
+    let unique: std::collections::HashSet<_> = glyphs.iter().collect();
+    assert_eq!(unique.len(), glyphs.len());
+    assert_eq!(state_glyph(None), "");
+}

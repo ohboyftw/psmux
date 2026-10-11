@@ -245,7 +245,7 @@ fn generate_list_commands() -> String {
 
 /// Build the choose-tree data for the WindowChooser mode.
 pub fn build_choose_tree(app: &AppState) -> Vec<crate::session::TreeEntry> {
-    let current_windows: Vec<(String, usize, String, bool)> = app
+    let current_windows: Vec<crate::session::CurrentWindow> = app
         .windows
         .iter()
         .enumerate()
@@ -255,7 +255,8 @@ pub fn build_choose_tree(app: &AppState) -> Vec<crate::session::TreeEntry> {
                 "{}x{}",
                 app.last_window_area.width, app.last_window_area.height
             );
-            (w.name.clone(), panes, size, i == app.active_idx)
+            let agent = crate::agent_state::state_label(crate::tree::window_agent_state(&w.root));
+            (w.name.clone(), panes, size, i == app.active_idx, agent)
         })
         .collect();
     list_all_sessions_tree(&app.session_name, &current_windows)

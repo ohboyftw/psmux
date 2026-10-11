@@ -32,6 +32,7 @@ mod session;
 mod ssh_input;
 mod style;
 mod tree;
+mod tree_chooser;
 mod types;
 mod util;
 mod wait_for;

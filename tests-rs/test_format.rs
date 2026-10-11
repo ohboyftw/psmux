@@ -462,3 +462,9 @@ fn pane_agent_detail_vars_when_no_pane_then_empty() {
         assert_eq!(expand_expression(var, &app, 0), "", "{var}");
     }
 }
+
+#[test]
+fn window_agent_state_when_no_window_then_empty() {
+    let app = mock_app();
+    assert_eq!(expand_expression("window_agent_state", &app, 0), "");
+}

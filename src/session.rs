@@ -992,13 +992,20 @@ pub struct TreeEntry {
     pub window_size: String,
     pub is_current_session: bool,
     pub is_active_window: bool,
+    /// Worst-of OSC 7501 state: of the window's panes on a window row, of
+    /// the session's windows on a header.  Empty when nothing is reported.
+    pub agent_state: &'static str,
 }
+
+/// A window row as `list_all_sessions_tree` takes it for the current
+/// session: name, pane count, size, active, worst-of agent state.
+pub type CurrentWindow = (String, usize, String, bool, &'static str);
 
 /// List all running sessions and their windows for choose-tree display.
 /// Queries each running server via its TCP port for window list info.
 pub fn list_all_sessions_tree(
     current_session: &str,
-    current_windows: &[(String, usize, String, bool)],
+    current_windows: &[CurrentWindow],
 ) -> Vec<TreeEntry> {
     // No data directory (no home) means there is nothing to read; the same
     // early exit the home lookup used to provide.
@@ -1036,7 +1043,7 @@ pub fn list_all_sessions_tree(
     let mut tree = Vec::new();
     for (name, port, _) in &sessions {
         let is_current = name == current_session;
-        // Session header
+        let header = tree.len();
         tree.push(TreeEntry {
             session_name: name.clone(),
             session_port: *port,
@@ -1047,11 +1054,11 @@ pub fn list_all_sessions_tree(
             window_size: String::new(),
             is_current_session: is_current,
             is_active_window: false,
+            agent_state: "",
         });
-
         if is_current {
             // Use local data for the current session (fast, no IPC)
-            for (i, (wname, panes, size, is_active)) in current_windows.iter().enumerate() {
+            for (i, (wname, panes, size, is_active, agent)) in current_windows.iter().enumerate() {
                 tree.push(TreeEntry {
                     session_name: name.clone(),
                     session_port: *port,
@@ -1062,40 +1069,59 @@ pub fn list_all_sessions_tree(
                     window_size: size.clone(),
                     is_current_session: true,
                     is_active_window: *is_active,
+                    agent_state: agent,
                 });
             }
         } else {
-            // Query remote session for its window list
-            let key = read_session_key(name).unwrap_or_default();
-            let addr = format!("127.0.0.1:{}", port);
-            if let Ok(resp) = send_auth_cmd_response(&addr, &key, b"list-windows -F \"#{window_index}:#{window_name}:#{window_panes}:#{window_width}x#{window_height}:#{window_active}\"\n") {
-                for line in resp.lines() {
-                    let line = line.trim();
-                    if line.is_empty() { continue; }
-                    let parts: Vec<&str> = line.splitn(5, ':').collect();
-                    if parts.len() >= 5 {
-                        let wi = parts[0].parse::<usize>().unwrap_or(0);
-                        let wn = parts[1].to_string();
-                        let wp = parts[2].parse::<usize>().unwrap_or(1);
-                        let ws = parts[3].to_string();
-                        let wa = parts[4] == "1";
-                        tree.push(TreeEntry {
-                            session_name: name.clone(),
-                            session_port: *port,
-                            is_session_header: false,
-                            window_index: Some(wi),
-                            window_name: wn,
-                            window_panes: wp,
-                            window_size: ws,
-                            is_current_session: false,
-                            is_active_window: wa,
-                        });
-                    }
-                }
-            }
+            tree.extend(query_session_windows(name, *port));
         }
+        tree[header].agent_state =
+            crate::agent_state::worst_label(tree[header + 1..].iter().map(|e| e.agent_state));
     }
     tree
+}
+
+/// Window rows of another session, asked over its TCP port.
+fn query_session_windows(name: &str, port: u16) -> Vec<TreeEntry> {
+    let key = read_session_key(name).unwrap_or_default();
+    let addr = format!("127.0.0.1:{}", port);
+    let Ok(resp) = send_auth_cmd_response(&addr, &key, b"list-windows -F \"#{window_index}:#{window_name}:#{window_panes}:#{window_width}x#{window_height}:#{window_active}:#{window_agent_state}\"
+") else {
+        return Vec::new();
+    };
+    resp.lines()
+        .filter_map(|line| parse_window_line(line.trim()))
+        .map(|(wi, wn, wp, ws, wa, agent)| TreeEntry {
+            session_name: name.to_string(),
+            session_port: port,
+            is_session_header: false,
+            window_index: Some(wi),
+            window_name: wn,
+            window_panes: wp,
+            window_size: ws,
+            is_current_session: false,
+            is_active_window: wa,
+            agent_state: agent,
+        })
+        .collect()
+}
+
+/// Parses one `index:name:panes:size:active[:agent_state]` line.  The state
+/// is missing or empty from an older server; anything outside the closed set
+/// reads as no record.
+fn parse_window_line(line: &str) -> Option<(usize, String, usize, String, bool, &'static str)> {
+    let parts: Vec<&str> = line.splitn(6, ':').collect();
+    if parts.len() < 5 {
+        return None;
+    }
+    Some((
+        parts[0].parse::<usize>().unwrap_or(0),
+        parts[1].to_string(),
+        parts[2].parse::<usize>().unwrap_or(1),
+        parts[3].to_string(),
+        parts[4] == "1",
+        crate::agent_state::worst_label(parts.get(5).copied()),
+    ))
 }
 
 /// Force-kill any remaining psmux/pmux/tmux server processes that didn't
@@ -1732,3 +1758,7 @@ mod tests_warm_target_routing;
 #[cfg(test)]
 #[path = "../tests-rs/test_issue622_hassession_reap.rs"]
 mod test_issue622_hassession_reap;
+
+#[cfg(test)]
+#[path = "../tests-rs/test_tree_entry_rollup.rs"]
+mod tree_entry_rollup_tests;

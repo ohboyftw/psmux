@@ -442,6 +442,7 @@ The `display-message` command supports these variables:
 | `#{pane_agent_readiness}` | State the `#{pane_ready}` rule reached: the reported `idle`, `working` or `blocked`, or, by output silence, `idle` (silent for 500 ms) or `working`; empty when nothing is reported and the pane has produced no output yet |
 | `#{pane_agent_source}` | Which rule `#{pane_ready}` used: `reported` when the pane's worst OSC 7501 record is `idle`, `working` or `blocked`, `output_stable` otherwise. `output_stable` with an empty `#{pane_agent_readiness}` means no output yet, not silence |
 | `#{pane_ready}` | `1` when `#{pane_agent_readiness}` is `idle` |
+| `#{window_agent_state}` | Worst `#{pane_agent_state}` over the window's panes, in the same order; empty when no pane reports |
 
 `#{pane_agent_state}` is the worst state over all of the pane's OSC 7501
 records, in the order blocked, error, working, done, idle. A Claude Code
@@ -450,6 +451,16 @@ main session is `working`. The server samples the state once per 100 ms tick,
 so a state held for less than one tick (a quick `done` then `idle`, or a short
 `blocked`) can be missed. `clear-history` and `respawn-pane` start the pane
 with a fresh terminal, so the value is empty until the program reports again.
+
+The choose-tree overlay (`prefix + w`) shows the same state
+as a glyph after each row: `!` blocked, `✗` error, `●` working, `✓` done and
+`○` idle, with no glyph when nothing is reported. A window row shows the worst
+state of its panes and a session header the worst of its windows, so a blocked
+pane in a collapsed session still marks that session. While the `prefix + w`
+overlay is open it asks every session for its tree again about once a second,
+so a glyph changes within about a second of the server's 100 ms sample. The
+cursor stays on the same row when the list changes. A server older than this
+feature reports no state, and its rows show no glyph.
 
 The `kind`, `progress`, `app`, `title` and `msg` variables describe the same
 record that `#{pane_agent_state}` shows. Their text is cleaned before it is

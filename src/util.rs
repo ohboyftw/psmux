@@ -200,10 +200,16 @@ pub struct CapturePaneJson {
     pub content: String,
 }
 
+/// One pane in `list-tree` output.
 #[derive(Serialize, Deserialize)]
 pub struct PaneInfo {
     pub id: usize,
     pub title: String,
+    /// Worst-of OSC 7501 state (`#{pane_agent_state}`); empty when nothing
+    /// is reported.  `default` keeps an older server's JSON parsing, since
+    /// a failed parse drops that session from choose-tree.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub agent_state: String,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -274,6 +280,7 @@ pub fn list_tree_json(app: &AppState) -> io::Result<String> {
                 out.push(PaneInfo {
                     id: p.id,
                     title: p.title.clone(),
+                    agent_state: crate::agent_state::state_label(p.agent_state.worst()).to_string(),
                 });
             }
             Node::Split { children, .. } => {

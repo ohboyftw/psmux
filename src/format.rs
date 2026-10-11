@@ -1391,6 +1391,9 @@ pub fn expand_var(var: &str, app: &AppState, win_idx: usize) -> String {
             }
         }
         "window_panes" => count_panes(&win.root).to_string(),
+        "window_agent_state" => {
+            crate::agent_state::state_label(crate::tree::window_agent_state(&win.root)).to_string()
+        }
         "window_flags" | "window_raw_flags" => {
             let mut f = String::new();
             if win_idx == real_active_idx(app) {

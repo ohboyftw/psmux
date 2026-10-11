@@ -1021,6 +1021,17 @@ pub fn count_panes(node: &Node) -> usize {
     }
 }
 
+/// Worst OSC 7501 state over a window's panes, read from each pane's
+/// agent-state cache (never the parser).
+pub fn window_agent_state(node: &Node) -> Option<vt100::ProgramState> {
+    match node {
+        Node::Leaf(p) => p.agent_state.worst(),
+        Node::Split { children, .. } => {
+            crate::agent_state::worst_of(children.iter().map(window_agent_state))
+        }
+    }
+}
+
 /// Immutable reference to the active pane (follows path through splits).
 pub fn active_pane<'a>(node: &'a Node, path: &[usize]) -> Option<&'a Pane> {
     match node {
