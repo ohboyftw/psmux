@@ -461,7 +461,7 @@ spawning.
   "method": "context_ready",
   "params": {
     "context_id": "%3",
-    "ready_signal": "idle",
+    "ready_signal": "output_stable",
     "data_version": 2
   }
 }

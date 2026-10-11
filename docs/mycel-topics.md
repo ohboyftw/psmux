@@ -28,16 +28,20 @@ shell.
 (split-window path).
 
 ### psmux/pane/ready
-**Status:** planned, landing in Phase 2 (Task 8).
-**When:** a pane reaches the idle shell prompt — mirrors the JSON-RPC
-`context_ready` push event. Fires once per pane, after first prompt detection.
+**Status:** implemented.
+**When:** a pane has produced output and then been silent for 500 ms — the
+same signal as the JSON-RPC `context_ready` push event
+(`ready_signal: "output_stable"`). This is not prompt detection. Fires once
+per pane.
 **Payload:**
 ```json
 { "pane_id": "%3", "elapsed_ms": 842 }
 ```
-`elapsed_ms` is measured from pane creation to prompt-ready.
-**Source:** `src/backend/dispatcher.rs` (co-publishes alongside the
-`context_ready` RPC push).
+`elapsed_ms` is measured from pane creation to the moment the server saw the
+pane settle.
+**Source:** `src/server/mod.rs` server tick (emits
+`LifecycleEvent::PaneReady` right after the `context_ready` RPC push),
+published by `publish_lifecycle_to_mycel` in `src/control.rs`.
 
 ### psmux/pane/exited
 **When:** the pane's child process has exited and the pane is being pruned

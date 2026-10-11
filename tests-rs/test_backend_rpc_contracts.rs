@@ -38,14 +38,14 @@ fn context_ready_event_wire_shape() {
         method: "context_ready".to_string(),
         params: ContextReadyParams {
             context_id: "%3".to_string(),
-            ready_signal: "idle_prompt".to_string(),
+            ready_signal: "output_stable".to_string(),
             data_version: 7,
         },
     });
 
     assert_eq!(json["method"], "context_ready");
     assert_eq!(json["params"]["context_id"], "%3");
-    assert_eq!(json["params"]["ready_signal"], "idle_prompt");
+    assert_eq!(json["params"]["ready_signal"], "output_stable");
     assert_eq!(json["params"]["data_version"], 7);
 }
 

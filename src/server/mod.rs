@@ -6222,7 +6222,7 @@ pub fn run_server(
                 unregister_and_exit(&mut app);
             }
         }
-        // Check if all windows/panes have exited (throttled to every 250ms)
+        // Check if all windows/panes have exited (throttled to every 100ms)
         if last_reap.elapsed() >= Duration::from_millis(100) {
             last_reap = Instant::now();
             // Drain OSC 99/777 desktop notifications from panes

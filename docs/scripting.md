@@ -51,6 +51,24 @@ psmux send-keys -l "literal text"
 # F1-F12, C-a through C-z (Ctrl+key)
 ```
 
+### Waiting for a pane to settle before typing (`send-keys --wait-ready`)
+
+A freshly spawned shell drops keys that arrive before it has drawn its
+prompt. `--wait-ready` makes the server hold the keys until the target pane
+is ready, then deliver them:
+
+```powershell
+$pane = psmux new-window -d -P -F '#{pane_id}'
+psmux send-keys -t $pane --wait-ready "cargo build" Enter
+```
+
+"Ready" is the same output-silence test as `#{pane_ready}` and
+`wait-pane --ready`: the pane has produced output and then been silent for
+500 ms. It is not prompt detection. The server checks every 100 ms for up to
+30 seconds; if the pane never settles, the keys are sent anyway, so the
+command does not fail on timeout. Name the pane by id (`-t %N`); without `-t`
+the keys go out at once.
+
 ## Pane Information
 
 ```powershell
@@ -153,7 +171,7 @@ psmux capture-pane -t mypane -p | Select-String -NotMatch "__DONE__"
 Other `wait-for` modes:
 
 ```powershell
-psmux wait-for -t mypane --ready            # pane idle ≥500ms (prompt returned)
+psmux wait-for -t mypane --ready            # pane output silent ≥500ms
 psmux wait-for --exit 12345 --timeout 60000 # process PID exits
 psmux wait-for --file out.log --timeout 30000 # filesystem appears
 ```
@@ -181,7 +199,7 @@ psmux wait-pane -t %3
 # With timeout (milliseconds)
 psmux wait-pane -t %3 --timeout 30000
 
-# Wait for the pane to reach an idle prompt (not for child exit)
+# Wait for the pane's output to settle (not for child exit)
 psmux wait-pane -t %3 --ready --timeout 10000
 ```
 
