@@ -3252,7 +3252,12 @@ fn run_main() -> io::Result<()> {
                             .exit_code
                             .map(|c| format!(" exit={c}"))
                             .unwrap_or_default();
-                        println!("  {} {}{}", w.id, status, code);
+                        let agent = ws
+                            .agent_state
+                            .as_deref()
+                            .map(|a| format!(" agent={a}"))
+                            .unwrap_or_default();
+                        println!("  {} {}{}{}", w.id, status, code, agent);
                     }
                 }
             }
