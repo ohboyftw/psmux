@@ -5,6 +5,7 @@
 pub mod agent_state;
 pub mod agent_toast;
 pub mod backend;
+pub mod bus;
 pub mod control;
 pub mod crash;
 pub mod debug_log;
