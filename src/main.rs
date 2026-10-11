@@ -2,6 +2,7 @@
 // suppress dead_code warnings for functions only used by a subset of binaries.
 #![allow(dead_code)]
 
+mod agent_state;
 mod app;
 mod cli;
 mod client;

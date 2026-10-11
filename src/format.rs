@@ -1849,6 +1849,9 @@ pub fn expand_var(var: &str, app: &AppState, win_idx: usize) -> String {
                 String::new()
             }
         }
+        "pane_agent_state" => target_pane()
+            .map(|p| crate::agent_state::state_label(p.agent_state.worst()).to_string())
+            .unwrap_or_default(),
         "pane_task" => {
             if let Some(p) = target_pane() {
                 p.metadata.get("@task").cloned().unwrap_or_default()

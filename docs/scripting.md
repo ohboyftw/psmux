@@ -328,6 +328,16 @@ The `display-message` command supports these variables:
 | `#{pane_exit_code}` | Last child's exit code, empty if still alive |
 | `#{pane_current_path}` | Pane's cwd (synced via `__psmux_sync_cwd` hook) |
 | `#{window_id}` | Numeric window id including `@` prefix |
+| `#{pane_agent}` | The pane's `@agent` option (`set-option -p @agent ...`), not the reported agent state |
+| `#{pane_agent_state}` | State the pane's program reports with OSC 7501: `idle`, `working`, `done`, `blocked` or `error`; empty when nothing is reported or after `state=clear` |
+
+`#{pane_agent_state}` is the worst state over all of the pane's OSC 7501
+records, in the order blocked, error, working, done, idle. A Claude Code
+background task that is `blocked` therefore shows as `blocked` even while the
+main session is `working`. The server samples the state once per 100 ms tick,
+so a state held for less than one tick (a quick `done` then `idle`, or a short
+`blocked`) can be missed. `clear-history` and `respawn-pane` start the pane
+with a fresh terminal, so the value is empty until the program reports again.
 
 ## Advanced Commands
 

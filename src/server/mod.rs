@@ -4790,6 +4790,7 @@ pub fn run_server(
                                         app.history_limit,
                                     );
                                 }
+                                p.agent_state.parser_replaced();
                             }
                         }
                         CtrlReq::SaveBuffer(path) => {
@@ -6227,6 +6228,9 @@ pub fn run_server(
             last_reap = Instant::now();
             // Drain OSC 99/777 desktop notifications from panes
             helpers::drain_notifications(&mut app);
+            // Sample OSC 7501 state before reap_children prunes exited panes.
+            // Transitions have no consumer yet (tickets 04a, 06).
+            let _transitions = helpers::collect_program_status(&mut app);
             // Check wait-pane waiters before reaping (so we can capture exit codes)
             if !app.wait_pane_queue.is_empty() {
                 drain_wait_pane_queue(&mut app);

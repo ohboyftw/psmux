@@ -2,6 +2,7 @@
 // primary binary entry-point in main.rs.
 #![allow(dead_code)]
 
+pub mod agent_state;
 pub mod backend;
 pub mod control;
 pub mod crash;

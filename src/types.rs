@@ -243,6 +243,9 @@ pub struct Pane {
     pub dead_time: Option<u64>,
     /// True after a `context_ready` push event has been sent for this pane.
     pub readiness_notified: bool,
+    /// OSC 7501 agent state sampled by the server tick; read by
+    /// `#{pane_agent_state}` so format expansion never locks `term`.
+    pub agent_state: crate::agent_state::AgentStateCache,
     /// Monotonic instant when this pane was spawned. Used to compute elapsed_ms
     /// in `context_exited` events.
     pub spawn_time: std::time::Instant,
@@ -277,6 +280,8 @@ pub struct Pane {
     /// Supports arbitrary @-prefixed keys for swarm orchestration queries
     /// (e.g. `@agent`, `@task`).  Queryable via `show-options -p @key`
     /// and format variables `#{pane_agent}`, `#{pane_task}`.
+    /// `#{pane_agent}` is this `@agent` value, not the OSC 7501 state
+    /// (that is `#{pane_agent_state}`, from `agent_state`).
     pub metadata: std::collections::HashMap<String, String>,
     /// Bounded queue of DCS passthrough sequences from the child process.
     /// Filled by the PTY reader thread's vt100 callback, drained by the
