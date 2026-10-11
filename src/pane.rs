@@ -129,7 +129,7 @@ pub fn create_window(
             title_locked: false,
             child_pid: wp.child_pid,
             data_version: wp.data_version,
-            last_output_time: std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0)),
+            last_output_time: wp.last_output_time,
             last_title_check: epoch,
             last_infer_title: epoch,
             dead: false,
@@ -452,8 +452,10 @@ pub fn spawn_warm_pane(
         .master
         .try_clone_reader()
         .map_err(|e| io::Error::other(format!("clone reader error: {e}")))?;
-    // Warm panes don't need last_output_time tracking — they get a fresh Arc
-    // when adopted into a Pane struct.
+    // The reader writes last_output_time from the start, and the adopted Pane
+    // takes this same Arc, so #{pane_ready} and wait-pane --ready work there.
+    let last_output_time = std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0));
+    let lot_writer = last_output_time.clone();
     let reply_writer = pair
         .master
         .try_clone_writer()
@@ -464,7 +466,7 @@ pub fn spawn_warm_pane(
         term_reader,
         dv_writer,
         cs_writer,
-        None,
+        Some(lot_writer),
         bell_writer,
     );
     let child_pid = crate::platform::mouse_inject::get_child_pid(&*child);
@@ -478,6 +480,7 @@ pub fn spawn_warm_pane(
         child,
         term,
         data_version,
+        last_output_time,
         cursor_shape,
         bell_pending,
         child_pid,
@@ -782,7 +785,7 @@ pub fn split_active_with_command(
             title_locked: false,
             child_pid: wp.child_pid,
             data_version: wp.data_version,
-            last_output_time: std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0)),
+            last_output_time: wp.last_output_time,
             last_title_check: epoch,
             last_infer_title: epoch,
             dead: false,

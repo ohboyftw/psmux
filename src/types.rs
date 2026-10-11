@@ -318,6 +318,8 @@ pub struct WarmPane {
     pub child: Box<dyn portable_pty::Child>,
     pub term: Arc<Mutex<vt100::Parser>>,
     pub data_version: std::sync::Arc<std::sync::atomic::AtomicU64>,
+    /// Written by the warm reader thread; moved into the adopted `Pane`.
+    pub last_output_time: std::sync::Arc<std::sync::atomic::AtomicU64>,
     pub cursor_shape: std::sync::Arc<std::sync::atomic::AtomicU8>,
     pub bell_pending: std::sync::Arc<std::sync::atomic::AtomicBool>,
     pub child_pid: Option<u32>,
