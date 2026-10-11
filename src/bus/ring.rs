@@ -239,6 +239,48 @@ impl BufferStore {
         out
     }
 
+    /// The current sequence number of every topic matching `pattern`: the
+    /// high-water mark of what a replay taken now could have returned.
+    pub fn sequence_marks(&self, pattern: &str) -> HashMap<String, u64> {
+        self.sequences
+            .iter()
+            .filter(|(t, _)| topic::matches(pattern, t))
+            .map(|(t, s)| (t.clone(), *s))
+            .collect()
+    }
+
+    /// Buffered events matching `pattern` published after `marks` was
+    /// taken (sequence above the topic's mark; topics without a mark are
+    /// new), sorted by time. This is what a client that replayed and then
+    /// subscribed would otherwise have missed.
+    pub fn events_after(
+        &mut self,
+        pattern: &str,
+        marks: &HashMap<String, u64>,
+        now_ms: i64,
+    ) -> Vec<Event> {
+        self.prune(now_ms);
+        let mut topics: Vec<&String> = self
+            .buffers
+            .keys()
+            .filter(|t| topic::matches(pattern, t))
+            .collect();
+        topics.sort();
+        let mut out: Vec<Event> = topics
+            .into_iter()
+            .flat_map(|t| {
+                let mark = marks.get(t).copied().unwrap_or(0);
+                self.buffers[t]
+                    .events
+                    .iter()
+                    .filter(move |e| e.sequence > mark)
+            })
+            .cloned()
+            .collect();
+        out.sort_by_key(|e| e.ts_unix_ms);
+        out
+    }
+
     /// Statistics for every topic with buffered events, sorted by topic.
     pub fn stats(&mut self, now_ms: i64) -> Vec<TopicStats> {
         self.prune(now_ms);
