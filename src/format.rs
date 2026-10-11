@@ -1852,6 +1852,22 @@ pub fn expand_var(var: &str, app: &AppState, win_idx: usize) -> String {
         "pane_agent_state" => target_pane()
             .map(|p| crate::agent_state::state_label(p.agent_state.worst()).to_string())
             .unwrap_or_default(),
+        "pane_agent_kind" => target_pane()
+            .map(|p| crate::agent_state::kind_label(p.agent_state.details().kind).to_string())
+            .unwrap_or_default(),
+        "pane_agent_progress" => target_pane()
+            .and_then(|p| p.agent_state.details().progress)
+            .map(|n| n.to_string())
+            .unwrap_or_default(),
+        "pane_agent_app" => target_pane()
+            .map(|p| p.agent_state.details().app.clone())
+            .unwrap_or_default(),
+        "pane_agent_title" => target_pane()
+            .map(|p| p.agent_state.details().title.clone())
+            .unwrap_or_default(),
+        "pane_agent_msg" => target_pane()
+            .map(|p| p.agent_state.details().msg.clone())
+            .unwrap_or_default(),
         "pane_task" => {
             if let Some(p) = target_pane() {
                 p.metadata.get("@task").cloned().unwrap_or_default()

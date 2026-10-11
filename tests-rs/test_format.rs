@@ -446,3 +446,17 @@ fn pane_agent_state_when_no_pane_then_empty() {
     let app = mock_app();
     assert_eq!(expand_expression("pane_agent_state", &app, 0), "");
 }
+
+#[test]
+fn pane_agent_detail_vars_when_no_pane_then_empty() {
+    let app = mock_app();
+    for var in [
+        "pane_agent_kind",
+        "pane_agent_progress",
+        "pane_agent_app",
+        "pane_agent_title",
+        "pane_agent_msg",
+    ] {
+        assert_eq!(expand_expression(var, &app, 0), "", "{var}");
+    }
+}

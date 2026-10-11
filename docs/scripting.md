@@ -330,6 +330,11 @@ The `display-message` command supports these variables:
 | `#{window_id}` | Numeric window id including `@` prefix |
 | `#{pane_agent}` | The pane's `@agent` option (`set-option -p @agent ...`), not the reported agent state |
 | `#{pane_agent_state}` | State the pane's program reports with OSC 7501: `idle`, `working`, `done`, `blocked` or `error`; empty when nothing is reported or after `state=clear` |
+| `#{pane_agent_kind}` | Why the worst record is blocked: `permission`, `question` or `auth`; empty otherwise |
+| `#{pane_agent_progress}` | Progress 0-100 of the worst record; empty when not reported |
+| `#{pane_agent_app}` | App name of the worst record, inherited from its parent record (Claude Code reports `claude-code`) |
+| `#{pane_agent_title}` | Title of the worst record |
+| `#{pane_agent_msg}` | One-line message of the worst record |
 
 `#{pane_agent_state}` is the worst state over all of the pane's OSC 7501
 records, in the order blocked, error, working, done, idle. A Claude Code
@@ -338,6 +343,15 @@ main session is `working`. The server samples the state once per 100 ms tick,
 so a state held for less than one tick (a quick `done` then `idle`, or a short
 `blocked`) can be missed. `clear-history` and `respawn-pane` start the pane
 with a fresh terminal, so the value is empty until the program reports again.
+
+The `kind`, `progress`, `app`, `title` and `msg` variables describe the same
+record that `#{pane_agent_state}` shows. Their text is cleaned before it is
+shown outside the pane: the parser already rejects control characters, and the
+server also removes bidirectional overrides (U+202A-202E, U+2066-2069) and
+invisible format characters (U+200B-200F, U+FEFF) and keeps at most 200
+characters. When the pane's process exits, `working`, `blocked` and `idle`
+records are dropped and `done` and `error` survive. They stay visible only
+while the dead pane is kept (`remain-on-exit`); otherwise they go with the pane.
 
 ## Advanced Commands
 

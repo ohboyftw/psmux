@@ -590,6 +590,15 @@ pub fn prune_exited(
     result
 }
 
+/// Applies the OSC 7501 process-exit rule to a pane whose child just exited
+/// (working, blocked and idle records go; done and error stay) and refreshes
+/// the pane's cache, since the sequence only moves when something was removed.
+fn end_agent_run(p: &mut Pane) {
+    let Ok(mut term) = p.term.lock() else { return };
+    term.screen_mut().program_status_on_process_exit();
+    p.agent_state.refresh(term.screen());
+}
+
 /// Inner recursive implementation of prune_exited that collects newly-exited
 /// pane info for push event delivery.
 fn prune_exited_inner(
@@ -618,6 +627,7 @@ fn prune_exited_inner(
                         .unwrap_or_default()
                         .as_millis() as u64,
                 );
+                end_agent_run(&mut p);
                 exited.push(ExitedPaneInfo {
                     pane_id: p.id,
                     exit_code,
@@ -641,6 +651,7 @@ fn prune_exited_inner(
                             .unwrap_or_default()
                             .as_millis() as u64,
                     );
+                    end_agent_run(&mut p);
                     exited.push(ExitedPaneInfo {
                         pane_id: p.id,
                         exit_code,
