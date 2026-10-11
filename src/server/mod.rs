@@ -334,6 +334,71 @@ fn drain_wait_pane_queue(app: &mut AppState) {
     });
 }
 
+fn until_view(app: &AppState, pane_id: usize, now_ms: u64) -> Option<crate::wait_until::UntilView> {
+    app.windows.iter().find_map(|win| {
+        let path = crate::tree::find_path_by_id(&win.root, pane_id)?;
+        let p = crate::tree::active_pane(&win.root, &path)?;
+        Some(crate::wait_until::UntilView {
+            dead: p.dead,
+            readiness: p.readiness(now_ms).state,
+            worst: p.agent_state.worst(),
+        })
+    })
+}
+
+/// Sends the waiter its verdict if it has one; true when answered.
+fn answer_until(app: &AppState, w: &crate::wait_until::UntilWaiter) -> bool {
+    let view = until_view(app, w.pane_id, crate::agent_state::now_ms());
+    match crate::wait_until::until_verdict(w.want, view, Instant::now(), w.deadline) {
+        Some(code) => {
+            let _ = w.resp.send(code);
+            true
+        }
+        None => false,
+    }
+}
+
+/// Answer `--until` waiters.  Runs after reap_children, so a pane that
+/// exited this tick is already dead or pruned and its exit rule applied.
+fn drain_wait_until_queue(app: &mut AppState) {
+    let queue = std::mem::take(&mut app.wait_until_queue);
+    let pending: Vec<_> = queue
+        .into_iter()
+        .filter(|w| !answer_until(app, w))
+        .collect();
+    app.wait_until_queue = pending;
+}
+
+/// Answer a new `--until` waiter at once if it can be, else queue it.
+fn enqueue_wait_until(app: &mut AppState, req: CtrlReq) {
+    let CtrlReq::WaitPaneUntil {
+        pane_id,
+        want,
+        deadline,
+        resp,
+    } = req
+    else {
+        return;
+    };
+    let active = || {
+        let win = app.windows.get(app.active_idx)?;
+        crate::tree::active_pane(&win.root, &win.active_path).map(|p| p.id)
+    };
+    let Some(pane_id) = pane_id.or_else(active) else {
+        let _ = resp.send(crate::wait_until::UNTIL_GONE);
+        return;
+    };
+    let waiter = crate::wait_until::UntilWaiter {
+        pane_id,
+        want,
+        deadline,
+        resp,
+    };
+    if !answer_until(app, &waiter) {
+        app.wait_until_queue.push(waiter);
+    }
+}
+
 /// Spawn a single warm server process with the given session name.
 /// Returns true if a new server was spawned, false if one already existed.
 fn spawn_one_warm_server(app: &AppState, warm_session_name: &str) -> bool {
@@ -3634,6 +3699,9 @@ pub fn run_server(
                                 app.wait_pane_queue.push((pane_id, resp));
                             }
                         }
+                        req @ CtrlReq::WaitPaneUntil { .. } => {
+                            enqueue_wait_until(&mut app, req);
+                        }
                         CtrlReq::QueryPaneReady(pane_id, resp) => {
                             let mut dv = 0u64;
                             let mut lot = 0u64;
@@ -6279,6 +6347,9 @@ pub fn run_server(
                 if !app.wait_pane_queue.is_empty() {
                     drain_wait_pane_queue(&mut app);
                 }
+            }
+            if !app.wait_until_queue.is_empty() {
+                drain_wait_until_queue(&mut app);
             }
             // Fire context_ready push events for newly-ready panes
             let now_ms = crate::agent_state::now_ms();

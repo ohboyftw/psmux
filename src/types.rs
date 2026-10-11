@@ -875,6 +875,9 @@ pub struct AppState {
     /// Checked during the reap cycle; when a pane exits, the exit code is sent
     /// and the waiter is removed.
     pub wait_pane_queue: Vec<(usize, mpsc::Sender<i32>)>,
+    /// `--until` waiters, answered on the poll tick after the OSC 7501 sample
+    /// and the reap (`crate::wait_until`).
+    pub wait_until_queue: Vec<crate::wait_until::UntilWaiter>,
     /// Respawn callers awaiting a verdict. A spawn only proves the wrapper
     /// shell started; the payload can die microseconds later. Checked on the
     /// poll tick so the single-threaded event loop never blocks waiting.
@@ -1071,6 +1074,7 @@ impl AppState {
             warm_pool_size: 1,
             pending_plugin_scripts: Vec::new(),
             wait_pane_queue: Vec::new(),
+            wait_until_queue: Vec::new(),
             pending_respawn_replies: Vec::new(),
             resurrect_on_exit: false,
             resurrect_dir: None,
@@ -1390,6 +1394,14 @@ pub enum CtrlReq {
     /// Wait for a pane's child process to exit and return its exit code.
     /// (pane_id, exit_code_sender)
     WaitPane(usize, mpsc::Sender<i32>),
+    /// Queue a `--until` waiter (`crate::wait_until`).  `pane_id` of `None`
+    /// watches the active pane.  Answered with 0 met, 1 timeout, 2 dead or gone.
+    WaitPaneUntil {
+        pane_id: Option<usize>,
+        want: vt100::ProgramState,
+        deadline: Option<std::time::Instant>,
+        resp: mpsc::Sender<i32>,
+    },
     /// Returns a pane's (data_version, last_output_time_ms).  Used by capture
     /// for data_version; readiness callers use `QueryPaneState`.
     QueryPaneReady(usize, mpsc::Sender<(u64, u64)>),

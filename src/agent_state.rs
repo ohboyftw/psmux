@@ -174,6 +174,19 @@ pub fn state_label(state: Option<ProgramState>) -> &'static str {
     }
 }
 
+/// Parses a state name as `wait-pane --until` takes it; the inverse of
+/// [`state_label`] over `idle|working|done|blocked|error`.
+pub fn parse_state(name: &str) -> Option<ProgramState> {
+    match name {
+        "idle" => Some(ProgramState::Idle),
+        "working" => Some(ProgramState::Working),
+        "done" => Some(ProgramState::Done),
+        "blocked" => Some(ProgramState::Blocked),
+        "error" => Some(ProgramState::Error),
+        _ => None,
+    }
+}
+
 /// The `#{pane_agent_kind}` text; empty unless the record is blocked with a kind.
 pub fn kind_label(kind: Option<BlockedKind>) -> &'static str {
     match kind {

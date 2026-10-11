@@ -1221,6 +1221,7 @@ pub(crate) fn handle_connection(
                 // --timeout is milliseconds (matches wait-for semantics).
                 let mut timeout_ms: Option<u64> = None;
                 let mut wait_ready = false;
+                let mut until: Option<&str> = None;
                 let mut i = 0;
                 while i < args.len() {
                     match args[i] {
@@ -1233,11 +1234,22 @@ pub(crate) fn handle_connection(
                         "--ready" => {
                             wait_ready = true;
                         }
+                        "--until" => {
+                            until = Some(args.get(i + 1).copied().unwrap_or(""));
+                            i += 1;
+                        }
                         _ => {}
                     }
                     i += 1;
                 }
-                if let Some(pid) = pane_id {
+                if let (Some(pid), Some(name)) = (pane_id, until) {
+                    let code = crate::agent_state::parse_state(name)
+                        .map_or(crate::wait_until::UNTIL_GONE, |want| {
+                            crate::wait_until::wait_until(&tx, Some(pid), want, timeout_ms)
+                        });
+                    let _ = write!(write_stream, "{}", code);
+                    let _ = write_stream.flush();
+                } else if let Some(pid) = pane_id {
                     if wait_ready {
                         // Poll Pane::readiness until the pane is idle.
                         let deadline = timeout_ms.map(|ms| {
@@ -2084,10 +2096,14 @@ pub(crate) fn handle_connection(
                     .find(|w| w[0] == "--timeout")
                     .and_then(|w| w[1].parse().ok())
                     .unwrap_or(3_600_000); // default 1 hour
+                let until: Option<&str> = args.windows(2).find(|w| w[0] == "--until").map(|w| w[1]);
 
                 // If any new-style condition flag is set, use the wait_for executors.
-                let use_executor =
-                    file_path.is_some() || exit_pid.is_some() || output_pat.is_some() || ready_mode;
+                let use_executor = file_path.is_some()
+                    || exit_pid.is_some()
+                    || output_pat.is_some()
+                    || ready_mode
+                    || until.is_some();
 
                 if use_executor {
                     let outcome: crate::wait_for::WaitOutcome = if let Some(pid) = exit_pid {
@@ -2139,6 +2155,16 @@ pub(crate) fn handle_connection(
                             }
                             Err(e) => crate::wait_for::WaitOutcome::Error {
                                 reason: format!("invalid regex: {e}"),
+                            },
+                        }
+                    } else if let Some(name) = until {
+                        let target_pane_id = if pane_is_id { target_pane } else { None };
+                        match crate::agent_state::parse_state(name) {
+                            Some(want) => {
+                                crate::wait_until::wait_state(&tx, target_pane_id, want, timeout_ms)
+                            }
+                            None => crate::wait_for::WaitOutcome::Error {
+                                reason: format!("unknown state: {name}"),
                             },
                         }
                     } else {

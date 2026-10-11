@@ -22,6 +22,8 @@ pub enum WaitCondition {
     /// state, else at least one byte of output then 500 ms of silence.  This
     /// is not prompt detection.
     Ready,
+    /// Wait for the pane's agent state; see [`crate::wait_until`] for the rule.
+    State { state: vt100::ProgramState },
 }
 
 /// The result of a `wait-for` operation.
@@ -41,8 +43,9 @@ pub enum WaitOutcome {
 impl WaitCondition {
     /// Parse a wait condition from CLI/RPC arguments.
     ///
-    /// - `kind`: one of `"exit"`, `"file"`, `"output"`, `"ready"`
-    /// - `arg`: the kind-specific argument (PID, path, or regex pattern)
+    /// - `kind`: one of `"exit"`, `"file"`, `"output"`, `"ready"`, `"state"`
+    /// - `arg`: the kind-specific argument (PID, path, regex pattern, or a
+    ///   state name `idle|working|blocked|done|error`)
     /// - `_opts`: reserved for future per-kind options
     pub fn parse(kind: &str, arg: Option<&str>, _opts: Option<&str>) -> Result<Self, String> {
         match kind {
@@ -65,6 +68,13 @@ impl WaitCondition {
                 Ok(Self::Output { pattern: re })
             }
             "ready" => Ok(Self::Ready),
+            "state" => {
+                let name = arg.ok_or("state requires idle|working|blocked|done|error")?;
+                let state = crate::agent_state::parse_state(name).ok_or_else(|| {
+                    format!("unknown state: {name} (expected idle|working|blocked|done|error)")
+                })?;
+                Ok(Self::State { state })
+            }
             other => Err(format!("unknown wait condition: {other}")),
         }
     }
@@ -77,6 +87,13 @@ impl fmt::Display for WaitCondition {
             Self::File { path } => write!(f, "file({})", path.display()),
             Self::Output { pattern } => write!(f, "output(/{}/)", pattern.as_str()),
             Self::Ready => write!(f, "ready"),
+            Self::State { state } => {
+                write!(
+                    f,
+                    "state({})",
+                    crate::agent_state::state_label(Some(*state))
+                )
+            }
         }
     }
 }

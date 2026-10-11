@@ -194,6 +194,7 @@ Other `wait-for` modes:
 
 ```powershell
 psmux wait-for -t mypane --ready            # pane idle (#{pane_ready})
+psmux wait-for -t %3 --until blocked --timeout 600000 # agent state, see below
 psmux wait-for --exit 12345 --timeout 60000 # process PID exits
 psmux wait-for --file out.log --timeout 30000 # filesystem appears
 ```
@@ -223,7 +224,41 @@ psmux wait-pane -t %3 --timeout 30000
 
 # Wait for the pane to be idle, as #{pane_ready} (not for child exit)
 psmux wait-pane -t %3 --ready --timeout 10000
+
+# Wait for the pane's agent to report a state (OSC 7501)
+psmux wait-pane -t %3 --until blocked --timeout 600000
 ```
+
+### Waiting for an agent state (`--until`)
+
+`wait-pane -t %N --until STATE` and `wait-for -t %N --until STATE` wait
+for the pane's agent state, where STATE is one of `idle`, `working`,
+`blocked`, `done` or `error`. Exit codes: `0` the state was seen, `1`
+the `--timeout` passed first, `2` the pane is dead or gone (or STATE is
+not one of the five). `wait-for --json` gives `{kind:"error",reason:"pane
+is dead or gone"}` for `2`.
+
+- `--until idle` is `--ready`: the same rule as `#{pane_ready}`, a reported
+  `idle` or 500 ms of output silence. `--until` and `--ready` cannot be
+  combined. One difference: on a dead pane `--until idle` returns `2`,
+  while `--ready` still judges the dead pane by its silence.
+- `--until working|blocked|done|error` waits for a **reported** state: the
+  pane's worst-of OSC 7501 record, as `#{pane_agent_state}` shows it. Output
+  alone never counts as `working`, so a pane whose program does not report
+  never satisfies these, and a command that prints and exits returns `2`.
+  A `blocked` background task (a child record) satisfies `--until blocked`
+  even while the main session is `working`.
+- The wait is level-triggered: a pane already in STATE returns `0` at once.
+  It is meant for states that persist. The server checks once per 100 ms
+  tick, so a state held for less than that can be missed.
+- A dead pane can only satisfy `done` or `error`, the two states that
+  survive process exit, and only while `remain-on-exit` keeps the pane.
+  Without it, `done`/`error` vanish with the pane and the wait returns `2`.
+- `wait-pane --until` without `--timeout` blocks until the state is seen
+  or the pane dies, like `wait-pane --ready`. `wait-for` defaults to a
+  one-hour timeout.
+- Name the pane by id (`%N`, or `sess:.%N` for another session). `wait-for`
+  without an id target watches the active pane; `wait-pane` needs one.
 
 Use `wait-pane` when you spawned a command via `new-window --`,
 `split-window --`, or `exec` and want to block the CLI until it
@@ -231,7 +266,7 @@ finishes. Use `wait-for --output REGEX` when you need to detect an
 arbitrary marker in the screen buffer without the child exiting.
 
 For agents using JSON-RPC, `CustomPaneBackend.wait_for` exposes the same
-four modes. For simple "fire-and-forget-with-result", `psmux run -- cmd`
+five modes (`state` is `--until`). For simple "fire-and-forget-with-result", `psmux run -- cmd`
 atomically combines send + wait + capture, returning exit code.
 
 Stale-marker caveat: if the same script runs against multiple panes,

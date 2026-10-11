@@ -214,12 +214,12 @@ pub struct ExecParams {
 
 #[derive(Debug, Deserialize)]
 pub struct WaitForParams {
-    /// One of: `"exit"`, `"file"`, `"output"`, `"ready"`.
+    /// One of: `"exit"`, `"file"`, `"output"`, `"ready"`, `"state"`.
     pub condition: String,
-    /// Condition-specific argument (PID for exit, path for file, regex for output).
-    /// Ignored for `ready`.
+    /// Condition-specific argument (PID for exit, path for file, regex for
+    /// output, `idle|working|blocked|done|error` for state).  Ignored for `ready`.
     pub arg: Option<String>,
-    /// `%N`-style pane context for `output` / `ready` modes.
+    /// `%N`-style pane context for `output` / `ready` / `state` modes.
     pub pane_id: Option<String>,
     /// Wait ceiling. Defaults to 1 hour.
     pub timeout_ms: Option<u64>,

@@ -34,6 +34,7 @@ mod tree;
 mod types;
 mod util;
 mod wait_for;
+mod wait_until;
 mod warm_reap;
 mod window_ops;
 
@@ -142,6 +143,21 @@ fn check_target_resolvable(target: &str) -> io::Result<()> {
         io::ErrorKind::NotFound,
         format!("{prefix}{target}"),
     ))
+}
+
+/// Exit 2 with a usage line on a bad `--until` state or `--until` with `--ready`.
+fn check_until_arg(cmd: &str, until: Option<&str>, ready: bool) {
+    let Some(name) = until else {
+        return;
+    };
+    if agent_state::parse_state(name).is_none() {
+        eprintln!("{cmd}: --until expects idle|working|blocked|done|error, got '{name}'");
+        std::process::exit(2);
+    }
+    if ready {
+        eprintln!("{cmd}: --until and --ready cannot be combined (--ready is --until idle)");
+        std::process::exit(2);
+    }
 }
 
 /// `psmux debug spawns`: print how many processes the target server has
@@ -2817,6 +2833,7 @@ fn run_main() -> io::Result<()> {
             let mut exit_pid: Option<String> = None;
             let mut output_pat: Option<String> = None;
             let mut ready_mode = false;
+            let mut until: Option<String> = None;
             let mut json_mode = false;
             let mut timeout: Option<String> = None;
             let mut target: Option<String> = None;
@@ -2853,6 +2870,17 @@ fn run_main() -> io::Result<()> {
                             i += 1;
                         }
                     }
+                    // Must consume its value here, or the catch-all below
+                    // takes `blocked` as a channel name.
+                    "--until" => {
+                        until = Some(
+                            cmd_args
+                                .get(i + 1)
+                                .map(|s| s.to_string())
+                                .unwrap_or_default(),
+                        );
+                        i += 1;
+                    }
                     "--timeout" => {
                         if let Some(t) = cmd_args.get(i + 1) {
                             timeout = Some(t.to_string());
@@ -2867,8 +2895,12 @@ fn run_main() -> io::Result<()> {
                 i += 1;
             }
 
-            let use_executor =
-                file_path.is_some() || exit_pid.is_some() || output_pat.is_some() || ready_mode;
+            check_until_arg("wait-for", until.as_deref(), ready_mode);
+            let use_executor = file_path.is_some()
+                || exit_pid.is_some()
+                || output_pat.is_some()
+                || ready_mode
+                || until.is_some();
 
             if use_executor {
                 let mut cmd = "wait-for".to_string();
@@ -2887,6 +2919,9 @@ fn run_main() -> io::Result<()> {
                 }
                 if ready_mode {
                     cmd.push_str(" --ready");
+                }
+                if let Some(ref u) = until {
+                    cmd.push_str(&format!(" --until {}", u));
                 }
                 if json_mode {
                     cmd.push_str(" --json");
@@ -3215,6 +3250,7 @@ fn run_main() -> io::Result<()> {
             // --timeout is milliseconds (matches wait-for).
             let mut timeout_ms: Option<u64> = None;
             let mut wait_ready = false;
+            let mut until: Option<String> = None;
             let mut i = 1;
 
             while i < cmd_args.len() {
@@ -3224,6 +3260,15 @@ fn run_main() -> io::Result<()> {
                             target = Some(v.to_string());
                             i += 1;
                         }
+                    }
+                    "--until" => {
+                        until = Some(
+                            cmd_args
+                                .get(i + 1)
+                                .map(|s| s.to_string())
+                                .unwrap_or_default(),
+                        );
+                        i += 1;
                     }
                     "--timeout" => {
                         if let Some(v) = cmd_args.get(i + 1) {
@@ -3239,10 +3284,14 @@ fn run_main() -> io::Result<()> {
                 i += 1;
             }
 
+            check_until_arg("wait-pane", until.as_deref(), wait_ready);
             if let Some(t) = target {
                 let mut cmd = format!("wait-pane -t {}", t);
                 if wait_ready {
                     cmd.push_str(" --ready");
+                }
+                if let Some(ref u) = until {
+                    cmd.push_str(&format!(" --until {}", u));
                 }
                 if let Some(ms) = timeout_ms {
                     cmd.push_str(&format!(" --timeout {}", ms));

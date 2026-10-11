@@ -837,6 +837,9 @@ fn handle_wait_for(
             };
             crate::wait_for::wait_output(&pattern, screen_fn, timeout_ms, 50)
         }
+        crate::wait_for::WaitCondition::State { state } => {
+            crate::wait_until::wait_state(tx, pane_id, state, timeout_ms)
+        }
         crate::wait_for::WaitCondition::Ready => {
             // Poll #{pane_ready} via DisplayMessage every 250 ms.
             let start = std::time::Instant::now();
