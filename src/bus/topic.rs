@@ -2,9 +2,12 @@
 //! delivery and replay.
 //!
 //! Rules (MQTT 3.1.1 section 4.7, plus one mycel compatibility rule):
-//! - Levels are separated by `/`. One trailing `/` is ignored, so `a/b/`
-//!   names the same topic as `a/b` (as the C++ server did). A leading `/`
-//!   gives an empty first level, so `/a` is not `a`.
+//! - Levels are separated by `/`. Trailing `/`s are ignored, so `a/b/`
+//!   names the same topic as `a/b` (the C++ server ignored one). Validation
+//!   returns this canonical form, without trailing `/`s, and every buffer,
+//!   sequence counter and subscription must be keyed by it, so `a/b/` and
+//!   `a/b` share one history. A string of only `/`s is empty. A leading
+//!   `/` gives an empty first level, so `/a` is not `a`.
 //! - `+` matches exactly one level (an empty level too). `#` matches zero
 //!   or more trailing levels, so `canopy/#` matches `canopy`.
 //! - Wildcards must be whole levels and `#` must be the last level;
@@ -52,13 +55,14 @@ impl fmt::Display for TopicError {
 
 impl std::error::Error for TopicError {}
 
-/// Split into levels: one trailing `/` is dropped, empty levels elsewhere
-/// are kept, and `""` has no levels.
-pub fn split_levels(s: &str) -> Vec<&str> {
-    if s.is_empty() {
-        return Vec::new();
-    }
-    s.strip_suffix('/').unwrap_or(s).split('/').collect()
+/// The canonical form of a topic or pattern: `s` without trailing `/`s.
+pub fn canonical(s: &str) -> &str {
+    s.trim_end_matches('/')
+}
+
+/// Levels of a canonical topic or pattern. Empty levels are kept.
+fn levels(canonical: &str) -> std::str::Split<'_, char> {
+    canonical.split('/')
 }
 
 /// True for `$`-prefixed topics such as `$mycel/clients/connected`.
@@ -66,60 +70,62 @@ pub fn is_system_topic(topic: &str) -> bool {
     topic.starts_with('$')
 }
 
-/// Check a concrete topic used in a publish.
-pub fn validate_topic(topic: &str) -> Result<(), TopicError> {
-    check_common(topic)?;
+/// Check a concrete topic used in a publish and return its canonical form.
+pub fn validate_topic(topic: &str) -> Result<&str, TopicError> {
+    let topic = check_common(topic)?;
     if topic.contains(['+', '#']) {
         return Err(TopicError::WildcardInTopic);
     }
-    Ok(())
+    Ok(topic)
 }
 
-/// Check a subscribe, unsubscribe or replay pattern.
-pub fn validate_pattern(pattern: &str) -> Result<(), TopicError> {
-    check_common(pattern)?;
-    let levels = split_levels(pattern);
-    for (i, level) in levels.iter().enumerate() {
+/// Check a subscribe, unsubscribe or replay pattern and return its
+/// canonical form.
+pub fn validate_pattern(pattern: &str) -> Result<&str, TopicError> {
+    let pattern = check_common(pattern)?;
+    let mut rest = levels(pattern).peekable();
+    while let Some(level) = rest.next() {
         let wild = level.contains(['+', '#']);
-        if wild && *level != "+" && *level != "#" {
+        if wild && level != "+" && level != "#" {
             return Err(TopicError::PartialWildcard);
         }
-        if *level == "#" && i + 1 != levels.len() {
+        if level == "#" && rest.peek().is_some() {
             return Err(TopicError::HashNotLast);
         }
     }
-    Ok(())
+    Ok(pattern)
 }
 
-fn check_common(s: &str) -> Result<(), TopicError> {
-    if s.is_empty() {
-        return Err(TopicError::Empty);
-    }
+fn check_common(s: &str) -> Result<&str, TopicError> {
     if s.len() > MAX_TOPIC_LEN {
         return Err(TopicError::TooLong);
     }
     if s.contains('\0') {
         return Err(TopicError::Nul);
     }
-    Ok(())
+    match canonical(s) {
+        "" => Err(TopicError::Empty),
+        c => Ok(c),
+    }
 }
 
-/// Does `topic` match `pattern`? Both are assumed valid.
+/// Does `topic` match `pattern`? Both are assumed valid; trailing `/`s are
+/// ignored. Iterative, so a topic with tens of thousands of levels cannot
+/// overflow the stack.
 pub fn matches(pattern: &str, topic: &str) -> bool {
-    let p = split_levels(pattern);
-    if is_system_topic(topic) && matches!(p.first(), Some(&"+") | Some(&"#")) {
+    let (pattern, topic) = (canonical(pattern), canonical(topic));
+    let first = levels(pattern).next();
+    if is_system_topic(topic) && matches!(first, Some("+" | "#")) {
         return false;
     }
-    levels_match(&p, &split_levels(topic))
-}
-
-fn levels_match(pattern: &[&str], topic: &[&str]) -> bool {
-    match (pattern.split_first(), topic.split_first()) {
-        (Some((&"#", _)), _) => true,
-        (None, None) => true,
-        (Some((&"+", p_rest)), Some((_, t_rest))) => levels_match(p_rest, t_rest),
-        (Some((p, p_rest)), Some((t, t_rest))) => p == t && levels_match(p_rest, t_rest),
-        _ => false,
+    let (mut p, mut t) = (levels(pattern), levels(topic));
+    loop {
+        match (p.next(), t.next()) {
+            (Some("#"), _) | (None, None) => return true,
+            (Some("+"), Some(_)) => {}
+            (Some(pl), Some(tl)) if pl == tl => {}
+            _ => return false,
+        }
     }
 }
 

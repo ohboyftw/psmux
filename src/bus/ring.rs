@@ -8,7 +8,15 @@
 //!   the newest buffered timestamp), so sorting replay output by time with
 //!   a stable sort keeps each topic in sequence order.
 //! - `max_events` keeps the oldest N events of the sorted result, which is
-//!   deterministic. Topics whose buffers expire to empty are dropped.
+//!   deterministic. MCP callers asking for "the last 100" get the oldest
+//!   100 in the window; this matches C++ and is left for M2/M3 to revisit.
+//!   Topics whose buffers expire to empty are dropped.
+//! - Per-topic sequence numbers live in [`BufferStore::next_sequence`]'s
+//!   own map, which expiry never touches, so a topic that ages out and is
+//!   published again keeps counting up instead of restarting at 1.
+//!   Dedup by `(topic, sequence)` across replay and live delivery relies
+//!   on this. The map holds one entry per topic ever published.
+//! - Keys are canonical topics (see [`topic::validate_topic`]).
 
 use std::collections::{HashMap, VecDeque};
 
@@ -38,6 +46,28 @@ impl Default for RingConfig {
     }
 }
 
+/// Events evicted by one push, split by cause.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct Evicted {
+    /// Dropped because the buffer was full. Only these are an overflow
+    /// worth announcing on `$mycel/server/buffer_overflow`.
+    pub by_count: usize,
+    /// Dropped because they outlived the TTL: ordinary ageing, not an
+    /// overflow.
+    pub by_ttl: usize,
+}
+
+/// What a push actually stored.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Stored {
+    /// The timestamp stored, after clamping to the newest buffered one.
+    /// The live fan-out copy must carry this value, so live and replayed
+    /// copies of one `(topic, sequence)` agree.
+    pub ts_unix_ms: i64,
+    /// Events evicted to make room or by TTL.
+    pub evicted: Evicted,
+}
+
 /// History of one concrete topic, oldest first.
 #[derive(Debug)]
 pub struct RingBuffer {
@@ -56,20 +86,24 @@ impl RingBuffer {
         }
     }
 
-    /// Append an event and evict by count and TTL. Returns how many events
-    /// were evicted.
-    pub fn push(&mut self, mut event: Event, now_ms: i64) -> usize {
+    /// Append an event and evict by count and TTL.
+    pub fn push(&mut self, mut event: Event, now_ms: i64) -> Stored {
         if let Some(newest) = self.events.back() {
             event.ts_unix_ms = event.ts_unix_ms.max(newest.ts_unix_ms);
         }
+        let ts_unix_ms = event.ts_unix_ms;
         self.events.push_back(event);
         self.total_pushed += 1;
-        let mut evicted = 0;
+        let mut by_count = 0;
         while self.events.len() > self.cfg.max_events {
             self.events.pop_front();
-            evicted += 1;
+            by_count += 1;
         }
-        evicted + self.expire(now_ms)
+        let by_ttl = self.expire(now_ms);
+        Stored {
+            ts_unix_ms,
+            evicted: Evicted { by_count, by_ttl },
+        }
     }
 
     /// Drop events older than `now_ms - ttl`. Returns how many were dropped.
@@ -95,7 +129,9 @@ impl RingBuffer {
         self.events.is_empty()
     }
 
-    /// Events ever pushed, evicted ones included.
+    /// Events pushed into this buffer, evicted ones included. Resets when
+    /// the buffer expires and is dropped; use
+    /// [`BufferStore::next_sequence`] for sequence numbers.
     pub fn total_pushed(&self) -> u64 {
         self.total_pushed
     }
@@ -136,11 +172,13 @@ pub struct TopicStats {
     pub newest_ts: i64,
 }
 
-/// One [`RingBuffer`] per concrete topic, created on first store.
+/// One [`RingBuffer`] per concrete topic, created on first store, plus
+/// the per-topic sequence counters.
 #[derive(Debug, Default)]
 pub struct BufferStore {
     cfg: RingConfig,
     buffers: HashMap<String, RingBuffer>,
+    sequences: HashMap<String, u64>,
 }
 
 impl BufferStore {
@@ -149,12 +187,23 @@ impl BufferStore {
         BufferStore {
             cfg,
             buffers: HashMap::new(),
+            sequences: HashMap::new(),
         }
     }
 
-    /// Buffer an event under its topic. Returns how many events of that
-    /// topic were evicted.
-    pub fn store(&mut self, event: Event, now_ms: i64) -> usize {
+    /// The next sequence number for `topic`, starting at 1. Never reset,
+    /// not even when the topic's buffer expires.
+    pub fn next_sequence(&mut self, topic: &str) -> u64 {
+        if let Some(seq) = self.sequences.get_mut(topic) {
+            *seq += 1;
+            return *seq;
+        }
+        self.sequences.insert(topic.to_owned(), 1);
+        1
+    }
+
+    /// Buffer an event under its (canonical) topic.
+    pub fn store(&mut self, event: Event, now_ms: i64) -> Stored {
         let cfg = self.cfg;
         self.buffers
             .entry(event.topic.clone())

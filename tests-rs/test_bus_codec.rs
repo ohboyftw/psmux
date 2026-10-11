@@ -268,6 +268,35 @@ fn encode_rejects_oversized_envelope() {
 }
 
 #[test]
+fn publish_that_fits_can_become_an_event_that_does_not() {
+    let payload = vec![0; MAX_FRAME_SIZE - 16];
+    let publish = env(Msg::Publish(Publish {
+        topic: "t".into(),
+        payload: payload.clone(),
+        ts_unix_ms: 0,
+        metadata: HashMap::new(),
+    }));
+    let event = env(Msg::Event(Event {
+        topic: "t".into(),
+        payload,
+        ts_unix_ms: 1_700_000_000_123,
+        sequence: 1,
+        publisher: "psmux@HOST".into(),
+        ..Default::default()
+    }));
+    assert!(fits_in_frame(&publish));
+    assert!(!fits_in_frame(&event));
+}
+
+#[test]
+fn announced_body_longer_than_the_stream_is_io_error() {
+    let mut bytes = (MAX_FRAME_SIZE as u32).to_be_bytes().to_vec();
+    bytes.extend([0u8; 8]);
+    let err = read_frame(&mut Cursor::new(bytes)).unwrap_err();
+    assert!(matches!(err, FrameError::Io(e) if e.kind() == std::io::ErrorKind::UnexpectedEof));
+}
+
+#[test]
 fn invalid_protobuf_is_decode_error_and_stream_stays_in_sync() {
     let mut bytes = vec![0, 0, 0, 2, 0xff, 0xff];
     bytes.extend(event_frame());
@@ -288,6 +317,10 @@ fn write_frame_matches_encode_frame() {
 }
 
 // ── Golden wire bytes (field numbers of proto/mycel.proto are the contract) ──
+// These bytes were worked out by hand from the protobuf encoding rules, not
+// captured from the C++ encoder, so they test 12.6 #15 only for these
+// single-field and single-map-entry shapes. Frames captured from mycel.exe
+// would make literal fixtures.
 
 fn body(msg: Msg) -> Vec<u8> {
     let frame = encode_frame(&env(msg)).unwrap();

@@ -3,8 +3,9 @@
 //! Unlike the C++ trie: subscribing to the same pattern twice is one
 //! subscription, unsubscribe removes only the named pattern, and a
 //! connection with overlapping patterns receives each event once.
-//! Patterns are matched with [`super::topic::matches`]; validate them
-//! before they reach this table.
+//! Patterns are matched with [`super::topic::matches`]. Store only the
+//! canonical form returned by [`super::topic::validate_pattern`], so `a/b`
+//! and `a/b/` are one subscription and either unsubscribes it.
 
 use super::topic;
 

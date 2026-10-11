@@ -74,8 +74,32 @@ fn push_reports_evicted_count() {
         ttl_ms: 0,
     };
     let mut r = RingBuffer::new(cfg);
-    assert_eq!(r.push(ev("t", 1, 1), 1), 0);
-    assert_eq!(r.push(ev("t", 2, 2), 2), 1);
+    assert_eq!(r.push(ev("t", 1, 1), 1).evicted.by_count, 0);
+    assert_eq!(r.push(ev("t", 2, 2), 2).evicted.by_count, 1);
+}
+
+#[test]
+fn ttl_expiry_is_not_counted_as_overflow() {
+    let cfg = RingConfig {
+        max_events: 100,
+        ttl_ms: 5000,
+    };
+    let mut r = ring_with(cfg, &[1000, 2000]);
+    let evicted = r.push(ev("t", 9000, 3), 9000).evicted;
+    assert_eq!(
+        evicted,
+        Evicted {
+            by_count: 0,
+            by_ttl: 2
+        }
+    );
+}
+
+#[test]
+fn push_returns_the_clamped_timestamp_it_stored() {
+    let mut r = RingBuffer::new(NO_TTL);
+    r.push(ev("t", 5000, 1), 5000);
+    assert_eq!(r.push(ev("t", 4000, 2), 5000).ts_unix_ms, 5000);
 }
 
 #[test]
@@ -260,11 +284,48 @@ fn store_reports_evictions_for_its_topic() {
         ttl_ms: 0,
     };
     let mut s = BufferStore::new(cfg);
-    let evicted: Vec<usize> = (1..=4).map(|i| s.store(ev("a", i, i as u64), i)).collect();
+    let evicted: Vec<usize> = (1..=4)
+        .map(|i| s.store(ev("a", i, i as u64), i).evicted.by_count)
+        .collect();
     assert_eq!(evicted, [0, 0, 1, 1]);
 }
 
+#[test]
+fn sequences_count_per_topic_from_one() {
+    let mut s = BufferStore::new(NO_TTL);
+    let got: Vec<u64> = ["a", "b", "a"].iter().map(|t| s.next_sequence(t)).collect();
+    assert_eq!(got, [1, 1, 2]);
+}
+
+#[test]
+fn sequence_keeps_counting_after_the_topic_expires() {
+    let cfg = RingConfig {
+        max_events: 10,
+        ttl_ms: 1000,
+    };
+    let mut s = BufferStore::new(cfg);
+    let first = s.next_sequence("a");
+    s.store(ev("a", 1000, first), 1000);
+    assert!(s.stats(5000).is_empty());
+    assert_eq!(s.next_sequence("a"), first + 1);
+}
+
+#[test]
+fn store_replay_drops_events_past_the_ttl() {
+    let cfg = RingConfig {
+        max_events: 10,
+        ttl_ms: 1000,
+    };
+    let mut s = BufferStore::new(cfg);
+    s.store(ev("a", 1000, 1), 1000);
+    s.store(ev("a", 4500, 2), 4500);
+    assert_eq!(seqs(&s.replay("a", 0, 0, 5000)), [("a".to_string(), 2)]);
+}
+
 // ── overflow storm guard (12.6 #12) ──
+// Only the predicate is tested here. That sustained eviction does not
+// recurse through $mycel/server/buffer_overflow is owed by M2's
+// publish-path tests.
 
 #[test]
 fn evictions_from_system_topics_are_never_reported() {
@@ -274,7 +335,9 @@ fn evictions_from_system_topics_are_never_reported() {
     };
     let mut s = BufferStore::new(cfg);
     let topic = "$mycel/server/buffer_overflow";
-    let evicted: usize = (1..=10).map(|i| s.store(ev(topic, i, i as u64), i)).sum();
+    let evicted: usize = (1..=10)
+        .map(|i| s.store(ev(topic, i, i as u64), i).evicted.by_count)
+        .sum();
     assert_eq!(evicted, 8);
     assert!(!overflow_reportable(topic));
     assert!(overflow_reportable("psmux/pane/created"));

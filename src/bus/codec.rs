@@ -7,6 +7,19 @@
 //!   discarded its buffer and kept reading garbage).
 //! - An undecodable body is [`FrameError::Decode`]. The body was consumed,
 //!   so the stream is still in sync and the caller may skip the frame.
+//!
+//! [`read_frame`] cannot be resumed: on any [`FrameError::Io`] (including
+//! `TimedOut` or `WouldBlock` from a read timeout) the bytes already read
+//! are lost and the stream is out of sync, so the caller must close the
+//! connection. Use read timeouts with this codec only where a timeout
+//! means close. The body buffer grows as bytes arrive, so a bare length
+//! prefix does not reserve 16 MiB up front.
+//!
+//! A `Publish` that fits in a frame can still become an `Event` that does
+//! not (the server adds publisher, sequence and timestamp). The bus must
+//! check the `Event` envelope with [`fits_in_frame`] before storing it and
+//! reject the `Publish` otherwise, so fan-out never meets
+//! [`FrameError::TooLarge`].
 
 use std::fmt;
 use std::io::{self, Read, Write};
@@ -51,6 +64,11 @@ impl From<io::Error> for FrameError {
     }
 }
 
+/// True when `env` encodes to at most [`MAX_FRAME_SIZE`] bytes.
+pub fn fits_in_frame(env: &Envelope) -> bool {
+    env.encoded_len() <= MAX_FRAME_SIZE
+}
+
 /// Encode an envelope into one complete frame (prefix included), so a
 /// fan-out can encode once and write the same bytes to every subscriber.
 pub fn encode_frame(env: &Envelope) -> Result<Vec<u8>, FrameError> {
@@ -72,7 +90,8 @@ pub fn write_frame<W: Write>(w: &mut W, env: &Envelope) -> Result<(), FrameError
 }
 
 /// Read one frame. Returns `Ok(None)` on a clean end of stream at a frame
-/// boundary; a stream that ends inside a frame is an `Io` error.
+/// boundary; a stream that ends inside a frame is an `Io` error. Any `Io`
+/// error leaves the stream out of sync: close the connection.
 pub fn read_frame<R: Read>(r: &mut R) -> Result<Option<Envelope>, FrameError> {
     let mut prefix = [0u8; 4];
     if !read_prefix(r, &mut prefix)? {
@@ -82,8 +101,11 @@ pub fn read_frame<R: Read>(r: &mut R) -> Result<Option<Envelope>, FrameError> {
     if len > MAX_FRAME_SIZE {
         return Err(FrameError::TooLarge(len));
     }
-    let mut body = vec![0u8; len];
-    r.read_exact(&mut body)?;
+    let mut body = Vec::new();
+    r.take(len as u64).read_to_end(&mut body)?;
+    if body.len() < len {
+        return Err(FrameError::Io(io::ErrorKind::UnexpectedEof.into()));
+    }
     Envelope::decode(body.as_slice())
         .map(Some)
         .map_err(FrameError::Decode)

@@ -91,3 +91,20 @@ fn reply_after_events_stays_behind_them() {
     q.push_event(2);
     assert_eq!(drain(&mut q), [1, 100, 2]);
 }
+
+#[test]
+fn zero_capacity_drops_every_event() {
+    let mut q = OutboundQueue::new(0);
+    assert!(q.push_event(1));
+    q.push_control(2);
+    assert_eq!((drain(&mut q), q.dropped()), (vec![2], 1));
+}
+
+#[test]
+fn queued_control_counts_only_undroppable_frames() {
+    let mut q = OutboundQueue::new(10);
+    q.push_event(1);
+    q.push_control(2);
+    q.push_control(3);
+    assert_eq!((q.queued_control(), q.len()), (2, 3));
+}

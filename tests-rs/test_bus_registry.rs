@@ -35,12 +35,31 @@ fn duplicate_client_ids_are_separate_records() {
 }
 
 #[test]
-fn second_hello_replaces_the_record() {
+fn second_hello_updates_the_identity_in_place() {
     // C++ orphaned the first record of a double-Hello connection.
     let mut r = registry(&[(1, "first")]);
-    r.insert(1, ClientRecord::new(&hello("second"), 2000, 10));
+    apply_hello(&mut r, 1, &hello("second"), 2000, 10);
     assert_eq!(r.len(), 1);
     assert_eq!(r[&1].client_id, "second");
+    assert_eq!(r[&1].connected_at, 1000);
+}
+
+#[test]
+fn second_hello_keeps_queued_frames_and_counters() {
+    let mut r = registry(&[(1, "first")]);
+    let rec = r.get_mut(&1).unwrap();
+    rec.queue.push_control(7);
+    rec.events_published = 3;
+    apply_hello(&mut r, 1, &hello("second"), 2000, 10);
+    assert_eq!(r[&1].events_published, 3);
+    assert_eq!(r.get_mut(&1).unwrap().queue.pop(), Some(7));
+}
+
+#[test]
+fn first_hello_creates_a_record() {
+    let mut r: Registry<u32> = Registry::new();
+    apply_hello(&mut r, 4, &hello("a"), 1000, 10);
+    assert_eq!(r[&4].client_id, "a");
 }
 
 #[test]

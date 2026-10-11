@@ -25,7 +25,7 @@ const SYSTEM_TOPICS: &[&str] = &[
 #[test]
 fn every_known_topic_is_valid() {
     for t in PSMUX_TOPICS.iter().chain(SYSTEM_TOPICS) {
-        assert_eq!(validate_topic(t), Ok(()), "{t}");
+        assert_eq!(validate_topic(t), Ok(*t), "{t}");
     }
 }
 
@@ -39,7 +39,7 @@ fn empty_topic_is_rejected() {
 fn topic_longer_than_limit_is_rejected() {
     let long = "a".repeat(MAX_TOPIC_LEN + 1);
     assert_eq!(validate_topic(&long), Err(TopicError::TooLong));
-    assert_eq!(validate_topic(&long[1..]), Ok(()));
+    assert_eq!(validate_topic(&long[1..]), Ok(&long[1..]));
 }
 
 #[test]
@@ -60,7 +60,7 @@ fn whole_level_wildcards_are_valid_patterns() {
     for p in [
         "#", "+", "a/+", "a/#", "+/+/+", "+/#", "$mycel/#", "a//b", "psmux/>",
     ] {
-        assert_eq!(validate_pattern(p), Ok(()), "{p}");
+        assert_eq!(validate_pattern(p), Ok(p), "{p}");
     }
 }
 
@@ -79,11 +79,23 @@ fn hash_not_last_is_rejected() {
 }
 
 #[test]
-fn split_drops_one_trailing_slash_and_keeps_other_empty_levels() {
-    assert_eq!(split_levels("a/b/"), ["a", "b"]);
-    assert_eq!(split_levels("/a"), ["", "a"]);
-    assert_eq!(split_levels("a//b"), ["a", "", "b"]);
-    assert!(split_levels("").is_empty());
+fn validation_returns_the_topic_without_trailing_slashes() {
+    assert_eq!(validate_topic("a/b/"), Ok("a/b"));
+    assert_eq!(validate_topic("a/b//"), Ok("a/b"));
+    assert_eq!(validate_pattern("a/+/"), Ok("a/+"));
+    assert_eq!(validate_pattern("a//b"), Ok("a//b"));
+    assert_eq!(validate_topic("/a"), Ok("/a"));
+}
+
+#[test]
+fn only_slashes_is_an_empty_topic() {
+    assert_eq!(validate_topic("/"), Err(TopicError::Empty));
+    assert_eq!(validate_pattern("//"), Err(TopicError::Empty));
+}
+
+#[test]
+fn hash_followed_by_trailing_slash_is_still_last() {
+    assert_eq!(validate_pattern("a/#/"), Ok("a/#"));
 }
 
 // ── mycel tests/test_topic_trie.cpp, matcher half ──
@@ -178,6 +190,18 @@ fn hash_matches_its_parent_level() {
 fn trailing_slash_is_ignored() {
     assert!(matches("a/b/", "a/b"));
     assert!(matches("a/b", "a/b/"));
+}
+
+#[test]
+fn deep_topics_match_without_recursion() {
+    // ~32k levels, near MAX_TOPIC_LEN; a recursive matcher overflows here.
+    let topic = vec!["a"; MAX_TOPIC_LEN / 2].join("/");
+    let pattern = vec!["+"; MAX_TOPIC_LEN / 2].join("/");
+    assert!(validate_topic(&topic).is_ok());
+    assert!(validate_pattern(&pattern).is_ok());
+    assert!(matches(&pattern, &topic));
+    assert!(matches(&topic, &topic));
+    assert!(!matches(&pattern, &format!("{topic}/a")));
 }
 
 #[test]

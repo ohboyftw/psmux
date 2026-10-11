@@ -41,8 +41,13 @@ impl<T> OutboundQueue<T> {
     }
 
     /// Queue a live event, dropping the oldest queued event when full.
-    /// Returns `true` if an event was dropped to make room.
+    /// Returns `true` if an event was dropped to make room. With a
+    /// capacity of 0 every event is dropped (and counted).
     pub fn push_event(&mut self, frame: T) -> bool {
+        if self.event_capacity == 0 {
+            self.dropped += 1;
+            return true;
+        }
         let dropped = self.queued_events >= self.event_capacity && self.drop_oldest_event();
         self.entries.push_back(Entry {
             frame,
@@ -72,6 +77,13 @@ impl<T> OutboundQueue<T> {
     /// Frames waiting, of either kind.
     pub fn len(&self) -> usize {
         self.entries.len()
+    }
+
+    /// Control and replay frames waiting. They are never dropped, so the
+    /// caller should stop reading a connection's requests while this is
+    /// high.
+    pub fn queued_control(&self) -> usize {
+        self.entries.len() - self.queued_events
     }
 
     /// True when nothing is waiting.

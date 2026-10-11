@@ -1,9 +1,10 @@
 //! Per-connection client state, keyed by connection id.
 //!
-//! Each connection has exactly one record, so a second Hello on the same
-//! connection replaces the record instead of orphaning the first one as the
-//! C++ server did. Records are kept in a `BTreeMap` so status output is in
-//! connection order.
+//! Each connection has exactly one record. A second Hello on the same
+//! connection updates the identity in place (see [`apply_hello`]) and keeps
+//! the queue and counters, so queued Acks and `replay_complete` still
+//! arrive; the C++ server orphaned the first record instead. Records are
+//! kept in a `BTreeMap` so status output is in connection order.
 
 use std::collections::BTreeMap;
 
@@ -57,6 +58,26 @@ impl<T> ClientRecord<T> {
 
 /// Every connection that completed Hello.
 pub type Registry<T> = BTreeMap<ConnId, ClientRecord<T>>;
+
+/// Record a Hello from `conn`: a new record on the first Hello, an
+/// in-place identity update on any later one.
+pub fn apply_hello<T>(
+    registry: &mut Registry<T>,
+    conn: ConnId,
+    hello: &Hello,
+    now_ms: i64,
+    event_capacity: usize,
+) {
+    match registry.get_mut(&conn) {
+        Some(rec) => {
+            rec.client_id.clone_from(&hello.client_id);
+            rec.client_type.clone_from(&hello.client_type);
+        }
+        None => {
+            registry.insert(conn, ClientRecord::new(hello, now_ms, event_capacity));
+        }
+    }
+}
 
 #[cfg(test)]
 #[path = "../../tests-rs/test_bus_registry.rs"]
