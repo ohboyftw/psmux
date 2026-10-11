@@ -6320,8 +6320,9 @@ pub fn run_server(
         // Check if all windows/panes have exited (throttled to every 100ms)
         if last_reap.elapsed() >= Duration::from_millis(100) {
             last_reap = Instant::now();
-            // Drain OSC 99/777 desktop notifications from panes
-            helpers::drain_notifications(&mut app);
+            // Read OSC 99/777 desktop notifications before the reap; they
+            // are shown after the agent toasts below.
+            let notifs = helpers::take_notifications(&mut app);
             // Sample OSC 7501 state before reap_children prunes exited panes,
             // push each reported transition and offer it as a toast.
             for (pane_id, t) in helpers::collect_program_status(&mut app) {
@@ -6355,6 +6356,7 @@ pub fn run_server(
             // After reap_children, so a pane's final state at exit toasts
             // in the same tick.
             helpers::flush_agent_toasts(&mut app, last_reap);
+            helpers::fire_notifications(notifs);
             // Fire context_ready push events for newly-ready panes
             let now_ms = crate::agent_state::now_ms();
             for win in &mut app.windows {
@@ -6419,6 +6421,7 @@ pub fn run_server(
                     let ns = app.socket_name.as_deref().map(|l| format!("{l}__"));
                     crate::session::kill_warm_servers(ns.as_deref());
                 }
+                helpers::fire_last_agent_toast(&mut app);
                 std::thread::sleep(std::time::Duration::from_millis(10));
                 std::process::exit(0);
             }

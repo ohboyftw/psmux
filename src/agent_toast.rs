@@ -6,15 +6,16 @@
 //! spawns anything itself; the server tick asks [`AgentToasts::due`] and
 //! reports back with [`AgentToasts::mark_fired`].
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::time::{Duration, Instant};
 
 use vt100::{BlockedKind, ProgramState};
 
 use crate::agent_state::AgentTransition;
 
-/// A pane that re-enters the state it last toasted within this window is
-/// not toasted again.
+/// A pane that re-enters `done` or `error`, the state it last toasted,
+/// within this window is not toasted again.  `blocked` is exempt: each
+/// new prompt is a new question, limited only by [`PANE_MIN_INTERVAL`].
 pub const DEDUPE_WINDOW: Duration = Duration::from_secs(30);
 /// Shortest gap between two toasts for one pane; later ones wait.
 pub const PANE_MIN_INTERVAL: Duration = Duration::from_secs(5);
@@ -42,6 +43,7 @@ pub struct AgentToasts {
     pending: HashMap<usize, Toast>,
     last_toast: HashMap<usize, (ProgramState, Instant)>,
     last_fired: Option<Instant>,
+    exited: HashSet<usize>,
 }
 
 impl Default for AgentToasts {
@@ -51,6 +53,7 @@ impl Default for AgentToasts {
             pending: HashMap::new(),
             last_toast: HashMap::new(),
             last_fired: None,
+            exited: HashSet::new(),
         }
     }
 }
@@ -121,10 +124,42 @@ impl AgentToasts {
             .retain(|_, (_, at)| now - *at < DEDUPE_WINDOW);
     }
 
+    /// Marks a pane whose child exited on its own, so its waiting toast
+    /// outlives the pane leaving the window tree.
+    pub fn note_exited(&mut self, pane_id: usize) {
+        self.exited.insert(pane_id);
+    }
+
+    /// Drops the waiting toast of every pane that is neither in `live` nor
+    /// marked by [`AgentToasts::note_exited`]: a killed pane says nothing.
+    pub fn forget_gone(&mut self, live: &HashSet<usize>) {
+        let exited = &self.exited;
+        self.pending
+            .retain(|id, _| live.contains(id) || exited.contains(id));
+        let pending = &self.pending;
+        self.exited.retain(|id| pending.contains_key(id));
+    }
+
+    /// Removes and returns the most important waiting toast, ignoring every
+    /// rate limit.  For the last chance before the server exits.
+    pub fn take_any(&mut self) -> Option<Toast> {
+        if !self.enabled {
+            return None;
+        }
+        let id = self
+            .pending
+            .values()
+            .max_by_key(|toast| (priority(toast.state), std::cmp::Reverse(toast.pane_id)))?
+            .pane_id;
+        self.pending.remove(&id)
+    }
+
     fn recently_toasted(&self, pane_id: usize, state: ProgramState, now: Instant) -> bool {
-        self.last_toast
-            .get(&pane_id)
-            .is_some_and(|&(s, at)| s == state && now - at < DEDUPE_WINDOW)
+        state != ProgramState::Blocked
+            && self
+                .last_toast
+                .get(&pane_id)
+                .is_some_and(|&(s, at)| s == state && now - at < DEDUPE_WINDOW)
     }
 
     fn pane_rate_limited(&self, pane_id: usize, now: Instant) -> bool {

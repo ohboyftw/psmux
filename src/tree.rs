@@ -571,6 +571,7 @@ pub fn prune_exited(
     // dropped pane is gone by then.  Best effort: bytes the reader had not
     // parsed when try_wait saw the exit are lost with a dropped pane.
     for info in &exited {
+        toasts.note_exited(info.pane_id);
         if let Some(t) = &info.status {
             crate::server::helpers::emit_status_transition(control_clients, info.pane_id, t);
             toasts.offer(info.pane_id, t, session_name, std::time::Instant::now());

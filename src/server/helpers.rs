@@ -9,13 +9,21 @@ use crate::util::WinInfo;
 /// is still running the previous one.
 static TOAST_IN_FLIGHT: AtomicBool = AtomicBool::new(false);
 
-/// Drain OSC 99/777 desktop notifications from all panes and fire
-/// Windows toast notifications for each.
-pub(crate) fn drain_notifications(app: &mut AppState) {
+/// Drains the OSC 99/777 desktop notifications of all panes as
+/// `(title, body)`.  Read before the reap, so a pane pruned this tick
+/// still has its notifications shown.
+pub(crate) fn take_notifications(app: &mut AppState) -> Vec<(String, String)> {
     let mut notifs: Vec<(String, String)> = Vec::new();
     for win in &mut app.windows {
         collect_notifications(&mut win.root, &mut notifs);
     }
+    notifs
+}
+
+/// Shows OSC 99/777 notifications.  Called after [`flush_agent_toasts`],
+/// so a due agent toast gets the in-flight slot first; a notification
+/// that finds a toast in flight is dropped.
+pub(crate) fn fire_notifications(notifs: Vec<(String, String)>) {
     for (title, body) in notifs {
         let _ = fire_toast_notification(&title, &body);
     }
@@ -107,6 +115,14 @@ fn toast_command(title: &str, body: &str) -> std::process::Command {
 /// Shows the agent toast that is due, if any.  A toast that cannot fire
 /// because another toast is still in flight stays pending for the next tick.
 pub(crate) fn flush_agent_toasts(app: &mut AppState, now: std::time::Instant) {
+    if app.agent_toasts.pending_len() > 0 {
+        let live: std::collections::HashSet<usize> = app
+            .windows
+            .iter()
+            .flat_map(|w| crate::tree::collect_pane_ids(&w.root))
+            .collect();
+        app.agent_toasts.forget_gone(&live);
+    }
     let Some(toast) = app.agent_toasts.due(now) else {
         return;
     };
@@ -114,6 +130,20 @@ pub(crate) fn flush_agent_toasts(app: &mut AppState, now: std::time::Instant) {
     if fire_toast_notification(&toast.title, &toast.body) {
         app.agent_toasts.mark_fired(pane_id, now);
     }
+}
+
+/// Shows the most important waiting agent toast before the server exits,
+/// ignoring rate limits and the in-flight slot.  The process is started on
+/// this thread, since `process::exit` would end a helper thread first.
+pub(crate) fn fire_last_agent_toast(app: &mut AppState) {
+    use crate::platform::HideWindowCommandExt;
+    let Some(toast) = app.agent_toasts.take_any() else {
+        return;
+    };
+    crate::proc_stats::record_spawn(crate::proc_stats::SpawnKind::Other);
+    let _ = toast_command(&toast.title, &toast.body)
+        .hide_window()
+        .spawn();
 }
 
 /// Fire a Windows toast notification via PowerShell.

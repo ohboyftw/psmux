@@ -1,5 +1,5 @@
 use super::*;
-use crate::agent_state::AgentRecordDetails;
+use crate::agent_state::{AgentRecordDetails, AgentStateCache};
 
 fn transition(old: Option<ProgramState>, new: Option<ProgramState>) -> AgentTransition {
     AgentTransition {
@@ -178,4 +178,84 @@ fn build_toast_when_no_app_or_text_then_generic_title_and_place_only() {
     let toast = toasts.due(now).expect("due");
     assert_eq!(toast.title, "Agent reported an error");
     assert_eq!(toast.body, "main %7");
+}
+
+#[test]
+fn due_when_blocked_again_within_dedupe_window_then_toasted_after_pane_interval() {
+    let mut toasts = AgentToasts::default();
+    let now = Instant::now();
+    toasts.offer(1, &blocked(Some(BlockedKind::Permission), ""), "s", now);
+    fire_all(&mut toasts, now);
+    let resumed = transition(Some(ProgramState::Blocked), Some(ProgramState::Working));
+    toasts.offer(1, &resumed, "s", now);
+    let again = now + Duration::from_secs(10);
+    toasts.offer(1, &blocked(Some(BlockedKind::Permission), ""), "s", again);
+    assert_eq!(
+        toasts.due(again).map(|t| t.state),
+        Some(ProgramState::Blocked)
+    );
+    assert_eq!(fire_all(&mut toasts, again), 1);
+}
+
+#[test]
+fn due_when_blocked_again_inside_pane_interval_then_waits() {
+    let mut toasts = AgentToasts::default();
+    let now = Instant::now();
+    toasts.offer(1, &blocked(None, ""), "s", now);
+    fire_all(&mut toasts, now);
+    let soon = now + Duration::from_secs(2);
+    toasts.offer(1, &blocked(None, ""), "s", soon);
+    assert!(toasts.due(soon).is_none());
+    assert_eq!(fire_all(&mut toasts, now + PANE_MIN_INTERVAL), 1);
+}
+
+#[test]
+fn forget_gone_when_pane_killed_then_pending_dropped() {
+    let mut toasts = AgentToasts::default();
+    toasts.offer(1, &blocked(None, ""), "s", Instant::now());
+    toasts.forget_gone(&HashSet::from([2]));
+    assert_eq!(toasts.pending_len(), 0);
+}
+
+#[test]
+fn forget_gone_when_pane_exited_on_its_own_then_toast_kept() {
+    let mut toasts = AgentToasts::default();
+    let now = Instant::now();
+    let done = transition(Some(ProgramState::Working), Some(ProgramState::Done));
+    toasts.offer(1, &done, "s", now);
+    toasts.note_exited(1);
+    toasts.forget_gone(&HashSet::new());
+    assert_eq!(fire_all(&mut toasts, now), 1);
+}
+
+#[test]
+fn take_any_when_pane_rate_limited_then_returns_pending() {
+    let mut toasts = AgentToasts::default();
+    let now = Instant::now();
+    let done = transition(Some(ProgramState::Working), Some(ProgramState::Done));
+    toasts.offer(1, &done, "s", now);
+    fire_all(&mut toasts, now);
+    let error = transition(Some(ProgramState::Done), Some(ProgramState::Error));
+    toasts.offer(1, &error, "s", now);
+    assert!(toasts.due(now).is_none());
+    assert_eq!(
+        toasts.take_any().map(|t| t.state),
+        Some(ProgramState::Error)
+    );
+}
+
+#[test]
+fn offer_when_parsed_child_blocked_permission_then_toast_names_app() {
+    let mut parser = vt100::Parser::new(24, 80, 0);
+    let mut cache = AgentStateCache::default();
+    let mut toasts = AgentToasts::default();
+    let now = Instant::now();
+    parser.process(b"\x1b]7501;state=working:app=claude-code\x1b\\");
+    cache.observe(parser.screen());
+    parser.process(b"\x1b]7501;id=t1:state=blocked:kind=permission:app=claude-code\x1b\\");
+    let t = cache.observe(parser.screen()).expect("transition");
+    toasts.offer(4, &t, "work", now);
+    let toast = toasts.due(now).expect("due");
+    assert_eq!(toast.title, "claude-code needs permission");
+    assert_eq!(toast.body, "work %4");
 }

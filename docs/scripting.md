@@ -296,17 +296,30 @@ Turn this off with `set -g agent-toasts off` (default `on`).
   variables, never as part of a command.
 - `working` and `idle` never toast, and a pane whose program does not
   report OSC 7501 never toasts, however much output it prints.
-- One pane does not toast the same state twice within 30 s, and waits at
-  least 5 s between any two of its toasts. Agent toasts as a whole are at
-  least 1 s apart, and only one toast (agent or OSC 99/777) is shown at a
-  time. A toast that has to wait is kept, not dropped: each pane keeps its
-  most important waiting toast (blocked > error > done).
+- One pane does not toast `done` or `error` twice in a row within 30 s,
+  and waits at least 5 s between any two of its toasts. `blocked` has no
+  30 s window: every new prompt is a new question, so a pane that is
+  asked, answered and asked again toasts twice, the second time once its
+  5 s gap has passed. Agent toasts as a whole are at least 1 s apart, and
+  only one toast (agent or OSC 99/777) is shown at a time. A due agent
+  toast is shown before the OSC 99/777 notifications of the same tick. A
+  toast that has to wait is kept, not dropped: each pane keeps its most
+  important waiting toast (blocked > error > done).
+- Toasts follow the worst-of state, so they fire only when it changes.
+  While a pane is already `blocked`, a further blocked record (another
+  background task, or a new `kind` or `msg`) does not toast.
 - A waiting `blocked` toast is dropped if the pane leaves `blocked` before
-  it is shown: the question was already answered. A waiting `done` or
-  `error` toast is still shown after the pane exits.
+  it is shown: the question was already answered. A waiting toast is also
+  dropped when its pane is killed (`kill-pane`, `kill-window`). A waiting
+  `done` or `error` toast is still shown after the pane's program exits on
+  its own.
 - The server samples the state once per 100 ms, so a state held for less
   than that can be missed. A pane's final state at exit is read when the
   pane is reaped, so `done` followed by exit still toasts.
+- When the last pane exits and the server shuts down (`exit-empty`, the
+  default), the most important waiting toast is started just before the
+  server exits, ignoring the limits above. A toast that was already being
+  started in that same moment may not appear.
 
 ## Paste Buffers
 
