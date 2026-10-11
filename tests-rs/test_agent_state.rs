@@ -354,3 +354,104 @@ fn source_label_when_each_source_then_closed_set() {
     assert_eq!(source_label(ReadinessSource::Reported), "reported");
     assert_eq!(source_label(ReadinessSource::OutputStable), "output_stable");
 }
+
+// ─── 04a: transitions feed the state_changed / psmux/pane/status events ─────
+
+fn transitions(parser: &mut vt100::Parser, bodies: &[&str]) -> Vec<AgentTransition> {
+    let mut cache = AgentStateCache::default();
+    let mut out = Vec::new();
+    for body in bodies {
+        report(parser, body);
+        out.extend(cache.observe(parser.screen()));
+        out.extend(cache.observe(parser.screen()));
+    }
+    out
+}
+
+#[test]
+fn observe_when_working_idle_working_then_exactly_three_transitions() {
+    let mut parser = vt100::Parser::new(24, 80, 0);
+    let seen = transitions(
+        &mut parser,
+        &["state=working", "state=idle", "state=working"],
+    );
+    let states: Vec<_> = seen.iter().map(|t| (t.old, t.new)).collect();
+    assert_eq!(
+        states,
+        vec![
+            (None, Some(ProgramState::Working)),
+            (Some(ProgramState::Working), Some(ProgramState::Idle)),
+            (Some(ProgramState::Idle), Some(ProgramState::Working)),
+        ]
+    );
+}
+
+#[test]
+fn observe_when_plain_output_bursts_then_no_transition() {
+    let mut parser = vt100::Parser::new(24, 80, 0);
+    let mut cache = AgentStateCache::default();
+    for _ in 0..10 {
+        parser.process(b"compiling...\r\n");
+        assert_eq!(cache.observe(parser.screen()), None);
+    }
+}
+
+#[test]
+fn observe_when_child_blocks_then_transition_carries_kind_and_inherited_app() {
+    let mut parser = vt100::Parser::new(24, 80, 0);
+    let seen = transitions(&mut parser, &[CC_FIXTURE[0], CC_FIXTURE[1]]);
+    let last = seen.last().expect("transition");
+    assert_eq!(last.new, Some(ProgramState::Blocked));
+    assert_eq!(last.record_id.as_deref(), Some("t1"));
+    assert_eq!(last.details.kind, Some(vt100::BlockedKind::Permission));
+    assert_eq!(last.details.app, "claude-code");
+}
+
+/// What `tree::end_agent_run` does on exit: the exit rule, a refresh, then
+/// one observe whose result becomes the final event.
+fn exit_and_observe(
+    parser: &mut vt100::Parser,
+    cache: &mut AgentStateCache,
+) -> Option<AgentTransition> {
+    exit_and_refresh(parser, cache);
+    cache.observe(parser.screen())
+}
+
+#[test]
+fn exit_when_done_reported_within_one_tick_then_final_event_is_done() {
+    let mut parser = vt100::Parser::new(24, 80, 0);
+    let mut cache = AgentStateCache::default();
+    report(&mut parser, "state=working");
+    cache.observe(parser.screen());
+    report(&mut parser, "state=done");
+    let t = exit_and_observe(&mut parser, &mut cache).expect("final event");
+    assert_eq!(
+        (t.old, t.new),
+        (Some(ProgramState::Working), Some(ProgramState::Done))
+    );
+    assert_eq!(
+        cache.observe(parser.screen()),
+        None,
+        "next tick repeats nothing"
+    );
+}
+
+#[test]
+fn exit_when_state_already_reported_then_no_duplicate_event() {
+    let mut parser = vt100::Parser::new(24, 80, 0);
+    let mut cache = AgentStateCache::default();
+    report(&mut parser, "state=done");
+    cache.observe(parser.screen());
+    assert_eq!(exit_and_observe(&mut parser, &mut cache), None);
+}
+
+#[test]
+fn exit_when_working_then_final_event_clears_details() {
+    let mut parser = vt100::Parser::new(24, 80, 0);
+    let mut cache = AgentStateCache::default();
+    report(&mut parser, "state=working:app=pi");
+    cache.observe(parser.screen());
+    let t = exit_and_observe(&mut parser, &mut cache).expect("final event");
+    assert_eq!(t.new, None);
+    assert_eq!(t.details, AgentRecordDetails::default());
+}

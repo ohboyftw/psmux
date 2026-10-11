@@ -553,6 +553,8 @@ struct ExitedPaneInfo {
     exit_code: Option<i32>,
     elapsed_ms: Option<u64>,
     command: Option<String>,
+    /// The pane's last OSC 7501 transition, read at exit.
+    status: Option<crate::agent_state::AgentTransition>,
 }
 
 pub fn prune_exited(
@@ -562,8 +564,14 @@ pub fn prune_exited(
 ) -> Option<Node> {
     let mut exited: Vec<ExitedPaneInfo> = Vec::new();
     let result = prune_exited_inner(n, remain_on_exit, &mut exited);
-    // Push context_exited events for all newly-dead panes
+    // Push context_exited events for all newly-dead panes.  The final
+    // state_changed goes first, and here rather than on the next tick: a
+    // dropped pane is gone by then.  Best effort: bytes the reader had not
+    // parsed when try_wait saw the exit are lost with a dropped pane.
     for info in &exited {
+        if let Some(t) = &info.status {
+            crate::server::helpers::emit_status_transition(control_clients, info.pane_id, t);
+        }
         let event = crate::backend::protocol::ContextExitedEvent {
             method: "context_exited".into(),
             params: crate::backend::protocol::ContextExitedParams {
@@ -591,12 +599,16 @@ pub fn prune_exited(
 }
 
 /// Applies the OSC 7501 process-exit rule to a pane whose child just exited
-/// (working, blocked and idle records go; done and error stay) and refreshes
-/// the pane's cache, since the sequence only moves when something was removed.
-fn end_agent_run(p: &mut Pane) {
-    let Ok(mut term) = p.term.lock() else { return };
+/// (working, blocked and idle records go; done and error stay), refreshes
+/// the pane's cache, since the sequence only moves when something was
+/// removed, and returns the transition still unreported, if any.
+fn end_agent_run(p: &mut Pane) -> Option<crate::agent_state::AgentTransition> {
+    let Ok(mut term) = p.term.lock() else {
+        return None;
+    };
     term.screen_mut().program_status_on_process_exit();
     p.agent_state.refresh(term.screen());
+    p.agent_state.observe(term.screen())
 }
 
 /// Inner recursive implementation of prune_exited that collects newly-exited
@@ -627,12 +639,13 @@ fn prune_exited_inner(
                         .unwrap_or_default()
                         .as_millis() as u64,
                 );
-                end_agent_run(&mut p);
+                let agent_status = end_agent_run(&mut p);
                 exited.push(ExitedPaneInfo {
                     pane_id: p.id,
                     exit_code,
                     elapsed_ms: Some(p.spawn_time.elapsed().as_millis() as u64),
                     command: p.spawn_command.clone(),
+                    status: agent_status,
                 });
                 return if remain_on_exit.keeps(exit_code) {
                     p.dead = true;
@@ -651,12 +664,13 @@ fn prune_exited_inner(
                             .unwrap_or_default()
                             .as_millis() as u64,
                     );
-                    end_agent_run(&mut p);
+                    let agent_status = end_agent_run(&mut p);
                     exited.push(ExitedPaneInfo {
                         pane_id: p.id,
                         exit_code,
                         elapsed_ms: Some(p.spawn_time.elapsed().as_millis() as u64),
                         command: p.spawn_command.clone(),
+                        status: agent_status,
                     });
                     if remain_on_exit.keeps(exit_code) {
                         p.dead = true;

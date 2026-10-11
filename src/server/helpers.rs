@@ -39,6 +39,26 @@ pub(crate) fn collect_program_status(
     out
 }
 
+/// Sends one `state_changed` pipe push and one `PaneStatusChanged`
+/// lifecycle event (mycel `psmux/pane/status`) per transition.
+pub(crate) fn emit_status_transition(
+    clients: &[crate::control::ControlClient],
+    pane_id: usize,
+    transition: &crate::agent_state::AgentTransition,
+) {
+    let event = crate::backend::protocol::StateChangedEvent::new(pane_id, transition);
+    if let Ok(json) = serde_json::to_string(&event) {
+        crate::types::push_backend_event(&json);
+    }
+    crate::control::emit_lifecycle(
+        clients,
+        &crate::control::LifecycleEvent::PaneStatusChanged {
+            pane_id,
+            transition,
+        },
+    );
+}
+
 fn collect_notifications(node: &mut Node, out: &mut Vec<(String, String)>) {
     match node {
         Node::Leaf(p) => {

@@ -18,6 +18,8 @@ pub struct AgentTransition {
     pub new: Option<ProgramState>,
     /// Id of the record that now carries the worst state (`None` = root).
     pub record_id: Option<String>,
+    /// Fields of that record when the change was seen; empty when `new` is `None`.
+    pub details: AgentRecordDetails,
 }
 
 /// The fields of the record that carries a pane's worst-of state.  Text is
@@ -90,13 +92,13 @@ impl AgentStateCache {
             old,
             new: self.worst,
             record_id: self.worst_id.clone(),
+            details: self.details.clone(),
         })
     }
 
     /// Copies `screen`'s records even when the sequence did not change, as
-    /// after the process-exit lifetime rule.  Leaves transition detection to
-    /// the next [`observe`](Self::observe), so a kept dead pane still reports
-    /// its final transition there.
+    /// after the process-exit lifetime rule.  Does not touch transition
+    /// detection: the next [`observe`](Self::observe) reports the change.
     pub fn refresh(&mut self, screen: &Screen) {
         self.observed = Some((self.generation, screen.program_status_seq()));
         self.root = screen.program_status().map(ProgramStatusRecord::state);

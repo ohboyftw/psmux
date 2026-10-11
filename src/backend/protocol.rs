@@ -303,6 +303,56 @@ pub struct ExecCompletedParams {
     pub elapsed_ms: u64,
 }
 
+/// Push event sent when a pane's reported (OSC 7501) worst-of agent state
+/// changes.  Never sent for progress-only updates or inferred state.
+#[derive(Debug, Serialize)]
+pub struct StateChangedEvent {
+    /// Always `"state_changed"`.
+    pub method: String,
+    /// The change.
+    pub params: StateChangedParams,
+}
+
+/// Parameters of a [`StateChangedEvent`].
+#[derive(Debug, Serialize)]
+pub struct StateChangedParams {
+    /// `%N` pane id.
+    pub context_id: String,
+    /// `idle|working|done|blocked|error`; `null` when no record is left.
+    pub state: Option<String>,
+    /// The state before the change; `null` when there was no record.
+    pub previous_state: Option<String>,
+    /// Id of the child record that carries the state; absent for the root.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub record_id: Option<String>,
+    /// `permission|question|auth`; only on blocked records that name one.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub kind: Option<String>,
+    /// Reporting app, inherited from the nearest ancestor record.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub app: Option<String>,
+}
+
+impl StateChangedEvent {
+    /// Builds the event for pane `pane_id` from a cache transition.
+    pub fn new(pane_id: usize, t: &crate::agent_state::AgentTransition) -> Self {
+        use crate::agent_state::{kind_label, state_label};
+        let name = |s: Option<vt100::ProgramState>| s.map(|s| state_label(Some(s)).to_owned());
+        let non_empty = |s: &str| (!s.is_empty()).then(|| s.to_owned());
+        Self {
+            method: "state_changed".into(),
+            params: StateChangedParams {
+                context_id: format!("%{pane_id}"),
+                state: name(t.new),
+                previous_state: name(t.old),
+                record_id: t.record_id.clone(),
+                kind: non_empty(kind_label(t.details.kind)),
+                app: non_empty(&t.details.app),
+            },
+        }
+    }
+}
+
 impl RpcResponse {
     pub fn success(id: serde_json::Value, result: impl Serialize) -> Self {
         Self {
@@ -341,3 +391,7 @@ impl RpcResponse {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "../../tests-rs/test_state_changed_event.rs"]
+mod state_changed_event_tests;

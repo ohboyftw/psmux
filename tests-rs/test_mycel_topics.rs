@@ -82,6 +82,23 @@ fn server_mod_rs_publishes_pane_ready_topic() {
     );
 }
 
+// ─── Ticket 04a: psmux/pane/status on reported state transitions ────────────
+
+#[test]
+fn pane_status_topic_constant_matches_spec() {
+    assert_eq!(psmux::mycel::topics::PANE_STATUS, "psmux/pane/status");
+}
+
+#[test]
+fn control_rs_publishes_pane_status_topic() {
+    let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("src/control.rs");
+    let src = fs::read_to_string(&path).expect("read src/control.rs");
+    assert!(
+        src.contains("topics::PANE_STATUS"),
+        "src/control.rs must publish psmux/pane/status from publish_lifecycle_to_mycel"
+    );
+}
+
 // ─── Task 9: psmux/exec/completed payload contract ───────────────────────────
 
 #[test]

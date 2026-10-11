@@ -6254,9 +6254,12 @@ pub fn run_server(
             last_reap = Instant::now();
             // Drain OSC 99/777 desktop notifications from panes
             helpers::drain_notifications(&mut app);
-            // Sample OSC 7501 state before reap_children prunes exited panes.
-            // Transitions have no consumer yet (tickets 04a, 06).
-            let _transitions = helpers::collect_program_status(&mut app);
+            // Sample OSC 7501 state before reap_children prunes exited panes
+            // and push each reported transition.  Toasts (ticket 06) are not
+            // wired to these yet.
+            for (pane_id, t) in helpers::collect_program_status(&mut app) {
+                helpers::emit_status_transition(&app.control_clients, pane_id, &t);
+            }
             // Check wait-pane waiters before reaping (so we can capture exit codes)
             if !app.wait_pane_queue.is_empty() {
                 drain_wait_pane_queue(&mut app);

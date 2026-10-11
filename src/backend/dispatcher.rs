@@ -97,7 +97,12 @@ fn handle_initialize(
 
     let result = InitializeResult {
         protocol_version: "2".into(),
-        capabilities: vec!["events".into(), "capture".into(), "run_shell".into()],
+        capabilities: vec![
+            "events".into(),
+            "capture".into(),
+            "run_shell".into(),
+            "state_changed".into(),
+        ],
         self_context_id,
     };
 

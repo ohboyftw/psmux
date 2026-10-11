@@ -95,7 +95,7 @@ context_id of the pane that owns the current connection.
 ```json
 {
   "protocol_version": "2",
-  "capabilities": ["events", "capture", "run_shell"],
+  "capabilities": ["events", "capture", "run_shell", "state_changed"],
   "self_context_id": "%3"
 }
 ```
@@ -493,7 +493,7 @@ Fired after every `exec` call completes (success or failure).
 ```jsonc
 // 1. Handshake
 → {"id":1,"method":"initialize","params":{"protocol_version":"2","capabilities":[]}}
-← {"id":1,"result":{"protocol_version":"2","capabilities":["events","capture","run_shell"],"self_context_id":"%1"}}
+← {"id":1,"result":{"protocol_version":"2","capabilities":["events","capture","run_shell","state_changed"],"self_context_id":"%1"}}
 
 // 2. Spawn a new pane
 → {"id":2,"method":"spawn_agent","params":{"command":["pwsh","-NoLogo"],"wait_ready":true,"mode":"split"}}

@@ -127,6 +127,11 @@ pub enum LifecycleEvent<'a> {
         pane_id: usize,
         exit_code: Option<i32>,
     },
+    /// A pane's reported (OSC 7501) worst-of agent state changed.
+    PaneStatusChanged {
+        pane_id: usize,
+        transition: &'a crate::agent_state::AgentTransition,
+    },
     /// A non-interactive `exec` finished. Distinct from `PaneExited` —
     /// the pane is still alive.
     ExecCompleted {
@@ -236,6 +241,7 @@ fn lifecycle_to_notification(evt: &LifecycleEvent<'_>) -> Option<ControlNotifica
         LifecycleEvent::PaneCreated { .. } => None,
         LifecycleEvent::PaneReady { .. } => None,
         LifecycleEvent::PaneExited { .. } => None,
+        LifecycleEvent::PaneStatusChanged { .. } => None,
         LifecycleEvent::ExecCompleted { .. } => None,
         LifecycleEvent::SessionCreated { .. } => Some(ControlNotification::SessionsChanged),
         LifecycleEvent::SessionRenamed { .. } => Some(ControlNotification::SessionsChanged),
@@ -324,6 +330,15 @@ fn publish_lifecycle_to_mycel(evt: &LifecycleEvent<'_>) {
             // break. Will be removed in a future release.
             crate::mycel::publish_pane_event("psmux/pane/died", &payload);
         }
+        LifecycleEvent::PaneStatusChanged {
+            pane_id,
+            transition,
+        } => {
+            crate::mycel::publish_pane_event(
+                topics::PANE_STATUS,
+                &pane_status_payload(*pane_id, transition),
+            );
+        }
         LifecycleEvent::ExecCompleted {
             context_id,
             exit_code,
@@ -370,6 +385,24 @@ fn publish_lifecycle_to_mycel(evt: &LifecycleEvent<'_>) {
             );
         }
     }
+}
+
+/// The `psmux/pane/status` payload: the `state_changed` push params, keyed
+/// by `pane_id` like the other pane topics.
+#[cfg(feature = "mycel")]
+fn pane_status_payload(
+    pane_id: usize,
+    t: &crate::agent_state::AgentTransition,
+) -> serde_json::Value {
+    let p = crate::backend::protocol::StateChangedEvent::new(pane_id, t).params;
+    serde_json::json!({
+        "pane_id": p.context_id,
+        "state": p.state,
+        "previous_state": p.previous_state,
+        "record_id": p.record_id,
+        "kind": p.kind,
+        "app": p.app,
+    })
 }
 
 #[cfg(test)]

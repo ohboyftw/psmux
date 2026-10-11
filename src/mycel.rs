@@ -23,6 +23,8 @@ pub mod topics {
     pub const PANE_CREATED: &str = "psmux/pane/created";
     pub const PANE_READY: &str = "psmux/pane/ready";
     pub const PANE_EXITED: &str = "psmux/pane/exited";
+    /// A pane's reported (OSC 7501) worst-of agent state changed.
+    pub const PANE_STATUS: &str = "psmux/pane/status";
     pub const EXEC_COMPLETED: &str = "psmux/exec/completed";
     pub const SESSION_CREATED: &str = "psmux/session/created";
     pub const SESSION_RENAMED: &str = "psmux/session/renamed";

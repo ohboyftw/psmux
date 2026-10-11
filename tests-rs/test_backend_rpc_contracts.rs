@@ -1,3 +1,4 @@
+use psmux::agent_state::{AgentRecordDetails, AgentTransition};
 /// CustomPaneBackend JSON-RPC — boundary contract tests.
 ///
 /// This is the one true module boundary in psmux: Claude Code's TeammateTool
@@ -11,12 +12,12 @@
 ///   - the `#[cfg(test)]` module in `src/backend/dispatcher.rs` — unknown
 ///     method, parse error, bad base64, spawn handshake
 ///
-/// Covered here: the three push events serialized from their real structs,
+/// Covered here: the four push events serialized from their real structs,
 /// graceful rejection across the whole method surface, JSON-RPC envelope
 /// invariants, and the metadata round-trip through pane storage.
 use psmux::backend::protocol::{
     AgentMetadata, ContextExitedEvent, ContextExitedParams, ContextReadyEvent, ContextReadyParams,
-    ExecCompletedEvent, ExecCompletedParams,
+    ExecCompletedEvent, ExecCompletedParams, StateChangedEvent,
 };
 use std::collections::HashMap;
 
@@ -119,6 +120,53 @@ fn context_exited_sends_a_null_exit_code_rather_than_omitting_it() {
     let params = json["params"].as_object().expect("params is an object");
     assert!(params.contains_key("exit_code"), "the key must be present");
     assert!(json["params"]["exit_code"].is_null());
+}
+
+#[test]
+fn state_changed_event_wire_shape() {
+    let json = to_json(&StateChangedEvent::new(
+        3,
+        &AgentTransition {
+            old: Some(vt100::ProgramState::Working),
+            new: Some(vt100::ProgramState::Blocked),
+            record_id: Some("t1".to_string()),
+            details: AgentRecordDetails {
+                kind: Some(vt100::BlockedKind::Permission),
+                app: "claude-code".to_string(),
+                ..AgentRecordDetails::default()
+            },
+        },
+    ));
+
+    assert_eq!(json["method"], "state_changed");
+    assert_eq!(json["params"]["context_id"], "%3");
+    assert_eq!(json["params"]["state"], "blocked");
+    assert_eq!(json["params"]["previous_state"], "working");
+    assert_eq!(json["params"]["record_id"], "t1");
+    assert_eq!(json["params"]["kind"], "permission");
+    assert_eq!(json["params"]["app"], "claude-code");
+}
+
+#[test]
+fn state_changed_omits_record_id_kind_and_app_for_a_cleared_root() {
+    let json = to_json(&StateChangedEvent::new(
+        3,
+        &AgentTransition {
+            old: Some(vt100::ProgramState::Idle),
+            new: None,
+            record_id: None,
+            details: AgentRecordDetails::default(),
+        },
+    ));
+    let params = json["params"].as_object().expect("params object");
+
+    assert!(
+        params["state"].is_null(),
+        "no record left is null, not \"clear\""
+    );
+    for key in ["record_id", "kind", "app"] {
+        assert!(!params.contains_key(key), "{key} must be omitted");
+    }
 }
 
 // ─── Graceful rejection across the method surface ────────────────────────────
