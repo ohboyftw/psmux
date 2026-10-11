@@ -457,6 +457,7 @@ fn pane_agent_detail_vars_when_no_pane_then_empty() {
         "pane_agent_title",
         "pane_agent_msg",
         "pane_agent_source",
+        "pane_agent_readiness",
     ] {
         assert_eq!(expand_expression(var, &app, 0), "", "{var}");
     }

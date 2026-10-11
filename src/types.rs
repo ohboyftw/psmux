@@ -1390,8 +1390,8 @@ pub enum CtrlReq {
     /// Wait for a pane's child process to exit and return its exit code.
     /// (pane_id, exit_code_sender)
     WaitPane(usize, mpsc::Sender<i32>),
-    /// Query a pane's readiness state: returns (data_version, last_output_time_ms).
-    /// Used by `wait-pane --ready` to poll until the shell prompt has appeared.
+    /// Returns a pane's (data_version, last_output_time_ms).  Used by capture
+    /// for data_version; readiness callers use `QueryPaneState`.
     QueryPaneReady(usize, mpsc::Sender<(u64, u64)>),
     /// Query a pane's (data_version, readiness) through the single readiness
     /// predicate, `Pane::readiness`.  An unknown pane answers data_version 0

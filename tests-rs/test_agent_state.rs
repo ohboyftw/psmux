@@ -287,14 +287,53 @@ fn readiness_when_reported_idle_during_output_then_ready() {
 }
 
 #[test]
-fn readiness_when_blocked_or_done_reported_then_not_ready() {
-    for state in [
-        ProgramState::Blocked,
-        ProgramState::Done,
-        ProgramState::Error,
-    ] {
-        assert!(!readiness_of(7, 10_000, SILENT_NOW, Some(state)).is_ready());
+fn readiness_when_blocked_reported_on_silent_pane_then_not_ready() {
+    let r = readiness_of(7, 10_000, SILENT_NOW, Some(ProgramState::Blocked));
+    assert_eq!(r.state, Some(ProgramState::Blocked));
+    assert_eq!(r.source, ReadinessSource::Reported);
+    assert!(!r.is_ready());
+}
+
+#[test]
+fn readiness_when_stale_done_or_error_on_silent_pane_then_idle_output_stable() {
+    for state in [ProgramState::Done, ProgramState::Error] {
+        let r = readiness_of(7, 10_000, SILENT_NOW, Some(state));
+        assert_eq!(r.state, Some(ProgramState::Idle), "{state:?}");
+        assert_eq!(r.source, ReadinessSource::OutputStable, "{state:?}");
+        assert!(r.is_ready(), "{state:?}");
     }
+}
+
+#[test]
+fn readiness_when_done_record_and_fresh_output_then_working_output_stable() {
+    let r = readiness_of(7, SILENT_NOW, SILENT_NOW, Some(ProgramState::Done));
+    assert_eq!(r.state, Some(ProgramState::Working));
+    assert_eq!(r.source, ReadinessSource::OutputStable);
+}
+
+#[test]
+fn readiness_when_done_survives_process_exit_then_silence_decides() {
+    let mut parser = vt100::Parser::new(24, 80, 0);
+    let mut cache = AgentStateCache::default();
+    report(&mut parser, "state=done");
+    parser.screen_mut().program_status_on_process_exit();
+    cache.observe(parser.screen());
+    assert_eq!(cache.worst(), Some(ProgramState::Done));
+    assert!(readiness_of(7, 10_000, SILENT_NOW, cache.worst()).is_ready());
+}
+
+#[test]
+fn readiness_when_working_child_under_idle_root_then_not_ready() {
+    let mut parser = vt100::Parser::new(24, 80, 0);
+    let mut cache = AgentStateCache::default();
+    report(&mut parser, "state=idle");
+    report(&mut parser, "state=working:id=task1");
+    cache.observe(parser.screen());
+    assert_eq!(cache.root(), Some(ProgramState::Idle));
+    let r = readiness_of(7, 10_000, SILENT_NOW, cache.worst());
+    assert_eq!(r.state, Some(ProgramState::Working));
+    assert_eq!(r.source, ReadinessSource::Reported);
+    assert!(!r.is_ready());
 }
 
 #[test]

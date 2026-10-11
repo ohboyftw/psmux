@@ -195,7 +195,7 @@ pub enum ReadinessSource {
 }
 
 /// A pane's state as every readiness check sees it: `#{pane_ready}`,
-/// `#{pane_agent_source}`, `wait-pane --ready`, `send-keys --wait-ready`,
+/// `#{pane_agent_readiness}`, `#{pane_agent_source}`, `wait-pane --ready`, `send-keys --wait-ready`,
 /// the spawn `wait_ready` RPC option and the `context_ready` push.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct PaneReadiness {
@@ -206,44 +206,63 @@ pub struct PaneReadiness {
 }
 
 impl PaneReadiness {
-    /// Ready means idle; a `blocked`, `working`, `done` or `error` report,
-    /// or output within the last [`OUTPUT_STABLE_MS`], is not ready.
+    /// Ready means idle; a `blocked` or `working` report, or output within
+    /// the last [`OUTPUT_STABLE_MS`], is not ready.
     pub fn is_ready(&self) -> bool {
         self.state == Some(ProgramState::Idle)
     }
 }
 
-/// The single readiness predicate.  A reported record wins; otherwise no
-/// output yet is unknown, [`OUTPUT_STABLE_MS`] of silence is idle and
-/// anything more recent is working.  Keyed on a cached record rather than
-/// the parser's `program_status_seen()`, which stays true after
-/// `state=clear`, so a shell left behind by an agent falls back to silence.
+/// The single readiness predicate.  A reported `idle`, `working` or
+/// `blocked` record wins; otherwise no output yet is unknown,
+/// [`OUTPUT_STABLE_MS`] of silence is idle and anything more recent is
+/// working.
+///
+/// `reported` is the worst-of state over all records, so a `working` or
+/// `blocked` child record (a background task) keeps the pane not ready under
+/// an `idle` root.  `done` and `error` are verdicts, not activity: they
+/// survive OSC 133 A and process exit, so letting them win would leave a pane
+/// not ready forever after its agent stopped.  With only such records left,
+/// silence decides, as it does with no record.  A `working` record left by a
+/// crashed agent still wins until OSC 133 A, process exit, RIS or
+/// `clear-history`.
+///
+/// Keyed on a cached record rather than the parser's
+/// `program_status_seen()`, which stays true after `state=clear`, so a shell
+/// left behind by an agent falls back to silence.
 pub fn readiness_of(
     data_version: u64,
     last_output_ms: u64,
     now_ms: u64,
     reported: Option<ProgramState>,
 ) -> PaneReadiness {
-    if reported.is_some() {
+    if let Some(state @ (ProgramState::Idle | ProgramState::Working | ProgramState::Blocked)) =
+        reported
+    {
         return PaneReadiness {
-            state: reported,
+            state: Some(state),
             source: ReadinessSource::Reported,
         };
     }
-    let state = if data_version == 0 || last_output_ms == 0 {
+    PaneReadiness {
+        state: silence_state(data_version, last_output_ms, now_ms),
+        source: ReadinessSource::OutputStable,
+    }
+}
+
+fn silence_state(data_version: u64, last_output_ms: u64, now_ms: u64) -> Option<ProgramState> {
+    if data_version == 0 || last_output_ms == 0 {
         None
     } else if now_ms.saturating_sub(last_output_ms) >= OUTPUT_STABLE_MS {
         Some(ProgramState::Idle)
     } else {
         Some(ProgramState::Working)
-    };
-    PaneReadiness {
-        state,
-        source: ReadinessSource::OutputStable,
     }
 }
 
 /// The `#{pane_agent_source}` text and the `context_ready` `ready_signal`.
+/// `output_stable` alone does not mean silent: with an unknown state (no
+/// output yet) `#{pane_agent_readiness}` is empty and `#{pane_ready}` is 0.
 pub fn source_label(source: ReadinessSource) -> &'static str {
     match source {
         ReadinessSource::Reported => "reported",

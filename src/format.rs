@@ -1837,6 +1837,12 @@ pub fn expand_var(var: &str, app: &AppState, win_idx: usize) -> String {
                 crate::agent_state::source_label(readiness.source).to_string()
             })
             .unwrap_or_default(),
+        "pane_agent_readiness" => target_pane()
+            .map(|p| {
+                let readiness = p.readiness(crate::agent_state::now_ms());
+                crate::agent_state::state_label(readiness.state).to_string()
+            })
+            .unwrap_or_default(),
         "pane_agent_kind" => target_pane()
             .map(|p| crate::agent_state::kind_label(p.agent_state.details().kind).to_string())
             .unwrap_or_default(),

@@ -64,10 +64,12 @@ psmux send-keys -t $pane --wait-ready "cargo build" Enter
 
 "Ready" is the same test as `#{pane_ready}` and `wait-pane --ready`, and it
 means idle. If the pane's program reports its state with OSC 7501 (see
-`#{pane_agent_state}`), that reported state decides: only `idle` is ready, so
-a pane reporting `working`, `blocked`, `done` or `error` is not ready even
-when its output is silent. Otherwise ready means the pane has produced output
-and then been silent for 500 ms; that is not prompt detection.
+`#{pane_agent_state}`) as `idle`, `working` or `blocked`, that reported state
+decides: `idle` is ready, and a pane reporting `working` or `blocked` is not
+ready even when its output is silent. Otherwise, including when only `done` or
+`error` records are left, ready means the pane has produced output and then
+been silent for 500 ms; that is not prompt detection.
+`#{pane_agent_readiness}` shows the state the rule reached and
 `#{pane_agent_source}` tells you which rule applied. The server checks every
 100 ms for up to 30 seconds; if the pane never becomes ready, the keys are
 sent anyway, so the command does not fail on timeout. That includes an agent
@@ -341,8 +343,9 @@ The `display-message` command supports these variables:
 | `#{pane_agent_app}` | App name of the worst record, inherited from its parent record (Claude Code reports `claude-code`) |
 | `#{pane_agent_title}` | Title of the worst record |
 | `#{pane_agent_msg}` | One-line message of the worst record |
-| `#{pane_agent_source}` | Which rule `#{pane_ready}` used: `reported` when the pane has an OSC 7501 record, `output_stable` otherwise |
-| `#{pane_ready}` | `1` when the pane is idle: its reported state is `idle`, or, with no record, it produced output and has been silent for 500 ms |
+| `#{pane_agent_readiness}` | State the `#{pane_ready}` rule reached: the reported `idle`, `working` or `blocked`, or, by output silence, `idle` (silent for 500 ms) or `working`; empty when nothing is reported and the pane has produced no output yet |
+| `#{pane_agent_source}` | Which rule `#{pane_ready}` used: `reported` when the pane's worst OSC 7501 record is `idle`, `working` or `blocked`, `output_stable` otherwise. `output_stable` with an empty `#{pane_agent_readiness}` means no output yet, not silence |
+| `#{pane_ready}` | `1` when `#{pane_agent_readiness}` is `idle` |
 
 `#{pane_agent_state}` is the worst state over all of the pane's OSC 7501
 records, in the order blocked, error, working, done, idle. A Claude Code
@@ -368,7 +371,20 @@ takes its reported state (`#{pane_agent_source}` is `reported`); a pane with
 none falls back to 500 ms of output silence (`output_stable`). After
 `state=clear` the pane falls back to silence again. An agent that redraws a
 spinner while it reports `idle` is ready; one that reports `working` while
-silent is not.
+silent is not. The reported state is the worst over all records, so a Claude
+Code background task that is `working` keeps the pane not ready while the main
+session is `idle`.
+
+`done` and `error` records survive the end of the program, so they do not
+decide readiness: with only those left, the pane is judged by output silence.
+A `working` or `blocked` record does decide, and an agent that crashes or is
+killed never sends `state=clear`, so its leftover record keeps the pane not
+ready: `#{pane_ready}` stays 0, `wait-pane --ready` without `--timeout` never
+returns and `send-keys --wait-ready` waits its full 30 seconds. psmux does not
+inject OSC 133 prompts, so the record goes only when the pane's process exits,
+the shell prompt emits OSC 133 A, or the terminal is reset. To recover, run
+`psmux clear-history -t <pane>`, or print `ESC c` in the pane (for example
+`[Console]::Write([char]27 + 'c')` in pwsh), or send `state=clear` yourself.
 
 ## Advanced Commands
 
