@@ -29,10 +29,11 @@ shell.
 
 ### psmux/pane/ready
 **Status:** implemented.
-**When:** a pane has produced output and then been silent for 500 ms — the
-same signal as the JSON-RPC `context_ready` push event
-(`ready_signal: "output_stable"`). This is not prompt detection. Fires once
-per pane.
+**When:** a pane is first ready by the `#{pane_ready}` rule: its reported
+OSC 7501 state is `idle`, or, with nothing reported, it produced output and
+then was silent for 500 ms. The same signal as the JSON-RPC `context_ready`
+push event (`ready_signal: "reported"` or `"output_stable"`). This is not
+prompt detection. Fires once per pane.
 **Payload:**
 ```json
 { "pane_id": "%3", "elapsed_ms": 842 }

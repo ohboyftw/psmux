@@ -241,3 +241,77 @@ fn state_label_when_any_state_then_closed_set_without_colon() {
         assert!(!state_label(s).contains(':'));
     }
 }
+
+const SILENT_NOW: u64 = 10_000 + OUTPUT_STABLE_MS;
+
+#[test]
+fn readiness_when_working_fed_on_silent_pane_then_working_reported() {
+    let mut parser = vt100::Parser::new(24, 80, 0);
+    let mut cache = AgentStateCache::default();
+    report(&mut parser, "state=working");
+    cache.observe(parser.screen());
+    let r = readiness_of(7, 10_000, SILENT_NOW, cache.worst());
+    assert_eq!(r.state, Some(ProgramState::Working));
+    assert_eq!(r.source, ReadinessSource::Reported);
+    assert!(!r.is_ready());
+}
+
+#[test]
+fn readiness_when_silent_and_unreported_then_idle_output_stable() {
+    let r = readiness_of(7, 10_000, SILENT_NOW, None);
+    assert_eq!(r.state, Some(ProgramState::Idle));
+    assert_eq!(r.source, ReadinessSource::OutputStable);
+    assert!(r.is_ready());
+}
+
+#[test]
+fn readiness_when_output_within_threshold_then_working_output_stable() {
+    let r = readiness_of(7, 10_000, SILENT_NOW - 1, None);
+    assert_eq!(r.state, Some(ProgramState::Working));
+    assert_eq!(r.source, ReadinessSource::OutputStable);
+    assert!(!r.is_ready());
+}
+
+#[test]
+fn readiness_when_no_output_yet_then_unknown() {
+    assert_eq!(readiness_of(0, 10_000, SILENT_NOW, None).state, None);
+    assert_eq!(readiness_of(7, 0, SILENT_NOW, None).state, None);
+    assert!(!readiness_of(0, 0, SILENT_NOW, None).is_ready());
+}
+
+#[test]
+fn readiness_when_reported_idle_during_output_then_ready() {
+    let r = readiness_of(7, SILENT_NOW, SILENT_NOW, Some(ProgramState::Idle));
+    assert_eq!(r.source, ReadinessSource::Reported);
+    assert!(r.is_ready());
+}
+
+#[test]
+fn readiness_when_blocked_or_done_reported_then_not_ready() {
+    for state in [
+        ProgramState::Blocked,
+        ProgramState::Done,
+        ProgramState::Error,
+    ] {
+        assert!(!readiness_of(7, 10_000, SILENT_NOW, Some(state)).is_ready());
+    }
+}
+
+#[test]
+fn readiness_when_record_cleared_then_falls_back_to_silence() {
+    let mut parser = vt100::Parser::new(24, 80, 0);
+    let mut cache = AgentStateCache::default();
+    report(&mut parser, "state=working");
+    report(&mut parser, "state=clear");
+    cache.observe(parser.screen());
+    assert!(parser.screen().program_status_seen());
+    let r = readiness_of(7, 10_000, SILENT_NOW, cache.worst());
+    assert_eq!(r.source, ReadinessSource::OutputStable);
+    assert!(r.is_ready());
+}
+
+#[test]
+fn source_label_when_each_source_then_closed_set() {
+    assert_eq!(source_label(ReadinessSource::Reported), "reported");
+    assert_eq!(source_label(ReadinessSource::OutputStable), "output_stable");
+}

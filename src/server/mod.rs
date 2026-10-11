@@ -3646,6 +3646,25 @@ pub fn run_server(
                             }
                             let _ = resp.send((dv, lot));
                         }
+                        CtrlReq::QueryPaneState(pane_id, resp) => {
+                            let now_ms = crate::agent_state::now_ms();
+                            let mut reply =
+                                (0, crate::agent_state::readiness_of(0, 0, now_ms, None));
+                            for win in app.windows.iter() {
+                                if let Some(path) = crate::tree::find_path_by_id(&win.root, pane_id)
+                                {
+                                    if let Some(p) = crate::tree::active_pane(&win.root, &path) {
+                                        reply = (
+                                            p.data_version
+                                                .load(std::sync::atomic::Ordering::Acquire),
+                                            p.readiness(now_ms),
+                                        );
+                                    }
+                                    break;
+                                }
+                            }
+                            let _ = resp.send(reply);
+                        }
                         CtrlReq::RenameSession(name) => {
                             let _old_session_name = app.session_name.clone();
                             // Compute new port file base with socket_name prefix
@@ -6252,26 +6271,22 @@ pub fn run_server(
                 }
             }
             // Fire context_ready push events for newly-ready panes
-            let now_ms = std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap_or_default()
-                .as_millis() as u64;
+            let now_ms = crate::agent_state::now_ms();
             for win in &mut app.windows {
                 tree::visit_leaves_mut(&mut win.root, &mut |p| {
                     if p.dead || p.readiness_notified {
                         return;
                     }
-                    let dv = p.data_version.load(std::sync::atomic::Ordering::Acquire);
-                    let lot = p
-                        .last_output_time
-                        .load(std::sync::atomic::Ordering::Acquire);
-                    if dv > 0 && lot > 0 && now_ms.saturating_sub(lot) >= 500 {
+                    let readiness = p.readiness(now_ms);
+                    if readiness.is_ready() {
                         p.readiness_notified = true;
+                        let dv = p.data_version.load(std::sync::atomic::Ordering::Acquire);
                         let event = crate::backend::protocol::ContextReadyEvent {
                             method: "context_ready".into(),
                             params: crate::backend::protocol::ContextReadyParams {
                                 context_id: format!("%{}", p.id),
-                                ready_signal: "output_stable".into(),
+                                ready_signal: crate::agent_state::source_label(readiness.source)
+                                    .into(),
                                 data_version: dv,
                             },
                         };

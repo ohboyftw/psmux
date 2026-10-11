@@ -221,10 +221,9 @@ pub struct Pane {
     /// output is processed.  Checked by the server to know when the screen
     /// has actually changed (avoids serialising stale frames).
     pub data_version: std::sync::Arc<std::sync::atomic::AtomicU64>,
-    /// Epoch millis of the most recent PTY output.  Used together with
-    /// `data_version` to determine pane readiness: a pane is "ready" when it
-    /// has produced output (`data_version > 0`) **and** the output has
-    /// stabilised (no new output for ≥500 ms).  Exposed as `#{pane_ready}`.
+    /// Epoch millis of the most recent PTY output.  With `data_version` it
+    /// gives the silence fallback of `Pane::readiness` (`#{pane_ready}`)
+    /// for panes that report no OSC 7501 state.
     pub last_output_time: std::sync::Arc<std::sync::atomic::AtomicU64>,
     /// Timestamp of the last auto-rename foreground-process check (throttled to ~1/s).
     pub last_title_check: Instant,
@@ -1394,6 +1393,13 @@ pub enum CtrlReq {
     /// Query a pane's readiness state: returns (data_version, last_output_time_ms).
     /// Used by `wait-pane --ready` to poll until the shell prompt has appeared.
     QueryPaneReady(usize, mpsc::Sender<(u64, u64)>),
+    /// Query a pane's (data_version, readiness) through the single readiness
+    /// predicate, `Pane::readiness`.  An unknown pane answers data_version 0
+    /// and an unknown state.
+    QueryPaneState(
+        usize,
+        mpsc::Sender<(u64, crate::agent_state::PaneReadiness)>,
+    ),
     /// Read the pane's current screen buffer as text.
     /// `pane_id` of `None` targets the active pane; otherwise the pane with the
     /// given `%N` id. Used by `wait-for --output` for regex polling.

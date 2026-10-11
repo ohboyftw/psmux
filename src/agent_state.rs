@@ -182,6 +182,99 @@ pub fn kind_label(kind: Option<BlockedKind>) -> &'static str {
     }
 }
 
+/// Milliseconds of output silence after which a non-reporting pane is idle.
+pub const OUTPUT_STABLE_MS: u64 = 500;
+
+/// Where a pane's [`PaneReadiness`] state came from.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ReadinessSource {
+    /// The program reported its state with OSC 7501.
+    Reported,
+    /// Inferred from output silence.
+    OutputStable,
+}
+
+/// A pane's state as every readiness check sees it: `#{pane_ready}`,
+/// `#{pane_agent_source}`, `wait-pane --ready`, `send-keys --wait-ready`,
+/// the spawn `wait_ready` RPC option and the `context_ready` push.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PaneReadiness {
+    /// `None` = unknown (no output yet and nothing reported).
+    pub state: Option<ProgramState>,
+    /// Where `state` came from.
+    pub source: ReadinessSource,
+}
+
+impl PaneReadiness {
+    /// Ready means idle; a `blocked`, `working`, `done` or `error` report,
+    /// or output within the last [`OUTPUT_STABLE_MS`], is not ready.
+    pub fn is_ready(&self) -> bool {
+        self.state == Some(ProgramState::Idle)
+    }
+}
+
+/// The single readiness predicate.  A reported record wins; otherwise no
+/// output yet is unknown, [`OUTPUT_STABLE_MS`] of silence is idle and
+/// anything more recent is working.  Keyed on a cached record rather than
+/// the parser's `program_status_seen()`, which stays true after
+/// `state=clear`, so a shell left behind by an agent falls back to silence.
+pub fn readiness_of(
+    data_version: u64,
+    last_output_ms: u64,
+    now_ms: u64,
+    reported: Option<ProgramState>,
+) -> PaneReadiness {
+    if reported.is_some() {
+        return PaneReadiness {
+            state: reported,
+            source: ReadinessSource::Reported,
+        };
+    }
+    let state = if data_version == 0 || last_output_ms == 0 {
+        None
+    } else if now_ms.saturating_sub(last_output_ms) >= OUTPUT_STABLE_MS {
+        Some(ProgramState::Idle)
+    } else {
+        Some(ProgramState::Working)
+    };
+    PaneReadiness {
+        state,
+        source: ReadinessSource::OutputStable,
+    }
+}
+
+/// The `#{pane_agent_source}` text and the `context_ready` `ready_signal`.
+pub fn source_label(source: ReadinessSource) -> &'static str {
+    match source {
+        ReadinessSource::Reported => "reported",
+        ReadinessSource::OutputStable => "output_stable",
+    }
+}
+
+/// Wall-clock milliseconds since the Unix epoch, the clock the pane reader
+/// threads stamp `last_output_time` with.
+pub fn now_ms() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as u64
+}
+
+impl crate::types::Pane {
+    /// This pane's [`PaneReadiness`] at `now_ms`.  Reads only atomics and
+    /// the agent-state cache, never the parser, so it is safe from format
+    /// expansion.
+    pub fn readiness(&self, now_ms: u64) -> PaneReadiness {
+        use std::sync::atomic::Ordering::Acquire;
+        readiness_of(
+            self.data_version.load(Acquire),
+            self.last_output_time.load(Acquire),
+            now_ms,
+            self.agent_state.worst(),
+        )
+    }
+}
+
 #[cfg(test)]
 #[path = "../tests-rs/test_agent_state.rs"]
 mod tests;

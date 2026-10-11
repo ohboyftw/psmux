@@ -62,12 +62,18 @@ $pane = psmux new-window -d -P -F '#{pane_id}'
 psmux send-keys -t $pane --wait-ready "cargo build" Enter
 ```
 
-"Ready" is the same output-silence test as `#{pane_ready}` and
-`wait-pane --ready`: the pane has produced output and then been silent for
-500 ms. It is not prompt detection. The server checks every 100 ms for up to
-30 seconds; if the pane never settles, the keys are sent anyway, so the
-command does not fail on timeout. Name the pane by id (`-t %N`); without `-t`
-the keys go out at once.
+"Ready" is the same test as `#{pane_ready}` and `wait-pane --ready`, and it
+means idle. If the pane's program reports its state with OSC 7501 (see
+`#{pane_agent_state}`), that reported state decides: only `idle` is ready, so
+a pane reporting `working`, `blocked`, `done` or `error` is not ready even
+when its output is silent. Otherwise ready means the pane has produced output
+and then been silent for 500 ms; that is not prompt detection.
+`#{pane_agent_source}` tells you which rule applied. The server checks every
+100 ms for up to 30 seconds; if the pane never becomes ready, the keys are
+sent anyway, so the command does not fail on timeout. That includes an agent
+waiting at a `blocked` prompt: keys meant to answer it arrive after the
+30 seconds, so send those without `--wait-ready`. Name the pane by id
+(`-t %N`); without `-t` the keys go out at once.
 
 ## Pane Information
 
@@ -171,7 +177,7 @@ psmux capture-pane -t mypane -p | Select-String -NotMatch "__DONE__"
 Other `wait-for` modes:
 
 ```powershell
-psmux wait-for -t mypane --ready            # pane output silent ≥500ms
+psmux wait-for -t mypane --ready            # pane idle (#{pane_ready})
 psmux wait-for --exit 12345 --timeout 60000 # process PID exits
 psmux wait-for --file out.log --timeout 30000 # filesystem appears
 ```
@@ -199,7 +205,7 @@ psmux wait-pane -t %3
 # With timeout (milliseconds)
 psmux wait-pane -t %3 --timeout 30000
 
-# Wait for the pane's output to settle (not for child exit)
+# Wait for the pane to be idle, as #{pane_ready} (not for child exit)
 psmux wait-pane -t %3 --ready --timeout 10000
 ```
 
@@ -335,6 +341,8 @@ The `display-message` command supports these variables:
 | `#{pane_agent_app}` | App name of the worst record, inherited from its parent record (Claude Code reports `claude-code`) |
 | `#{pane_agent_title}` | Title of the worst record |
 | `#{pane_agent_msg}` | One-line message of the worst record |
+| `#{pane_agent_source}` | Which rule `#{pane_ready}` used: `reported` when the pane has an OSC 7501 record, `output_stable` otherwise |
+| `#{pane_ready}` | `1` when the pane is idle: its reported state is `idle`, or, with no record, it produced output and has been silent for 500 ms |
 
 `#{pane_agent_state}` is the worst state over all of the pane's OSC 7501
 records, in the order blocked, error, working, done, idle. A Claude Code
@@ -352,6 +360,15 @@ invisible format characters (U+200B-200F, U+FEFF) and keeps at most 200
 characters. When the pane's process exits, `working`, `blocked` and `idle`
 records are dropped and `done` and `error` survive. They stay visible only
 while the dead pane is kept (`remain-on-exit`); otherwise they go with the pane.
+
+`#{pane_ready}`, `wait-pane --ready`, `wait-for --ready`,
+`send-keys --wait-ready`, the JSON-RPC `spawn_agent` `wait_ready` option and
+the `context_ready` event all use one rule. A pane with an OSC 7501 record
+takes its reported state (`#{pane_agent_source}` is `reported`); a pane with
+none falls back to 500 ms of output silence (`output_stable`). After
+`state=clear` the pane falls back to silence again. An agent that redraws a
+spinner while it reports `idle` is ready; one that reports `working` while
+silent is not.
 
 ## Advanced Commands
 

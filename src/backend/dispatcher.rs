@@ -242,30 +242,21 @@ fn handle_spawn_agent(
 
         if let Some(pid) = parse_pane_id(&context_id) {
             // NOTE: We reuse one (qtx, qrx) channel across loop iterations.
-            // If the server is slow, old responses may queue in qrx. This is
-            // acceptable because data_version and last_output_time only ever
-            // increase — a stale response just delays detection by one iteration.
-            let (qtx, qrx) = mpsc::channel::<(u64, u64)>();
+            // If the server is slow, old responses may queue in qrx; a stale
+            // response just delays detection by one iteration.
+            let (qtx, qrx) = mpsc::channel();
             loop {
-                let qtx2 = qtx.clone();
-                let _ = tx.send(CtrlReq::QueryPaneReady(pid, qtx2));
-                if let Ok((dv, lot)) = qrx.recv_timeout(std::time::Duration::from_secs(2)) {
-                    if dv > 0 && lot > 0 {
-                        let now_ms = std::time::SystemTime::now()
-                            .duration_since(std::time::UNIX_EPOCH)
-                            .unwrap_or_default()
-                            .as_millis() as u64;
-                        if now_ms.saturating_sub(lot) >= 500 {
-                            ready = true;
-                            elapsed_ms = start.elapsed().as_millis() as u64;
-                            data_version = dv;
-                            break;
-                        }
+                let _ = tx.send(CtrlReq::QueryPaneState(pid, qtx.clone()));
+                if let Ok((dv, readiness)) = qrx.recv_timeout(std::time::Duration::from_secs(2)) {
+                    if readiness.is_ready() {
+                        ready = true;
+                        elapsed_ms = start.elapsed().as_millis() as u64;
+                        data_version = dv;
+                        break;
                     }
                 }
                 if std::time::Instant::now() >= deadline {
-                    let qtx_final = qtx.clone();
-                    let _ = tx.send(CtrlReq::QueryPaneReady(pid, qtx_final));
+                    let _ = tx.send(CtrlReq::QueryPaneState(pid, qtx.clone()));
                     data_version = qrx
                         .recv_timeout(std::time::Duration::from_millis(500))
                         .map(|(dv, _)| dv)

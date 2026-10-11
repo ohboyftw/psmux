@@ -1585,30 +1585,9 @@ pub fn expand_var(var: &str, app: &AppState, win_idx: usize) -> String {
             }
         }
         "pane_ready" => {
-            // A pane is "ready" when its shell has produced output (data_version > 0)
-            // and the output has stabilised (no new output for >= 500ms).
-            // This indicates the shell prompt has appeared and the pane accepts input.
-            if let Some(p) = target_pane() {
-                let dv = p.data_version.load(std::sync::atomic::Ordering::Acquire);
-                let lot = p
-                    .last_output_time
-                    .load(std::sync::atomic::Ordering::Acquire);
-                if dv > 0 && lot > 0 {
-                    let now_ms = std::time::SystemTime::now()
-                        .duration_since(std::time::UNIX_EPOCH)
-                        .unwrap_or_default()
-                        .as_millis() as u64;
-                    if now_ms.saturating_sub(lot) >= 500 {
-                        "1".into()
-                    } else {
-                        "0".into()
-                    }
-                } else {
-                    "0".into()
-                }
-            } else {
-                "0".into()
-            }
+            let ready =
+                target_pane().is_some_and(|p| p.readiness(crate::agent_state::now_ms()).is_ready());
+            if ready { "1" } else { "0" }.into()
         }
         "pane_tty" => {
             if let Some(p) = target_pane() {
@@ -1851,6 +1830,12 @@ pub fn expand_var(var: &str, app: &AppState, win_idx: usize) -> String {
         }
         "pane_agent_state" => target_pane()
             .map(|p| crate::agent_state::state_label(p.agent_state.worst()).to_string())
+            .unwrap_or_default(),
+        "pane_agent_source" => target_pane()
+            .map(|p| {
+                let readiness = p.readiness(crate::agent_state::now_ms());
+                crate::agent_state::source_label(readiness.source).to_string()
+            })
             .unwrap_or_default(),
         "pane_agent_kind" => target_pane()
             .map(|p| crate::agent_state::kind_label(p.agent_state.details().kind).to_string())

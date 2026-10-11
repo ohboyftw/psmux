@@ -996,27 +996,19 @@ pub(crate) fn handle_connection(
                     }
                 }
                 // --wait-ready: poll pane readiness before delivering keys.
-                // Uses the same 500ms silence heuristic as wait-pane --ready.
+                // Same predicate as wait-pane --ready (Pane::readiness).
                 if wait_ready {
                     if let Some(pid) = target_pane {
                         let deadline =
                             std::time::Instant::now() + std::time::Duration::from_secs(30);
-                        let (qtx, qrx) = mpsc::channel::<(u64, u64)>();
+                        let (qtx, qrx) = mpsc::channel();
                         loop {
-                            let qtx2 = qtx.clone();
-                            let _ = tx.send(CtrlReq::QueryPaneReady(pid, qtx2));
-                            if let Ok((dv, lot)) =
+                            let _ = tx.send(CtrlReq::QueryPaneState(pid, qtx.clone()));
+                            if let Ok((_, readiness)) =
                                 qrx.recv_timeout(std::time::Duration::from_secs(2))
                             {
-                                if dv > 0 && lot > 0 {
-                                    let now_ms = std::time::SystemTime::now()
-                                        .duration_since(std::time::UNIX_EPOCH)
-                                        .unwrap_or_default()
-                                        .as_millis()
-                                        as u64;
-                                    if now_ms.saturating_sub(lot) >= 500 {
-                                        break; // pane is ready
-                                    }
+                                if readiness.is_ready() {
+                                    break;
                                 }
                             }
                             if std::time::Instant::now() >= deadline {
@@ -1211,29 +1203,20 @@ pub(crate) fn handle_connection(
                 }
                 if let Some(pid) = pane_id {
                     if wait_ready {
-                        // Poll pane readiness: output has stabilised (no new
-                        // output for >=500ms after initial burst).
+                        // Poll Pane::readiness until the pane is idle.
                         let deadline = timeout_ms.map(|ms| {
                             std::time::Instant::now() + std::time::Duration::from_millis(ms)
                         });
-                        let (qtx, qrx) = mpsc::channel::<(u64, u64)>();
+                        let (qtx, qrx) = mpsc::channel();
                         loop {
-                            let qtx2 = qtx.clone();
-                            let _ = tx.send(CtrlReq::QueryPaneReady(pid, qtx2));
-                            if let Ok((dv, lot)) =
+                            let _ = tx.send(CtrlReq::QueryPaneState(pid, qtx.clone()));
+                            if let Ok((_, readiness)) =
                                 qrx.recv_timeout(std::time::Duration::from_secs(2))
                             {
-                                if dv > 0 && lot > 0 {
-                                    let now_ms = std::time::SystemTime::now()
-                                        .duration_since(std::time::UNIX_EPOCH)
-                                        .unwrap_or_default()
-                                        .as_millis()
-                                        as u64;
-                                    if now_ms.saturating_sub(lot) >= 500 {
-                                        let _ = write!(write_stream, "0");
-                                        let _ = write_stream.flush();
-                                        break;
-                                    }
+                                if readiness.is_ready() {
+                                    let _ = write!(write_stream, "0");
+                                    let _ = write_stream.flush();
+                                    break;
                                 }
                             }
                             if let Some(dl) = deadline {

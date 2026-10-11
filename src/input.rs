@@ -3011,7 +3011,9 @@ fn prime_pane_input(pane: &mut Pane) {
     }
     pane.input_primed = true;
 
-    // Wait for pane readiness: output produced AND stabilized
+    // Wait for output produced AND stabilized.  Deliberately not
+    // Pane::readiness: this 300 ms pre-input nudge runs before keys reach a
+    // fresh shell, and an agent's reported state must not hold it up.
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
     loop {
         let dv = pane.data_version.load(std::sync::atomic::Ordering::Relaxed);

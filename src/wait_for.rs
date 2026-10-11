@@ -18,8 +18,9 @@ pub enum WaitCondition {
     File { path: PathBuf },
     /// Wait for a regex pattern to match the pane's live screen buffer.
     Output { pattern: regex::Regex },
-    /// Wait for the pane's output to settle: at least one byte of output, then
-    /// 500 ms of silence (`#{pane_ready}`). This is not prompt detection.
+    /// Wait for the pane to be idle (`#{pane_ready}`): its reported OSC 7501
+    /// state, else at least one byte of output then 500 ms of silence.  This
+    /// is not prompt detection.
     Ready,
 }
 
