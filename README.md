@@ -233,7 +233,7 @@ See [docs/power-pack-tools.md](docs/power-pack-tools.md) for the full tool stack
 > - **`wait-for --exit PID`** — Block until a process exits via `WaitForSingleObject`, returns exit code
 > - **`wait-for --file PATH`** — Block until a file appears (server-side polling). Eliminates client-side sentinel loops
 > - **`wait-for --output REGEX`** — Block until a regex matches the pane's live screen buffer (50ms polling)
-> - **`wait-for --ready`** — Block until the pane reaches an idle prompt (reuses `context_ready` signal)
+> - **`wait-for --ready`** — Block until the pane is idle (`#{pane_ready}`: reported OSC 7501 `idle`, else 500 ms of output silence)
 > - **`--timeout <ms>`** — Milliseconds on both `wait-for` and `wait-pane`. CLI socket read-timeout sizes from it plus headroom; exit codes `0` success, `1` timeout, `2` error
 > - **`--json` output** — All wait-for modes return structured `WaitOutcome` JSON for machine consumption
 > - **JSON-RPC `wait_for`** — Same conditions available via the CustomPaneBackend named pipe

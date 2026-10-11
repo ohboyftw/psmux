@@ -143,7 +143,7 @@ an idle shell prompt before returning.
 | `split_direction` | `"horizontal"\|"vertical"?` | null | Split orientation when mode is `"split"`. |
 | `mode` | `"split"\|"window"\|"auto"` | `"auto"` | `"auto"` tries split, falls back to new window if pane is too small. |
 | `window_name` | `string?` | null | Window name when mode is `"window"` or auto-fallback. |
-| `wait_ready` | `bool` | `true` | Block until the pane reaches an idle prompt. |
+| `wait_ready` | `bool` | `true` | Block until the pane is idle by the `#{pane_ready}` rule: its reported OSC 7501 state is `idle`, or, with nothing reported, 500 ms of output silence. An agent that reports `working` or `blocked` until the timeout fails with `-32004`. |
 | `ready_timeout_ms` | `number?` | 15000 | Max wait for readiness. Returns `-32004` on timeout; `context_id` is in `error.data`. |
 | `shell` | `string?` | null | Override the shell used to launch the pane (`bash`, `pwsh`, `cmd`). |
 | `bare` | `bool?` | false | Prepend `--bare` to a claude command (flicker-free rendering). |
