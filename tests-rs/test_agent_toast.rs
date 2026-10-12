@@ -229,6 +229,27 @@ fn forget_gone_when_pane_exited_on_its_own_then_toast_kept() {
 }
 
 #[test]
+fn take_any_when_last_pane_killed_with_pending_done_then_nothing() {
+    let mut toasts = AgentToasts::default();
+    let done = transition(Some(ProgramState::Working), Some(ProgramState::Done));
+    toasts.offer(1, &done, "s", Instant::now());
+    toasts.forget(1);
+    toasts.forget_gone(&HashSet::from([1]));
+    assert!(toasts.take_any().is_none());
+}
+
+#[test]
+fn take_any_when_exited_pane_later_killed_then_nothing() {
+    let mut toasts = AgentToasts::default();
+    let done = transition(Some(ProgramState::Working), Some(ProgramState::Done));
+    toasts.offer(1, &done, "s", Instant::now());
+    toasts.note_exited(1);
+    toasts.forget(1);
+    toasts.forget_gone(&HashSet::new());
+    assert!(toasts.take_any().is_none());
+}
+
+#[test]
 fn take_any_when_pane_rate_limited_then_returns_pending() {
     let mut toasts = AgentToasts::default();
     let now = Instant::now();

@@ -134,6 +134,13 @@ impl AgentToasts {
         }
     }
 
+    /// Drops the waiting toast of a killed pane, even one that stays in the
+    /// tree (the last pane of a session) or had already exited.
+    pub fn forget(&mut self, pane_id: usize) {
+        self.pending.remove(&pane_id);
+        self.exited.remove(&pane_id);
+    }
+
     /// Drops the waiting toast of every pane that is neither in `live` nor
     /// marked by [`AgentToasts::note_exited`]: a killed pane says nothing.
     pub fn forget_gone(&mut self, live: &HashSet<usize>) {

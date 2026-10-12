@@ -3622,7 +3622,11 @@ pub fn run_server(
                                     app.active_idx = app.windows.len() - 1;
                                 }
                             } else {
-                                // Last window: kill all children; reaper will detect empty session and exit
+                                // Last window: kill all children; reaper will detect empty session and exit.
+                                // Marked killed so the reaper drops their pending toasts.
+                                tree::visit_leaves_mut(&mut app.windows[0].root, &mut |p| {
+                                    p.killed = true;
+                                });
                                 kill_all_children(&mut app.windows[0].root);
                             }
                             hook_event = Some("window-closed");

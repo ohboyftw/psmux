@@ -1051,6 +1051,10 @@ fn kill_pane_at_path(win: &mut Window, path: &[usize]) {
 pub fn kill_active_pane(app: &mut AppState) -> io::Result<()> {
     let win = &mut app.windows[app.active_idx];
     let active_path = win.active_path.clone();
+    if let Some(id) = crate::tree::get_active_pane_id(&win.root, &active_path) {
+        app.agent_toasts.forget(id);
+    }
+    let win = &mut app.windows[app.active_idx];
     kill_pane_at_path(win, &active_path);
     Ok(())
 }
@@ -1065,6 +1069,7 @@ pub fn kill_pane_by_id(app: &mut AppState, pane_id: usize) -> io::Result<()> {
     let Some((target_idx, target_path)) = target else {
         return Ok(());
     };
+    app.agent_toasts.forget(pane_id);
 
     if target_idx == restore_idx {
         // Same window: kill_pane_at_path already sets active_path via MRU.

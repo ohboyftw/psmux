@@ -555,6 +555,8 @@ struct ExitedPaneInfo {
     command: Option<String>,
     /// The pane's last OSC 7501 transition, read at exit.
     status: Option<crate::agent_state::AgentTransition>,
+    /// Killed (kill-pane, kill-window) rather than exited on its own.
+    killed: bool,
 }
 
 pub fn prune_exited(
@@ -573,9 +575,17 @@ pub fn prune_exited(
     for info in &exited {
         if let Some(t) = &info.status {
             crate::server::helpers::emit_status_transition(control_clients, info.pane_id, t);
-            toasts.offer(info.pane_id, t, session_name, std::time::Instant::now());
+            if !info.killed {
+                toasts.offer(info.pane_id, t, session_name, std::time::Instant::now());
+            }
         }
-        toasts.note_exited(info.pane_id);
+        // A killed pane says nothing, even when it stays in the tree as
+        // the last pane and the server exits with its toast still waiting.
+        if info.killed {
+            toasts.forget(info.pane_id);
+        } else {
+            toasts.note_exited(info.pane_id);
+        }
         let event = crate::backend::protocol::ContextExitedEvent {
             method: "context_exited".into(),
             params: crate::backend::protocol::ContextExitedParams {
@@ -650,6 +660,7 @@ fn prune_exited_inner(
                     elapsed_ms: Some(p.spawn_time.elapsed().as_millis() as u64),
                     command: p.spawn_command.clone(),
                     status: agent_status,
+                    killed: true,
                 });
                 return if remain_on_exit.keeps(exit_code) {
                     p.dead = true;
@@ -675,6 +686,7 @@ fn prune_exited_inner(
                         elapsed_ms: Some(p.spawn_time.elapsed().as_millis() as u64),
                         command: p.spawn_command.clone(),
                         status: agent_status,
+                        killed: false,
                     });
                     if remain_on_exit.keeps(exit_code) {
                         p.dead = true;
