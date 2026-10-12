@@ -314,9 +314,10 @@ $env:PSMUX_CONPTY_DIR = "C:\tools\openconsole"
 # allows it, so a server started from a pane or an SSH session outlives it.
 $env:PSMUX_NO_PANE_JOB = "1"
 
-# Never start the mycel event bus (`psmux bus`). Session servers still publish
-# to a bus that is already running (a standalone `mycel` or another psmux
-# bus). Read once, when a session server starts. See docs/mycel-topics.md.
+# Turn mycel publishing off: session servers never start the event bus
+# (`psmux bus`) and never publish, not even to a bus that is already running
+# (a standalone `mycel` or another psmux bus). Read once, when a session
+# server starts. See docs/mycel-topics.md.
 $env:PSMUX_BUS = "0"
 
 # Where to look for the mycel bus and where `psmux bus` hosts it. Defaults:

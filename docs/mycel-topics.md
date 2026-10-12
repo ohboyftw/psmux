@@ -214,14 +214,19 @@ psmux bus stop        # or: mycel stop
 `psmux bus stop` asks whatever bus answers (a psmux bus or a standalone
 `mycel` server) to shut down. The bus is not gone for good: the next event
 any running session publishes starts it again, within about 30 seconds. To
-keep it stopped, set `PSMUX_BUS=0` before starting psmux. Session servers
-read it once when they start, so servers already running (warm-pool ones
-included) keep starting the bus until they exit.
+keep it stopped, set `PSMUX_BUS=0` before starting psmux: that turns
+publishing off, so session servers neither start a bus nor publish to one
+that is running. Session servers read it once when they start, so servers
+already running (warm-pool ones included) keep publishing, and starting the
+bus, until they exit.
 
 Running `mycel start` while a psmux bus is up is not refused. On Windows the
 standalone server's listener sets `SO_REUSEADDR` and binds the same port,
-and the two servers then split clients between them. Run `psmux bus stop`
-and set `PSMUX_BUS=0` first if you want the standalone server.
+and the two servers then split clients between them. To use the standalone
+server instead, run `psmux bus stop` and then `mycel start` straight away:
+session servers find the live standalone server and publish to it rather
+than start their own bus. (`PSMUX_BUS=0` would turn psmux's publishing off
+altogether.)
 
 If `~/.mycel/server` cannot be written, the bus still runs and clients find
 it on the port. After three starts in a row that never produced a live bus
@@ -232,7 +237,7 @@ announces no `$mycel/clients/*` events for them.
 
 | Variable | Effect |
 |----------|--------|
-| `PSMUX_BUS=0` | Never start a bus. An existing one is still used. Read when a session server starts. |
+| `PSMUX_BUS=0` | Publishing off: never start a bus and never publish, not even to a bus that is already running. Read when a session server starts. |
 | `PSMUX_BUS_PORT` | Port to probe and to host on (default `4321`). |
 | `PSMUX_BUS_DISCOVERY` | Discovery file to read and write (default `~/.mycel/server`). |
 

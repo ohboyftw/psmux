@@ -821,7 +821,7 @@ pub fn run_server(
     let shared_aliases_main = shared_aliases.clone();
 
     // Initialize the mycel publisher (the default-on `mycel` feature). The
-    // first publish finds or starts a bus; PSMUX_BUS=0 turns autostart off.
+    // first publish finds or starts a bus; PSMUX_BUS=0 turns publishing off.
     #[cfg(feature = "mycel")]
     {
         let hostname = std::env::var("COMPUTERNAME")

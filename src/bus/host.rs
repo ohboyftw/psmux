@@ -138,7 +138,8 @@ pub fn run_bus_process(loc: &BusLocation) -> std::io::Result<()> {
 
 /// Run `psmux bus stop`: ask the live bus, if any, to shut down. Returns
 /// whether a bus answered. The next psmux event starts a new one unless
-/// `PSMUX_BUS=0` was set before the session servers started.
+/// `PSMUX_BUS=0` (publishing off) was set before the session servers
+/// started.
 pub fn stop_live_bus(loc: &BusLocation) -> Result<bool, ClientError> {
     let Some(addr) = find_live_bus(loc, PROBE_TIMEOUT) else {
         return Ok(false);

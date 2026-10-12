@@ -117,19 +117,13 @@ fn link_backs_off_after_a_failed_connect() {
 #[test]
 fn autostart_is_off_for_a_test_harness() {
     // The test binary is not psmux, so it must never be spawned as a bus.
-    assert_eq!(autostart_exe(None, std::env::current_exe().ok()), None);
+    assert_eq!(autostart_exe(std::env::current_exe().ok()), None);
 }
 
 #[test]
 fn autostart_uses_a_psmux_image() {
     let exe = PathBuf::from("bin/psmux.exe");
-    assert_eq!(autostart_exe(None, Some(exe.clone())), Some(exe));
-}
-
-#[test]
-fn autostart_is_off_when_psmux_bus_is_zero() {
-    let exe = PathBuf::from("bin/psmux.exe");
-    assert_eq!(autostart_exe(Some(" 0 "), Some(exe)), None);
+    assert_eq!(autostart_exe(Some(exe.clone())), Some(exe));
 }
 
 #[test]
@@ -183,4 +177,37 @@ fn mycel_bus_publish_never_blocks_without_a_bus() {
     }
     assert!(started.elapsed() < Duration::from_secs(1));
     assert_eq!(bus.client_id(), "psmux@TEST");
+}
+
+#[test]
+fn mycel_bus_publishes_to_a_live_bus_when_enabled() {
+    let h = bus_on(0);
+    let mut sub = subscriber(&h);
+    let bus = MycelBus::with_env("psmux@TEST", None, location(h.local_addr().port()), None);
+    bus.publish(topics::PANE_CREATED, &serde_json::json!({}));
+    assert_eq!(sub.next_event().unwrap().topic, topics::PANE_CREATED);
+    h.stop();
+    h.join();
+}
+
+#[test]
+fn mycel_bus_never_publishes_when_psmux_bus_is_zero() {
+    let h = bus_on(0);
+    let mut sub = subscriber(&h);
+    sub.set_read_timeout(Some(Duration::from_millis(500)))
+        .unwrap();
+    let bus = MycelBus::with_env(
+        "psmux@TEST",
+        Some(" 0 "),
+        location(h.local_addr().port()),
+        None,
+    );
+    bus.publish(topics::PANE_CREATED, &serde_json::json!({}));
+    assert!(
+        sub.next_event().is_err(),
+        "PSMUX_BUS=0 must not reach a live bus"
+    );
+    assert_eq!(bus.client_id(), "psmux@TEST");
+    h.stop();
+    h.join();
 }

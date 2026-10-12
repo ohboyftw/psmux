@@ -240,7 +240,7 @@ See [docs/power-pack-tools.md](docs/power-pack-tools.md) for the full tool stack
 >
 > **Mycel Event Bus:**
 > - **8 `psmux/*` topics** — `pane/created`, `pane/ready`, `pane/status`, `pane/exited`, `exec/completed`, `session/created`, `session/renamed`, `session/killed`
-> - **Fire-and-forget** — Non-blocking publish to the mycel bus. psmux starts its own bus (`psmux bus`) when none is running; `psmux bus stop` stops it, `PSMUX_BUS=0` turns autostart off, and `--no-default-features` builds without it
+> - **Fire-and-forget** — Non-blocking publish to the mycel bus. psmux starts its own bus (`psmux bus`) when none is running; `psmux bus stop` stops it, `PSMUX_BUS=0` turns publishing off, and `--no-default-features` builds without it
 > - **Deprecation shim** — `psmux/pane/died` still published alongside `psmux/pane/exited` for one release
 >
 > **DAG Orchestration:**

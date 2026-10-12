@@ -4,9 +4,10 @@
 //! ([`crate::bus::client`]). On each publish it reuses its connection, or
 //! looks for a live bus (discovery file first, then `127.0.0.1:4321`) and,
 //! if none answers, starts `psmux bus` once and waits for it. Set
-//! `PSMUX_BUS=0` to never start a bus (an existing one is still used). It
-//! is read once, when the session server starts: servers already running
-//! (warm-pool servers included) keep the value they started with.
+//! `PSMUX_BUS=0` to turn publishing off: no bus is started and none is
+//! connected to, not even one that is already running. It is read once,
+//! when the session server starts: servers already running (warm-pool
+//! servers included) keep the value they started with.
 //!
 //! The bus is an optional observability channel: when it cannot be
 //! reached, events are dropped and the next attempt waits out a backoff,
@@ -68,7 +69,8 @@ pub mod topics {
 
 /// Handle to the mycel background publisher thread. Send-only.
 pub struct MycelBus {
-    tx: mpsc::SyncSender<PublishMsg>,
+    /// `None` when publishing is off (`PSMUX_BUS=0`): every event is dropped.
+    tx: Option<mpsc::SyncSender<PublishMsg>>,
     client_id: String,
 }
 
@@ -77,10 +79,26 @@ impl MycelBus {
     /// publish. `client_id` is reported as the `publisher` of every event
     /// (e.g. `"psmux@hostname"`).
     pub fn new(client_id: &str) -> Self {
-        let exe = std::env::current_exe().ok();
         let bus_env = std::env::var("PSMUX_BUS").ok();
-        let autostart = autostart_exe(bus_env.as_deref(), exe).map(spawner);
-        Self::with_link(Link::new(client_id, BusLocation::from_env(), autostart))
+        let exe = std::env::current_exe().ok();
+        Self::with_env(client_id, bus_env.as_deref(), BusLocation::from_env(), exe)
+    }
+
+    /// The bus for a `PSMUX_BUS` value, a location and this process's image.
+    fn with_env(
+        client_id: &str,
+        bus_env: Option<&str>,
+        loc: BusLocation,
+        exe: Option<PathBuf>,
+    ) -> Self {
+        if bus_env.is_some_and(|v| v.trim() == "0") {
+            return Self {
+                tx: None,
+                client_id: client_id.into(),
+            };
+        }
+        let autostart = autostart_exe(exe).map(spawner);
+        Self::with_link(Link::new(client_id, loc, autostart))
     }
 
     fn with_link(mut link: Link) -> Self {
@@ -96,7 +114,10 @@ impl MycelBus {
         if spawned.is_err() {
             crate::debug_log::server_log("mycel", "failed to spawn publisher thread");
         }
-        Self { tx, client_id }
+        Self {
+            tx: Some(tx),
+            client_id,
+        }
     }
 
     /// The client_id this bus was initialised with (e.g. `"psmux@hostname"`).
@@ -104,11 +125,14 @@ impl MycelBus {
         &self.client_id
     }
 
-    /// Publish a JSON payload to a topic. Never blocks: when the queue is
-    /// full or the thread is gone, the event is dropped.
+    /// Publish a JSON payload to a topic. Never blocks: when publishing is
+    /// off, the queue is full or the thread is gone, the event is dropped.
     pub fn publish(&self, topic: &str, payload: &impl serde::Serialize) {
+        let Some(tx) = &self.tx else {
+            return;
+        };
         if let Ok(bytes) = serde_json::to_vec(payload) {
-            let _ = self.tx.try_send(PublishMsg {
+            let _ = tx.try_send(PublishMsg {
                 topic: topic.to_string(),
                 payload: bytes,
             });
@@ -257,11 +281,8 @@ impl Link {
 
 /// The executable to start a bus with: `exe` (this process's own image),
 /// but only when it is psmux (not a test harness, which would read `bus` as
-/// a test filter), and only when `bus_env` (`PSMUX_BUS`) is not `0`.
-fn autostart_exe(bus_env: Option<&str>, exe: Option<PathBuf>) -> Option<PathBuf> {
-    if bus_env.is_some_and(|v| v.trim() == "0") {
-        return None;
-    }
+/// a test filter).
+fn autostart_exe(exe: Option<PathBuf>) -> Option<PathBuf> {
     let exe = exe?;
     is_psmux_image(&exe).then_some(exe)
 }
