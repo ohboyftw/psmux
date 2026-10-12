@@ -82,8 +82,8 @@ impl Shared {
         self.stop.load(Ordering::SeqCst)
     }
 
-    /// Stop everything: refuse new work, close every socket, wake the
-    /// accept loop, and remove the discovery file if it is still ours.
+    /// Stop everything: refuse new work, close every socket, remove the
+    /// discovery file if it is still ours, and wake the accept loop.
     fn stop_bus(&self) {
         if self.stop.swap(true, Ordering::SeqCst) {
             return;
@@ -95,10 +95,12 @@ impl Shared {
             let _ = s.shutdown(NetShutdown::Both);
         }
         drop(streams);
-        let _ = TcpStream::connect_timeout(&self.local_addr, Duration::from_millis(500));
+        // Before the wake: once the accept loop returns, `join` can return
+        // and the `psmux bus` process exit with the file still in place.
         if let Some((path, info)) = &self.discovery {
             discovery::remove_if_ours(path, info);
         }
+        let _ = TcpStream::connect_timeout(&self.local_addr, Duration::from_millis(500));
     }
 }
 
