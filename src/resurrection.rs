@@ -234,6 +234,14 @@ pub fn resurrect(
     settle: Duration,
     run: &mut dyn FnMut(&[String]) -> bool,
 ) -> io::Result<()> {
+    // Every restore step names the session with `-t`, and a target such as
+    // `py3.12` reads as session `py3`, pane 12: the steps would land in `py3`.
+    if crate::cli::parse_target(name).session.as_deref() != Some(name) {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!("'{name}' reads as a session plus a window or pane in a -t target, so the restore cannot address it"),
+        ));
+    }
     let backup = backup_path(name, dir);
     fs::copy(dir.join(format!("{name}.json")), &backup)?;
     eprintln!(

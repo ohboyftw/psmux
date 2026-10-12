@@ -500,3 +500,35 @@ fn wire_quoting_when_drive_root_unc_or_spaces_then_tokenizer_gives_the_path_back
         assert_eq!(toks[3], "cmd", "{line}");
     }
 }
+
+#[test]
+fn resurrect_when_name_reads_as_session_and_pane_then_refused_before_anything_runs() {
+    let dir = fresh_dir("psmux_resurrect_untargetable_name");
+    // `:` cannot appear in a Windows file name, so no snapshot can carry it.
+    for name in ["py3.12", "node.18", "%1", "@2"] {
+        let snap = snapshot_with_first_pane(pane(None, "", None));
+        let json = serde_json::to_string(&snap).unwrap();
+        fs::write(dir.join(format!("{name}.json")), json).expect("write");
+        let mut calls = 0;
+
+        let result = resurrect(name, &snap, &dir, Duration::ZERO, &mut |_| {
+            calls += 1;
+            true
+        });
+
+        assert!(result.is_err(), "{name}");
+        assert_eq!(calls, 0, "{name}");
+    }
+    fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn resurrect_when_name_has_a_non_numeric_dot_then_restored() {
+    let dir = fresh_dir("psmux_resurrect_dotted_name");
+    let snap = snapshot_with_first_pane(pane(None, "", None));
+    let path = dir.join("my.proj.json");
+    fs::write(&path, serde_json::to_string(&snap).unwrap()).expect("write");
+
+    resurrect("my.proj", &snap, &dir, Duration::ZERO, &mut |_| true).expect("resurrect");
+    fs::remove_dir_all(&dir).ok();
+}

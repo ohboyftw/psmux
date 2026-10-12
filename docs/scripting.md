@@ -333,12 +333,14 @@ rebuilds the session from it: every window, with its name and its panes, each
 pane in its saved directory. Panes are arranged with the `tiled` layout, not
 their original sizes. Window names are restored as they were saved, never
 expanded as formats, and automatic rename stays off for those windows.
-Resurrect refuses a session name that is already running. A pane whose saved
-directory no longer exists starts in the directory resurrect was run from
-instead, and resurrect prints a line naming the pane and the directory. When a pane was running an agent that reports its state with
-OSC 7501, the snapshot records the agent's `app` name, and resurrect starts
-the agent's resume command in that pane instead of the pane's original
-command:
+Resurrect refuses a session name that is already running, and a name that a
+`-t` target would read as a session plus a pane or window, such as `py3.12`
+(session `py3`, pane 12). A pane whose saved directory no longer exists starts
+in the directory resurrect was run from instead, and resurrect prints a line
+naming the pane and the directory. When a pane was running an agent that
+reports its state with OSC 7501, the snapshot records the agent's `app` name,
+and resurrect starts the agent's resume command in that pane instead of the
+pane's original command:
 
 | `app` | Command run on resurrect |
 |-------|--------------------------|
