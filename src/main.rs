@@ -485,8 +485,9 @@ fn run_main() -> io::Result<()> {
             // restore steps would then add windows to that live session.
             if std::path::Path::new(&crate::paths::port_file(&session_name)).exists() {
                 eprintln!(
-                    "psmux: session '{}' is running; not resurrecting",
-                    session_name
+                    "psmux: session '{}' is running; not resurrecting (delete {} if it is not)",
+                    session_name,
+                    crate::paths::port_file(&session_name)
                 );
                 std::process::exit(1);
             }
