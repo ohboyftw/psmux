@@ -2947,25 +2947,20 @@ fn run_main() -> io::Result<()> {
                     json_mode,
                 )?;
                 let trimmed = resp.trim();
-                // Exit-code mapping: success=0, timeout=1, error=2.
-                let exit_code = if json_mode {
-                    // Parse WaitOutcome JSON.
-                    match serde_json::from_str::<serde_json::Value>(trimmed) {
-                        Ok(v) => match v.get("kind").and_then(|k| k.as_str()) {
-                            Some("success") | Some("exit_success") => 0,
-                            Some("timeout") => 1,
-                            _ => 2,
-                        },
-                        Err(_) => 2,
+                let exit_code = wait_until::wait_for_exit_code(trimmed, json_mode);
+                if trimmed.is_empty() {
+                    eprintln!("psmux: server closed the connection");
+                    if json_mode {
+                        let outcome = wait_for::WaitOutcome::Error {
+                            reason: "server closed the connection".into(),
+                        };
+                        println!("{}", serde_json::to_string(&outcome).unwrap_or_default());
                     }
-                } else if trimmed == "TIMEOUT" {
-                    1
-                } else if trimmed.starts_with("ERROR") {
+                    std::process::exit(exit_code);
+                }
+                if !json_mode && trimmed.starts_with("ERROR") {
                     eprintln!("{}", trimmed);
-                    2
-                } else {
-                    0
-                };
+                }
                 if json_mode {
                     println!("{}", trimmed);
                 } else if !resp.is_empty() && exit_code != 2 {
@@ -3312,11 +3307,19 @@ fn run_main() -> io::Result<()> {
                     until.is_some(),
                     false,
                 )?;
-                let code: i32 = resp.trim().parse().unwrap_or(1);
-                std::process::exit(code);
+                let trimmed = resp.trim();
+                if until.is_some() && trimmed.is_empty() {
+                    eprintln!("psmux: server closed the connection");
+                }
+                std::process::exit(wait_until::wait_pane_exit_code(trimmed, until.is_some()));
             } else {
                 eprintln!("wait-pane: missing target (-t %N)");
-                std::process::exit(1);
+                // --until usage errors exit 2; 1 there means a timeout.
+                std::process::exit(if until.is_some() {
+                    wait_until::UNTIL_GONE
+                } else {
+                    1
+                });
             }
         }
         // select-layout - Select a layout for the window

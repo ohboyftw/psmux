@@ -247,3 +247,41 @@ fn rpc_wait_for_state_when_server_answers_met_then_success_like_cli() {
     let v: serde_json::Value = serde_json::from_str(&resp).unwrap();
     assert_eq!(v["result"]["kind"], "success");
 }
+
+#[test]
+fn wait_for_exit_code_when_server_closed_connection_then_2() {
+    assert_eq!(wait_for_exit_code("", false), UNTIL_GONE);
+    assert_eq!(wait_for_exit_code("", true), UNTIL_GONE);
+}
+
+#[test]
+fn wait_for_exit_code_when_server_answers_then_mapped() {
+    assert_eq!(wait_for_exit_code("OK", false), 0);
+    assert_eq!(wait_for_exit_code("TIMEOUT", false), 1);
+    assert_eq!(wait_for_exit_code("ERROR: pane is dead or gone", false), 2);
+    assert_eq!(
+        wait_for_exit_code(r#"{"kind":"success","elapsed_ms":3}"#, true),
+        0
+    );
+    assert_eq!(
+        wait_for_exit_code(r#"{"kind":"timeout","elapsed_ms":3}"#, true),
+        1
+    );
+    assert_eq!(
+        wait_for_exit_code(r#"{"kind":"error","reason":"x"}"#, true),
+        2
+    );
+}
+
+#[test]
+fn wait_pane_exit_code_when_until_and_server_closed_connection_then_2() {
+    assert_eq!(wait_pane_exit_code("", true), UNTIL_GONE);
+}
+
+#[test]
+fn wait_pane_exit_code_when_server_answers_then_code_passed_through() {
+    assert_eq!(wait_pane_exit_code("0", true), UNTIL_MET);
+    assert_eq!(wait_pane_exit_code("1", true), UNTIL_TIMEOUT);
+    assert_eq!(wait_pane_exit_code("2", true), UNTIL_GONE);
+    assert_eq!(wait_pane_exit_code("", false), 1);
+}

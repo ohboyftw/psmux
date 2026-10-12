@@ -201,7 +201,7 @@ psmux wait-for --file out.log --timeout 30000 # filesystem appears
 
 All `--timeout` values are **milliseconds**. Exit codes: `0` success,
 `1` timeout (condition never met within the window), `2` error (bad
-target, invalid regex, etc.). With `--json`, the server emits a
+target, invalid regex, the server stopping during the wait, etc.). With `--json`, the server emits a
 `WaitOutcome` object and the mapping is exact: `{kind:"success"}` or
 `{kind:"exit_success"}` → 0; `{kind:"timeout"}` → 1; anything else → 2.
 Without `--json`, the server writes a `TIMEOUT` or `ERROR: …` line
@@ -235,11 +235,13 @@ psmux wait-pane -t %3 --until blocked --timeout 600000
 for the pane's agent state, where STATE is one of `idle`, `working`,
 `blocked`, `done` or `error`. Exit codes: `0` the state was seen, `1`
 the `--timeout` passed first, `2` the pane is dead or gone, including a
-target that no longer exists when the command runs (or STATE is not one
-of the five, or `--until` is combined with another wait condition).
+target that no longer exists when the command runs and a server that
+stops during the wait (or STATE is not one of the five, `--until` is
+combined with another wait condition, or `wait-pane` has no `-t`).
 `wait-for --json` gives `{kind:"error",reason:"pane is dead or gone"}`
 for a dead or gone pane, whether it was gone before the call or died
-during the wait.
+during the wait, and `{kind:"error",reason:"server closed the connection"}`
+when the server stopped before it could answer.
 
 - `--until idle` is `--ready`: the same rule as `#{pane_ready}`, a reported
   `idle` or 500 ms of output silence. `--until` cannot be combined with

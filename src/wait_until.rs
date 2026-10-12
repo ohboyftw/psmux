@@ -133,6 +133,41 @@ pub fn until_outcome(code: i32, elapsed_ms: u64) -> WaitOutcome {
     }
 }
 
+/// The CLI exit code for a `wait-for` executor wait (`--until`, `--ready`,
+/// `--file`, `--exit`, `--output`) from the server's trimmed reply: 0
+/// success, 1 timeout, 2 error.  The server always answers these waits, so
+/// an empty reply means it closed the connection, which is 2.
+pub fn wait_for_exit_code(reply: &str, json: bool) -> i32 {
+    if reply.is_empty() {
+        UNTIL_GONE
+    } else if json {
+        match serde_json::from_str::<serde_json::Value>(reply) {
+            Ok(v) => match v.get("kind").and_then(|k| k.as_str()) {
+                Some("success") | Some("exit_success") => 0,
+                Some("timeout") => 1,
+                _ => 2,
+            },
+            Err(_) => 2,
+        }
+    } else if reply == "TIMEOUT" {
+        1
+    } else if reply.starts_with("ERROR") {
+        2
+    } else {
+        0
+    }
+}
+
+/// The CLI exit code for `wait-pane` from the server's trimmed reply.  With
+/// `--until`, an empty reply (the server closed the connection) is
+/// [`UNTIL_GONE`], not a timeout.
+pub fn wait_pane_exit_code(reply: &str, until: bool) -> i32 {
+    if until && reply.is_empty() {
+        return UNTIL_GONE;
+    }
+    reply.parse().unwrap_or(1)
+}
+
 #[cfg(test)]
 #[path = "../tests-rs/test_wait_until.rs"]
 mod tests;
