@@ -220,8 +220,9 @@ The bus is its own `psmux.exe` process. It has no window, works in your home
 directory, and keeps running after every session has ended. It is shared by
 every session server on the desktop and by other mycel clients, so
 `kill-server` leaves it running: the sweep that ends leftover psmux
-processes skips the bus that `~/.mycel/server` names (by its `pid`, while it
-still holds its port). Stop it before you rebuild or upgrade psmux, or the
+processes skips every process whose command line is `psmux bus ...`, whatever
+port or discovery file it uses, and any psmux process whose command line it
+cannot read. Stop it before you rebuild or upgrade psmux, or the
 build or installer cannot replace the file:
 
 ```powershell

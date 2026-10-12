@@ -1209,16 +1209,24 @@ fn parse_window_line(line: &str) -> Option<(usize, String, usize, String, bool, 
 }
 
 /// Whether kill-server's sweep ends process `pid`, whose image is `exe`: a
-/// psmux, pmux or tmux image other than this process and the shared mycel
-/// bus (`bus_pid`), which other servers and mycel clients still use.
-fn is_sweep_target(exe: &str, pid: u32, my_pid: u32, bus_pid: Option<u32>) -> bool {
-    if pid == my_pid || Some(pid) == bus_pid {
+/// psmux, pmux or tmux image other than this process, unless its command
+/// line runs `bus`. A bus is shared by every server and mycel client on the
+/// desktop, whatever discovery file the caller's environment names, so a
+/// process whose command line cannot be read is spared too.
+fn is_sweep_target(
+    exe: &str,
+    pid: u32,
+    my_pid: u32,
+    command_line: impl FnOnce() -> Option<String>,
+) -> bool {
+    let exe = exe.to_lowercase();
+    let psmux_image = ["psmux.exe", "pmux.exe", "tmux.exe"]
+        .iter()
+        .any(|t| exe == *t || exe.ends_with(&format!("\\{t}")));
+    if pid == my_pid || !psmux_image {
         return false;
     }
-    let exe = exe.to_lowercase();
-    ["psmux.exe", "pmux.exe", "tmux.exe"]
-        .iter()
-        .any(|t| exe == *t || exe.ends_with(&format!("\\{t}")))
+    command_line().is_some_and(|c| !crate::bus::host::is_bus_command_line(&c))
 }
 
 /// Force-kill any remaining psmux/pmux/tmux server processes that didn't
@@ -1226,8 +1234,8 @@ fn is_sweep_target(exe: &str, pid: u32, my_pid: u32, bus_pid: Option<u32>) -> bo
 /// guarantees kill-server always succeeds.
 ///
 /// On Windows, uses CreateToolhelp32Snapshot to enumerate processes and
-/// TerminateProcess to kill them.  Skips the current process and the shared
-/// mycel bus that the discovery file names.
+/// TerminateProcess to kill them.  Skips the current process and every
+/// `psmux bus` process (see `is_sweep_target`).
 #[cfg(windows)]
 pub fn kill_remaining_server_processes() {
     const TH32CS_SNAPPROCESS: u32 = 0x00000002;
@@ -1260,9 +1268,6 @@ pub fn kill_remaining_server_processes() {
     }
 
     let my_pid = std::process::id();
-    let bus_pid = crate::bus::host::BusLocation::from_env()
-        .discovery_path
-        .and_then(|p| crate::bus::host::shared_bus_pid(&p, crate::bus::host::is_psmux_pid));
 
     unsafe {
         let snap = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
@@ -1281,7 +1286,8 @@ pub fn kill_remaining_server_processes() {
                 // Extract exe name from wide string
                 let len = pe.sz_exe_file.iter().position(|&c| c == 0).unwrap_or(260);
                 let name = String::from_utf16_lossy(&pe.sz_exe_file[..len]);
-                if is_sweep_target(&name, pid, my_pid, bus_pid) {
+                let command_line = || crate::warm_reap::process_command_line(pid);
+                if is_sweep_target(&name, pid, my_pid, command_line) {
                     pids_to_kill.push(pid);
                 }
                 if Process32NextW(snap, &mut pe) == 0 {

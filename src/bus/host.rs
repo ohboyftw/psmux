@@ -83,6 +83,18 @@ pub fn shared_bus_pid(path: &Path, is_psmux_pid: impl Fn(u32) -> bool) -> Option
     (held && is_psmux_pid(pid)).then_some(pid)
 }
 
+/// Whether a process command line runs the `bus` subcommand: the first word
+/// after the (possibly quoted) executable is `bus`. That covers a bus
+/// hosted under any port or discovery file, and `psmux bus stop`.
+pub fn is_bus_command_line(cmdline: &str) -> bool {
+    let line = cmdline.trim_start();
+    let rest = match line.strip_prefix('"') {
+        Some(quoted) => quoted.split_once('"').map_or("", |(_, r)| r),
+        None => line.split_once(char::is_whitespace).map_or("", |(_, r)| r),
+    };
+    rest.split_whitespace().next() == Some("bus")
+}
+
 /// Whether `pid` is a running psmux, pmux or tmux image.
 pub fn is_psmux_pid(pid: u32) -> bool {
     crate::warm_reap::running_image_stem(pid).is_some_and(|name| {
