@@ -12,6 +12,7 @@ $probe.Start()
 $busPort = $probe.LocalEndpoint.Port
 $probe.Stop()
 $env:PSMUX_BUS = $null
+$env:PSMUX_NO_WARM = '1'
 $env:PSMUX_BUS_PORT = "$busPort"
 $env:PSMUX_BUS_DISCOVERY = Join-Path $env:TEMP "psmux-test-bus-$PID\server"
 

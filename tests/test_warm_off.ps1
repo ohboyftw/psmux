@@ -5,13 +5,19 @@
 # and that no __warm__ process lingers.
 
 $ErrorActionPreference = "Stop"
-$PSMUX_DIR = "$env:USERPROFILE\.psmux"
-
 # Keep tests off the user's mycel bus: start none and find none. Port 0
 # never connects, and the discovery file below never exists.
 $env:PSMUX_BUS = '0'
 $env:PSMUX_BUS_PORT = '0'
 $env:PSMUX_BUS_DISCOVERY = Join-Path $env:TEMP 'psmux-test-no-bus\server'
+
+# This test turns the warm pool on and off itself, so it runs in a scratch
+# data directory instead of setting PSMUX_NO_WARM for good: it can only
+# claim, spawn and delete the standbys and port files there, never the user's.
+$env:PSMUX_NO_WARM = $null
+$env:PSMUX_DATA_DIR = Join-Path $env:TEMP "psmux-warm-test-$PID"
+New-Item -ItemType Directory -Path $env:PSMUX_DATA_DIR -Force | Out-Null
+$PSMUX_DIR = $env:PSMUX_DATA_DIR
 
 $pass = 0
 $fail = 0

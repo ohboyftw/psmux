@@ -261,7 +261,14 @@ The `mycel` cargo feature is on by default. Build with
 
 Test scripts must not touch your real bus: `tests/_harness.ps1`,
 `tests/run_all_tests.ps1` and the warm-pool tests set `PSMUX_BUS=0` and point
-`PSMUX_BUS_PORT` and `PSMUX_BUS_DISCOVERY` at values that nothing uses.
+`PSMUX_BUS_PORT` and `PSMUX_BUS_DISCOVERY` at values that nothing uses. That
+alone is not enough while the warm pool is on: `new-session` claims a standby
+that read its environment when it was spawned (from your session, so it
+publishes to your bus), and a standby a test spawns hands the test's
+environment to your next session. So the harness and `run_all_tests.ps1`
+also set `PSMUX_NO_WARM=1`, and the two warm-pool tests, which need the
+pool, run in a scratch `PSMUX_DATA_DIR` where they can claim only their own
+standbys.
 
 `scripts/mycel_bus_conformance.ps1` checks a freshly built `psmux bus`
 against the real Python mycel client. It runs the bus on a free port with a

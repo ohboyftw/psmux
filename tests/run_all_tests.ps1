@@ -14,10 +14,14 @@ $ErrorActionPreference = "Continue"
 $startTime = Get-Date
 
 # Keep tests off the user's mycel bus: start none and find none. Port 0
-# never connects, and the discovery file below never exists.
+# never connects, and the discovery file below never exists. Keep them off
+# the warm pool too: a claimed standby runs with the environment of whoever
+# spawned it (the user's, so it publishes to the real bus), and a standby a
+# test spawns would hand this environment to the user's next session.
 $env:PSMUX_BUS = '0'
 $env:PSMUX_BUS_PORT = '0'
 $env:PSMUX_BUS_DISCOVERY = Join-Path $env:TEMP 'psmux-test-no-bus\server'
+$env:PSMUX_NO_WARM = '1'
 
 # ── Logging setup ──────────────────────────────────────────────
 # All logs go to $env:TEMP\psmux-test-logs\ (never inside the repo).

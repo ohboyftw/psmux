@@ -20,6 +20,13 @@ $env:PSMUX_BUS = '0'
 $env:PSMUX_BUS_PORT = '0'
 $env:PSMUX_BUS_DISCOVERY = Join-Path $env:TEMP 'psmux-test-no-bus\server'
 
+# This test needs the warm pool, so it runs in a scratch data directory
+# instead of turning the pool off: it can only claim, spawn and delete the
+# standbys and port files there, never the user's.
+$env:PSMUX_NO_WARM = $null
+$env:PSMUX_DATA_DIR = Join-Path $env:TEMP "psmux-warm-test-$PID"
+New-Item -ItemType Directory -Path $env:PSMUX_DATA_DIR -Force | Out-Null
+
 $ErrorActionPreference = "Continue"
 $PSMUX = Join-Path $PSScriptRoot "..\target\release\psmux.exe"
 if (-not (Test-Path $PSMUX)) {
@@ -35,8 +42,7 @@ if (-not (Test-Path $PSMUX)) {
 }
 $PSMUX = (Resolve-Path $PSMUX).Path
 
-$HOME_DIR = $env:USERPROFILE
-$PSMUX_DIR = "$HOME_DIR\.psmux"
+$PSMUX_DIR = $env:PSMUX_DATA_DIR
 $pass = 0
 $fail = 0
 $total = 0
