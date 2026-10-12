@@ -105,19 +105,49 @@ pub fn first_pane_new_session_args(session_name: &str, snap: &SessionSnapshot) -
     args
 }
 
-/// argv (without the executable) that sources `path` into `session_name`.
+/// One psmux invocation (argv without the executable) per step that rebuilds
+/// the rest of the snapshot after [`first_pane_new_session_args`]: a
+/// `new-window` for each later window, a `split-window` for each later pane,
+/// `select-layout tiled` for a window with several panes, and the window name.
 ///
-/// `-t` comes before the subcommand so the global parse routes the command to
-/// the new session.  Without it the child inherits a target resolved when the
-/// session did not exist yet: the session the caller's pane is in (`TMUX`),
-/// or the most recent live session.
-pub fn source_file_args(session_name: &str, path: &str) -> Vec<String> {
-    vec![
-        "-t".into(),
-        session_name.into(),
-        "source-file".into(),
-        path.into(),
-    ]
+/// Every step starts with `-t <session>` before the subcommand, so the global
+/// parse routes it to the new session.  Without it a step inherits the target
+/// resolved when the session did not exist yet: the session the caller's pane
+/// is in (`TMUX`), or the most recent live session.  The steps run in order;
+/// `new-window` makes its window active, so the splits and the name that
+/// follow it land in that window.
+pub fn restore_steps(session_name: &str, snap: &SessionSnapshot) -> Vec<Vec<String>> {
+    let step = |args: &[&str]| -> Vec<String> {
+        ["-t", session_name]
+            .iter()
+            .chain(args)
+            .map(|s| s.to_string())
+            .collect()
+    };
+    let mut steps = Vec::new();
+    for (wi, ws) in snap.windows.iter().enumerate() {
+        for (pi, pc) in ws.pane_commands.iter().enumerate() {
+            let verb = match (wi, pi) {
+                (0, 0) => continue,
+                (_, 0) => "new-window",
+                _ => "split-window",
+            };
+            let command = restore_command(pc);
+            let mut args = vec![verb, "-c", pc.cwd.as_str()];
+            args.extend(command.as_deref());
+            steps.push(step(&args));
+        }
+        if ws.pane_commands.len() > 1 {
+            steps.push(step(&["select-layout", "tiled"]));
+        }
+        if !ws.name.is_empty() {
+            // The CLI sends the name unquoted; quote it for the server's
+            // tokenizer so a name with spaces is not cut at the first one.
+            let quoted = format!("\"{}\"", ws.name.replace('\\', "\\\\").replace('"', "\\\""));
+            steps.push(step(&["rename-window", &quoted]));
+        }
+    }
+    steps
 }
 
 /// Whether an agent-state transition changes what resurrect would resume:

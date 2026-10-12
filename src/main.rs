@@ -481,6 +481,15 @@ fn run_main() -> io::Result<()> {
                 .get(1)
                 .map(|s| s.to_string())
                 .unwrap_or_else(|| "default".to_string());
+            // new-session exits 0 for a session that already runs, and the
+            // restore steps would then add windows to that live session.
+            if std::path::Path::new(&crate::paths::port_file(&session_name)).exists() {
+                eprintln!(
+                    "psmux: session '{}' is running; not resurrecting",
+                    session_name
+                );
+                std::process::exit(1);
+            }
             let dir = crate::resurrection::resurrect_dir(None);
             match crate::resurrection::load_snapshot_from(&session_name, &dir) {
                 Ok(snap) => {
@@ -494,62 +503,11 @@ fn run_main() -> io::Result<()> {
                     // Delete the snapshot now — it'll be re-created by the new server
                     let _ = crate::resurrection::delete_snapshot(&session_name, &dir);
 
-                    // Build a new-session equivalent that applies the snapshot.
-                    // We serialize the snapshot path as an env var so the server
-                    // can pick it up during init.  Simpler approach: write commands
-                    // to a temp config file and source it.
-                    let tmp_config =
-                        std::env::temp_dir().join(format!("psmux-resurrect-{}.conf", session_name));
-                    let mut cmds = Vec::new();
-                    for (wi, ws) in snap.windows.iter().enumerate() {
-                        for (pi, pc) in ws.pane_commands.iter().enumerate() {
-                            let cwd_flag = format!("-c \"{}\"", pc.cwd.replace('"', "\\\""));
-                            let command = crate::resurrection::restore_command(pc);
-                            if pi == 0 && wi > 0 {
-                                // New window for 2nd+ windows
-                                if let Some(ref cmd) = command {
-                                    cmds.push(format!(
-                                        "new-window {} \"{}\"",
-                                        cwd_flag,
-                                        cmd.replace('"', "\\\"")
-                                    ));
-                                } else {
-                                    cmds.push(format!("new-window {}", cwd_flag));
-                                }
-                            } else if pi > 0 {
-                                // Split for 2nd+ panes in a window
-                                if let Some(ref cmd) = command {
-                                    cmds.push(format!(
-                                        "split-window {} \"{}\"",
-                                        cwd_flag,
-                                        cmd.replace('"', "\\\"")
-                                    ));
-                                } else {
-                                    cmds.push(format!("split-window {}", cwd_flag));
-                                }
-                            }
-                            // First pane of first window is handled by new-session itself
-                        }
-                        // Apply tiled layout to spread panes evenly
-                        if ws.pane_commands.len() > 1 {
-                            cmds.push("select-layout tiled".to_string());
-                        }
-                        // Set window name
-                        if !ws.name.is_empty() {
-                            cmds.push(format!(
-                                "rename-window \"{}\"",
-                                ws.name.replace('"', "\\\"")
-                            ));
-                        }
-                    }
-                    // Write temp config
-                    let config_content = cmds.join("\n");
-                    std::fs::write(&tmp_config, &config_content).ok();
+                    let steps = crate::resurrection::restore_steps(&session_name, &snap);
+                    eprintln!("Spawning session with {} setup commands...", steps.len());
 
-                    eprintln!("Spawning session with {} setup commands...", cmds.len());
-
-                    // Create the session with the first pane, then source the
-                    // config file to create the remaining windows and panes.
+                    // Create the session with the first pane, then run one psmux
+                    // command per remaining window, pane, layout and name.
                     let exe = std::env::current_exe().unwrap_or_else(|_| "psmux".into());
                     let status = std::process::Command::new(&exe)
                         .args(crate::resurrection::first_pane_new_session_args(
@@ -562,25 +520,15 @@ fn run_main() -> io::Result<()> {
                         if s.success() || s.code() == Some(0) {
                             // Give server time to start
                             std::thread::sleep(Duration::from_millis(800));
-                            // Source the config to create remaining panes
-                            if !cmds.is_empty() {
-                                let source_status = std::process::Command::new(&exe)
-                                    .args(crate::resurrection::source_file_args(
-                                        &session_name,
-                                        tmp_config.to_str().unwrap_or(""),
-                                    ))
-                                    .status();
-                                if let Ok(ss) = source_status {
-                                    if !ss.success() {
-                                        eprintln!(
-                                            "Warning: source-file returned {}",
-                                            ss.code().unwrap_or(-1)
-                                        );
-                                    }
+                            for step in &steps {
+                                let ok = std::process::Command::new(&exe)
+                                    .args(step)
+                                    .status()
+                                    .is_ok_and(|st| st.success());
+                                if !ok {
+                                    eprintln!("Warning: `{}` failed", step[2..].join(" "));
                                 }
                             }
-                            // Clean up temp file
-                            let _ = std::fs::remove_file(&tmp_config);
 
                             // Now attach to the session
                             eprintln!("Attaching to resurrected session '{}'...", session_name);

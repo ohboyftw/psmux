@@ -114,12 +114,87 @@ fn first_pane_args_when_shell_pane_then_no_command() {
     );
 }
 
+fn window(name: &str, panes: Vec<PaneCommand>) -> WindowSnapshot {
+    WindowSnapshot {
+        name: name.into(),
+        id: 0,
+        active_path: vec![],
+        layout_tree: LayoutTreeNode::Leaf { id: 0 },
+        pane_commands: panes,
+    }
+}
+
+fn snapshot_of(windows: Vec<WindowSnapshot>) -> SessionSnapshot {
+    SessionSnapshot {
+        version: 1,
+        session_name: "s".into(),
+        timestamp: 1,
+        windows,
+        active_window_idx: 0,
+    }
+}
+
 #[test]
-fn source_file_args_when_built_then_session_is_named_before_the_subcommand() {
+fn restore_steps_when_one_pane_without_name_then_nothing_to_do() {
+    let snap = snapshot_of(vec![window("", vec![pane(None, "", None)])]);
+    assert!(restore_steps("s", &snap).is_empty());
+}
+
+#[test]
+fn restore_steps_when_second_window_then_new_window_with_its_cwd_and_resume() {
+    let snap = snapshot_of(vec![
+        window("", vec![pane(None, "", None)]),
+        window("", vec![pane(Some("pwsh"), "claude-code", None)]),
+    ]);
     assert_eq!(
-        source_file_args("s", "C:/t/r.conf"),
-        ["-t", "s", "source-file", "C:/t/r.conf"]
+        restore_steps("s", &snap),
+        [[
+            "-t",
+            "s",
+            "new-window",
+            "-c",
+            "C:/work",
+            "claude --continue"
+        ]]
     );
+}
+
+#[test]
+fn restore_steps_when_window_has_two_panes_then_split_and_tile() {
+    let snap = snapshot_of(vec![window(
+        "",
+        vec![pane(None, "", None), pane(None, "pi", None)],
+    )]);
+    assert_eq!(
+        restore_steps("s", &snap),
+        [
+            vec!["-t", "s", "split-window", "-c", "C:/work", "pi --continue"],
+            vec!["-t", "s", "select-layout", "tiled"],
+        ]
+    );
+}
+
+#[test]
+fn restore_steps_when_window_named_then_rename_quoted_for_the_server() {
+    let snap = snapshot_of(vec![window(r#"my "w""#, vec![pane(None, "", None)])]);
+    let steps = restore_steps("s", &snap);
+    assert_eq!(steps, [["-t", "s", "rename-window", r#""my \"w\"""#]]);
+    let wire = format!("rename-window {}", steps[0][3]);
+    assert_eq!(
+        crate::commands::parse_command_line(&wire),
+        ["rename-window", r#"my "w""#]
+    );
+}
+
+#[test]
+fn restore_steps_when_any_snapshot_then_every_step_names_the_session_first() {
+    let snap = snapshot_of(vec![
+        window("a", vec![pane(None, "", None), pane(None, "", None)]),
+        window("b", vec![pane(None, "", None), pane(None, "", None)]),
+    ]);
+    let steps = restore_steps("s", &snap);
+    assert_eq!(steps.len(), 7);
+    assert!(steps.iter().all(|s| s[..2] == ["-t", "s"]), "{steps:?}");
 }
 
 fn transition(

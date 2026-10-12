@@ -329,10 +329,13 @@ Turn this off with `set -g agent-toasts off` (default `on`).
 ## Resuming agents after a restart (`resurrect`)
 
 psmux saves a snapshot of each session's layout, and `psmux resurrect <name>`
-rebuilds the session from it. When a pane was running an agent that reports
-its state with OSC 7501, the snapshot records the agent's `app` name, and
-resurrect starts the agent's resume command in that pane instead of the
-pane's original command:
+rebuilds the session from it: every window, with its name and its panes, each
+pane in its saved directory. Panes are arranged with the `tiled` layout, not
+their original sizes. Resurrect refuses a session name that is already
+running. When a pane was running an agent that reports its state with
+OSC 7501, the snapshot records the agent's `app` name, and resurrect starts
+the agent's resume command in that pane instead of the pane's original
+command:
 
 | `app` | Command run on resurrect |
 |-------|--------------------------|
