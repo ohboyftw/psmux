@@ -3617,16 +3617,25 @@ pub fn run_server(
                         CtrlReq::KillWindow => {
                             if app.windows.len() > 1 {
                                 let mut win = app.windows.remove(app.active_idx);
+                                // A dead remain-on-exit pane kept its toast as exited;
+                                // the reaper never sees these panes again.
+                                for id in tree::collect_pane_ids(&win.root) {
+                                    app.agent_toasts.forget(id);
+                                }
                                 kill_all_children(&mut win.root);
                                 if app.active_idx >= app.windows.len() {
                                     app.active_idx = app.windows.len() - 1;
                                 }
                             } else {
                                 // Last window: kill all children; reaper will detect empty session and exit.
-                                // Marked killed so the reaper drops their pending toasts.
+                                // Marked killed so the reaper drops toasts they offer at
+                                // exit; dead panes it skips are forgotten here.
                                 tree::visit_leaves_mut(&mut app.windows[0].root, &mut |p| {
                                     p.killed = true;
                                 });
+                                for id in tree::collect_pane_ids(&app.windows[0].root) {
+                                    app.agent_toasts.forget(id);
+                                }
                                 kill_all_children(&mut app.windows[0].root);
                             }
                             hook_event = Some("window-closed");
