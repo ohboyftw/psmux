@@ -1207,10 +1207,10 @@ fn run_main() -> io::Result<()> {
                     cmd_line.push_str(&format!(" -F \"{}\"", fmt.replace("\"", "\\\"")));
                 }
                 if let Some(name) = &name_arg {
-                    cmd_line.push_str(&format!(" -n \"{}\"", name.replace("\"", "\\\"")));
+                    cmd_line.push_str(&format!(" -n {}", crate::util::quote_arg(name)));
                 }
                 if let Some(dir) = &start_dir {
-                    cmd_line.push_str(&format!(" -c \"{}\"", dir.replace("\"", "\\\"")));
+                    cmd_line.push_str(&format!(" -c {}", crate::util::quote_arg(dir)));
                 }
                 // Each argv token is double-quoted so the server tokenizer keeps
                 // them as separate, intact arguments even when they contain spaces.
@@ -1243,19 +1243,19 @@ fn run_main() -> io::Result<()> {
                 cmd_line.push_str(&format!(" -F \"{}\"", fmt.replace("\"", "\\\"")));
             }
             if let Some(name) = &name_arg {
-                cmd_line.push_str(&format!(" -n \"{}\"", name.replace("\"", "\\\"")));
+                cmd_line.push_str(&format!(" -n {}", crate::util::quote_arg(name)));
             }
             if let Some(dir) = &start_dir {
-                cmd_line.push_str(&format!(" -c \"{}\"", dir.replace("\"", "\\\"")));
+                cmd_line.push_str(&format!(" -c {}", crate::util::quote_arg(dir)));
             }
             for ev in &env_vars {
-                cmd_line.push_str(&format!(" -e \"{}\"", ev.replace("\"", "\\\"")));
+                cmd_line.push_str(&format!(" -e {}", crate::util::quote_arg(ev)));
             }
             if let Some(ref sh) = shell_arg {
-                cmd_line.push_str(&format!(" --shell \"{}\"", sh.replace("\"", "\\\"")));
+                cmd_line.push_str(&format!(" --shell {}", crate::util::quote_arg(sh)));
             }
             if !cmd_arg.is_empty() {
-                cmd_line.push_str(&format!(" \"{}\"", cmd_arg.replace("\"", "\\\"")));
+                cmd_line.push_str(&format!(" {}", crate::util::quote_arg(cmd_arg)));
             }
             cmd_line.push('\n');
             if print_info {
@@ -1355,19 +1355,19 @@ fn run_main() -> io::Result<()> {
                 cmd_line.push_str(&format!(" -F \"{}\"", fmt.replace("\"", "\\\"")));
             }
             if let Some(dir) = &start_dir {
-                cmd_line.push_str(&format!(" -c \"{}\"", dir.replace("\"", "\\\"")));
+                cmd_line.push_str(&format!(" -c {}", crate::util::quote_arg(dir)));
             }
             if let Some(pct) = &size_pct {
                 cmd_line.push_str(&format!(" -p {}", pct));
             }
             for ev in &env_vars {
-                cmd_line.push_str(&format!(" -e \"{}\"", ev.replace("\"", "\\\"")));
+                cmd_line.push_str(&format!(" -e {}", crate::util::quote_arg(ev)));
             }
             if let Some(ref sh) = shell_arg {
-                cmd_line.push_str(&format!(" --shell \"{}\"", sh.replace("\"", "\\\"")));
+                cmd_line.push_str(&format!(" --shell {}", crate::util::quote_arg(sh)));
             }
             if !cmd_arg.is_empty() {
-                cmd_line.push_str(&format!(" \"{}\"", cmd_arg.replace("\"", "\\\"")));
+                cmd_line.push_str(&format!(" {}", crate::util::quote_arg(cmd_arg)));
             }
             cmd_line.push('\n');
             if print_info {

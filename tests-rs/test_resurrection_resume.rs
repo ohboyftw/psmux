@@ -432,3 +432,33 @@ fn prune_when_snapshot_removed_then_its_kept_copy_goes_too() {
     assert!(!backup_path("s", &dir).exists());
     fs::remove_dir_all(&dir).ok();
 }
+
+fn pane_in(cwd: &str, app: &str) -> PaneCommand {
+    PaneCommand {
+        cwd: cwd.into(),
+        ..pane(None, app, None)
+    }
+}
+
+#[test]
+fn restore_steps_when_cwd_has_format_text_then_server_expansion_gives_it_back() {
+    let cwd = r"D:\100% #(echo pwned) #{pane_id}";
+    let snap = snapshot_of(vec![window(
+        "",
+        vec![pane(None, "", None), pane_in(cwd, "")],
+    )]);
+    let steps = restore_steps("s", &snap, &exists);
+    let sent = &steps[0][4];
+    let app = crate::types::AppState::new("t".to_string());
+    assert_eq!(crate::format::expand_format(sent, &app), cwd, "{sent}");
+}
+
+#[test]
+fn wire_quoting_when_drive_root_unc_or_spaces_then_tokenizer_gives_the_path_back() {
+    for dir in [r"C:\", r"\server\share\dir", r"D:\a b\c d\", r#"D:\q"x"#] {
+        let line = format!("new-window -c {} \"cmd\"", crate::util::quote_arg(dir));
+        let toks = crate::commands::parse_command_line(&line);
+        assert_eq!(toks[2], dir, "{line}");
+        assert_eq!(toks[3], "cmd", "{line}");
+    }
+}

@@ -89,13 +89,20 @@ pub fn restore_command(pc: &PaneCommand, cwd_exists: bool) -> Option<String> {
 }
 
 /// `-c <cwd>` when the directory exists (a missing one would be ignored by
-/// the server without a word), then the restore command.
-fn pane_args(pc: &PaneCommand, exists: DirExists) -> Vec<String> {
+/// the server without a word), then the restore command.  `expanded` says
+/// the server runs the `-c` value through format expansion, as `new-window`
+/// and `split-window` do; the path is then escaped so `#` and `%` in it stay
+/// literal and `#(...)` never runs.
+fn pane_args(pc: &PaneCommand, exists: DirExists, expanded: bool) -> Vec<String> {
     let cwd_exists = exists(&pc.cwd);
     let mut args = Vec::new();
     if cwd_exists {
         args.push("-c".to_string());
-        args.push(pc.cwd.clone());
+        args.push(if expanded {
+            pc.cwd.replace('#', "##").replace('%', "%%")
+        } else {
+            pc.cwd.clone()
+        });
     }
     args.extend(restore_command(pc, cwd_exists));
     args
@@ -141,7 +148,7 @@ pub fn first_pane_new_session_args(
         session_name.into(),
     ];
     if let Some(pc) = snap.windows.first().and_then(|w| w.pane_commands.first()) {
-        args.extend(pane_args(pc, exists));
+        args.extend(pane_args(pc, exists, false));
     }
     args
 }
@@ -175,7 +182,7 @@ pub fn restore_steps(
                 (_, 0) => "new-window",
                 _ => "split-window",
             };
-            steps.push(step(verb, pane_args(pc, exists)));
+            steps.push(step(verb, pane_args(pc, exists, true)));
         }
         if ws.pane_commands.len() > 1 {
             steps.push(step("select-layout", vec!["tiled".into()]));
