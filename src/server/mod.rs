@@ -1079,10 +1079,12 @@ pub fn run_server(
     if let Some(prev) = saved_dir {
         env::set_current_dir(prev).ok();
     }
-    // Apply window name if specified via -n
+    // Apply window name if specified via -n. A given name turns automatic
+    // rename off for the window, as tmux does and as new-window -n does.
     if let Some(n) = window_name {
         if let Some(w) = app.windows.last_mut() {
             w.name = n;
+            w.manual_rename = true;
         }
     }
     // Replenish: spawn a warm pane for the NEXT new-window / split.

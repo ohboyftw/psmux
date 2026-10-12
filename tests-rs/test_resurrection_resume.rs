@@ -109,6 +109,8 @@ fn first_pane_args_when_agent_pane_then_command_is_positional_not_raw() {
             "-d",
             "-s",
             "s",
+            "-n",
+            "w",
             "-c",
             "C:/work",
             "claude --continue"
@@ -121,7 +123,7 @@ fn first_pane_args_when_shell_pane_then_no_command() {
     let snap = snapshot_with_first_pane(pane(None, "", None));
     assert_eq!(
         first_pane_new_session_args("s", &snap, &exists),
-        ["new-session", "-d", "-s", "s", "-c", "C:/work"]
+        ["new-session", "-d", "-s", "s", "-n", "w", "-c", "C:/work"]
     );
 }
 
@@ -185,15 +187,51 @@ fn restore_steps_when_window_has_two_panes_then_split_and_tile() {
     );
 }
 
+const HOSTILE_NAME: &str = "#(echo pwned) #{pane_id} 50% \"w\"";
+
 #[test]
-fn restore_steps_when_window_named_then_rename_quoted_for_the_server() {
-    let snap = snapshot_of(vec![window(r#"my "w""#, vec![pane(None, "", None)])]);
-    let steps = restore_steps("s", &snap, &exists);
-    assert_eq!(steps, [["-t", "s", "rename-window", r#""my \"w\"""#]]);
-    let wire = format!("rename-window {}", steps[0][3]);
+fn restore_steps_when_window_named_then_name_given_at_creation_as_is() {
+    let snap = snapshot_of(vec![
+        window("", vec![pane(None, "", None)]),
+        window(HOSTILE_NAME, vec![pane(None, "", None)]),
+    ]);
     assert_eq!(
-        crate::commands::parse_command_line(&wire),
-        ["rename-window", r#"my "w""#]
+        restore_steps("s", &snap, &exists),
+        [["-t", "s", "new-window", "-n", HOSTILE_NAME, "-c", "C:/work"]]
+    );
+}
+
+#[test]
+fn restore_steps_when_windows_named_then_never_rename_window() {
+    let snap = snapshot_of(vec![
+        window(
+            HOSTILE_NAME,
+            vec![pane(None, "", None), pane(None, "", None)],
+        ),
+        window(HOSTILE_NAME, vec![pane(None, "", None)]),
+    ]);
+    let steps = restore_steps("s", &snap, &exists);
+    assert!(
+        steps.iter().all(|s| s[2] != "rename-window"),
+        "rename-window expands formats: {steps:?}"
+    );
+}
+
+#[test]
+fn first_pane_args_when_window_named_then_name_given_to_new_session_as_is() {
+    let snap = snapshot_of(vec![window(HOSTILE_NAME, vec![pane(None, "", None)])]);
+    assert_eq!(
+        first_pane_new_session_args("s", &snap, &exists),
+        [
+            "new-session",
+            "-d",
+            "-s",
+            "s",
+            "-n",
+            HOSTILE_NAME,
+            "-c",
+            "C:/work"
+        ]
     );
 }
 
@@ -204,7 +242,7 @@ fn restore_steps_when_any_snapshot_then_every_step_names_the_session_first() {
         window("b", vec![pane(None, "", None), pane(None, "", None)]),
     ]);
     let steps = restore_steps("s", &snap, &exists);
-    assert_eq!(steps.len(), 7);
+    assert_eq!(steps.len(), 5);
     assert!(steps.iter().all(|s| s[..2] == ["-t", "s"]), "{steps:?}");
 }
 
@@ -292,11 +330,11 @@ fn restore_command_when_agent_cwd_missing_then_original_command() {
 }
 
 #[test]
-fn first_pane_args_when_agent_cwd_missing_then_no_cwd_and_no_resume() {
+fn first_pane_args_when_agent_cwd_missing_then_current_dir_and_no_resume() {
     let snap = snapshot_with_first_pane(pane(None, "claude-code", None));
     assert_eq!(
         first_pane_new_session_args("s", &snap, &missing),
-        ["new-session", "-d", "-s", "s"]
+        ["new-session", "-d", "-s", "s", "-n", "w", "-c", "."]
     );
 }
 

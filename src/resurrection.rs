@@ -118,7 +118,7 @@ pub fn missing_dir_warnings(snap: &SessionSnapshot, exists: DirExists) -> Vec<St
                 continue;
             }
             let mut line = format!(
-                "window {wi} pane {pi}: {} no longer exists; the pane starts in psmux's default directory",
+                "window {wi} pane {pi}: {} no longer exists; the pane starts in the directory resurrect was run from",
                 pc.cwd
             );
             if let Some(resume) = resume_command_for(&pc.app) {
@@ -147,8 +147,21 @@ pub fn first_pane_new_session_args(
         "-s".into(),
         session_name.into(),
     ];
-    if let Some(pc) = snap.windows.first().and_then(|w| w.pane_commands.first()) {
-        args.extend(pane_args(pc, exists, false));
+    let Some(first) = snap.windows.first() else {
+        return args;
+    };
+    if !first.name.is_empty() {
+        args.extend(["-n".to_string(), first.name.clone()]);
+    }
+    if let Some(pc) = first.pane_commands.first() {
+        let pane = pane_args(pc, exists, false);
+        // Always pass a directory: without -c and a command, new-session
+        // claims a warm standby and names the window with rename-window,
+        // which runs the name through format expansion.
+        if !exists(&pc.cwd) {
+            args.extend(["-c".to_string(), ".".to_string()]);
+        }
+        args.extend(pane);
     }
     args
 }
@@ -156,14 +169,19 @@ pub fn first_pane_new_session_args(
 /// One psmux invocation (argv without the executable) per step that rebuilds
 /// the rest of the snapshot after [`first_pane_new_session_args`]: a
 /// `new-window` for each later window, a `split-window` for each later pane,
-/// `select-layout tiled` for a window with several panes, and the window name.
+/// and `select-layout tiled` for a window with several panes.
+///
+/// Window names are given at creation (`new-window -n`, and `new-session -n`
+/// for the first window), which store them as they are.  `rename-window`
+/// would run a name through format expansion, and a name can come from a
+/// pane's OSC title, so `#(...)` in it would run on resurrect.
 ///
 /// Every step starts with `-t <session>` before the subcommand, so the global
 /// parse routes it to the new session.  Without it a step inherits the target
 /// resolved when the session did not exist yet: the session the caller's pane
 /// is in (`TMUX`), or the most recent live session.  The steps run in order;
-/// `new-window` makes its window active, so the splits and the name that
-/// follow it land in that window.
+/// `new-window` makes its window active, so the splits that follow it land
+/// in that window.
 pub fn restore_steps(
     session_name: &str,
     snap: &SessionSnapshot,
@@ -177,21 +195,22 @@ pub fn restore_steps(
     let mut steps = Vec::new();
     for (wi, ws) in snap.windows.iter().enumerate() {
         for (pi, pc) in ws.pane_commands.iter().enumerate() {
+            let mut args = Vec::new();
             let verb = match (wi, pi) {
                 (0, 0) => continue,
-                (_, 0) => "new-window",
+                (_, 0) => {
+                    if !ws.name.is_empty() {
+                        args.extend(["-n".to_string(), ws.name.clone()]);
+                    }
+                    "new-window"
+                }
                 _ => "split-window",
             };
-            steps.push(step(verb, pane_args(pc, exists, true)));
+            args.extend(pane_args(pc, exists, true));
+            steps.push(step(verb, args));
         }
         if ws.pane_commands.len() > 1 {
             steps.push(step("select-layout", vec!["tiled".into()]));
-        }
-        if !ws.name.is_empty() {
-            // The CLI sends the name unquoted; quote it for the server's
-            // tokenizer so a name with spaces is not cut at the first one.
-            let quoted = format!("\"{}\"", ws.name.replace('\\', "\\\\").replace('"', "\\\""));
-            steps.push(step("rename-window", vec![quoted]));
         }
     }
     steps
