@@ -544,11 +544,12 @@ pub const EXIT_SESSION_GONE: i32 = -3;
 enum PaneCheck {
     /// The pane is running; `agent_state` is its `#{pane_agent_state}`.
     Alive { agent_state: Option<String> },
-    /// The pane is dead or gone. `agent_state` is what a dead pane kept
-    /// (`done`/`error` survive exit); it is `None` when nothing survived or
-    /// when `code` is a sentinel and the pane could not be read.
+    /// The pane is dead or gone. `code` is `None` for a dead pane whose exit
+    /// code is empty, and a sentinel when the pane or session is gone.
+    /// `agent_state` is what a dead pane kept (`done`/`error` survive exit);
+    /// it is `None` when nothing survived or when the pane could not be read.
     Dead {
-        code: i32,
+        code: Option<i32>,
         agent_state: Option<String>,
     },
 }
@@ -578,7 +579,7 @@ fn check_pane_exit(session: &str, pane_id: &str) -> Result<PaneCheck, String> {
         // The whole session is gone (user killed it, or server died).
         // Distinct from per-pane pruning so callers can tell the two apart.
         return Ok(PaneCheck::Dead {
-            code: EXIT_SESSION_GONE,
+            code: Some(EXIT_SESSION_GONE),
             agent_state: None,
         });
     }
@@ -604,14 +605,43 @@ fn parse_pane_check(raw: &str, pane_id: &str) -> PaneCheck {
         if !dead {
             return PaneCheck::Alive { agent_state };
         }
-        let code = exit_raw.parse::<i32>().unwrap_or(EXIT_PANE_GONE);
+        // An empty code is a dead pane whose status was not reported, not a
+        // pruned pane: its record is still read and the pane is still there.
+        let code = exit_raw.parse::<i32>().ok();
         return PaneCheck::Dead { code, agent_state };
     }
     // Pane not found in any window of the session — pruned by the server.
     PaneCheck::Dead {
-        code: EXIT_PANE_GONE,
+        code: Some(EXIT_PANE_GONE),
         agent_state: None,
     }
+}
+
+/// Record a worker's dead pane on `ws`: `Succeeded` only for exit code 0,
+/// else `Failed`.  Returns whether the pane is still there to kill, which is
+/// false only for the gone sentinels.  A sentinel means nothing was read, so
+/// the last agent state is kept; any other death records what the pane kept.
+fn record_pane_death(ws: &mut WorkerState, code: Option<i32>, dead_state: Option<String>) -> bool {
+    let gone = matches!(code, Some(EXIT_PANE_GONE | EXIT_SESSION_GONE));
+    if !gone {
+        ws.agent_state = dead_state;
+    }
+    ws.exit_code = code;
+    ws.finished_at = Some(now_iso8601());
+    ws.status = if code == Some(0) {
+        WorkerStatus::Succeeded
+    } else {
+        WorkerStatus::Failed
+    };
+    // Pane vanished from an otherwise live session: try to associate a psmux
+    // crash report for post-mortem inspection. EXIT_SESSION_GONE means the
+    // whole session was torn down and there's no crash to attribute.
+    if code == Some(EXIT_PANE_GONE) {
+        if let Some(path) = find_crash_for(ws) {
+            ws.crash_dump_path = Some(path);
+        }
+    }
+    !gone
 }
 
 /// Mark every Running or Pending worker Failed with `exit_code = -2` when the
@@ -756,29 +786,10 @@ pub fn run_plan(
                 }
                 PaneCheck::Dead { code, agent_state } => (code, agent_state),
             };
-            if let Some(ws) = state.workers.get_mut(&worker_id) {
-                // A sentinel means nothing was read: keep the last state.
-                if code != EXIT_PANE_GONE && code != EXIT_SESSION_GONE {
-                    ws.agent_state = dead_state;
-                }
-                ws.exit_code = Some(code);
-                ws.finished_at = Some(now_iso8601());
-                ws.status = if code == 0 {
-                    WorkerStatus::Succeeded
-                } else {
-                    WorkerStatus::Failed
-                };
-                // Pane vanished with no usable exit code — try to associate a
-                // psmux crash report for post-mortem inspection. Only do this
-                // for EXIT_PANE_GONE (worker disappeared from an otherwise live
-                // session); EXIT_SESSION_GONE means the whole session was torn
-                // down and there's no crash to attribute.
-                if code == EXIT_PANE_GONE {
-                    if let Some(path) = find_crash_for(ws) {
-                        ws.crash_dump_path = Some(path);
-                    }
-                }
-            }
+            let pane_left = state
+                .workers
+                .get_mut(&worker_id)
+                .is_some_and(|ws| record_pane_death(ws, code, dead_state));
             if state
                 .workers
                 .get(&worker_id)
@@ -787,11 +798,10 @@ pub fn run_plan(
                 skip_dependents(plan, state, &worker_id);
             }
             updated = true;
-            // The pane exited with a real exit code (remain-on-exit kept it
-            // visible as a dead pane). Kill it now so dead panes don't
-            // accumulate in the session. EXIT_PANE_GONE means the pane was
-            // already reaped, so no kill is needed in that case.
-            if code != EXIT_PANE_GONE && code != EXIT_SESSION_GONE {
+            // remain-on-exit kept the dead pane visible. Kill it now so dead
+            // panes don't accumulate in the session. A gone sentinel means
+            // there is no pane left to kill.
+            if pane_left {
                 if let Ok(exe) = psmux_exe() {
                     // Reported, not discarded: a silent failure here is exactly
                     // how the leak went unnoticed — the run still exits 0 and

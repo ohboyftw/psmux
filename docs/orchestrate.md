@@ -103,7 +103,9 @@ spawning the worker. `--cleanup` reverses this (`git worktree remove`).
    session holding the windows it started with. A kill that fails is reported
    on stderr rather than passed over — a silent one used to leave one dead
    window per worker, per run.
-4. **Failed** — any non-zero exit code, OR the pane vanished without an
+4. **Failed** — any non-zero exit code, OR the pane died without
+   reporting an exit code (`#{pane_exit_code}` empty: no `exit_code` key in
+   `state.json`; the dead pane is still killed), OR the pane vanished without an
    observable code (`exit_code = -1`, "pane gone"), OR the whole session
    was torn down (`exit_code = -3`, "session gone"), OR the `--timeout`
    fired (`exit_code = -2`, "orchestrate timed out").
@@ -118,8 +120,9 @@ stores it as `agent_state` in `state.json` when it changes. It is recorded,
 never acted on: only the pane's exit decides `Succeeded` or `Failed`, so a
 worker that reports `blocked` stays `Running` and the run does not finish
 while it waits. When the pane dies, `agent_state` takes what the dead pane
-kept (`done` and `error` survive exit; everything else is cleared). When the
-pane or session is gone (`-1`/`-3`) the last reading is kept. A worker whose
+kept (`done` and `error` survive exit; everything else is cleared), also when
+it reported no exit code. When the pane or session is gone (`-1`/`-3`) the
+last reading is kept. A worker whose
 agent reports nothing has no `agent_state` key.
 
 If `--timeout` fires while a worker is `blocked`, that worker is marked

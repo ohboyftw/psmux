@@ -50,7 +50,7 @@ fn parse_when_dead_with_done_then_code_and_done() {
     assert_eq!(
         parse_pane_check("%3:1:0:done\n", "%3"),
         PaneCheck::Dead {
-            code: 0,
+            code: Some(0),
             agent_state: Some("done".into())
         }
     );
@@ -61,10 +61,55 @@ fn parse_when_dead_while_blocked_then_dead_wins() {
     assert_eq!(
         parse_pane_check("%3:1:7:blocked\n", "%3"),
         PaneCheck::Dead {
-            code: 7,
+            code: Some(7),
             agent_state: Some("blocked".into())
         }
     );
+}
+
+#[test]
+fn parse_when_dead_without_exit_code_then_unknown_code_and_state_kept() {
+    assert_eq!(
+        parse_pane_check("%3:1::done\n", "%3"),
+        PaneCheck::Dead {
+            code: None,
+            agent_state: Some("done".into())
+        }
+    );
+}
+
+#[test]
+fn record_death_when_exit_code_unknown_then_failed_with_state_kept() {
+    let mut ws = running(Some("working"));
+    record_pane_death(&mut ws, None, Some("done".into()));
+    assert_eq!(ws.status, WorkerStatus::Failed);
+    assert_eq!(ws.exit_code, None);
+    assert_eq!(ws.agent_state.as_deref(), Some("done"));
+    assert_eq!(ws.crash_dump_path, None);
+}
+
+#[test]
+fn record_death_when_exit_code_unknown_then_pane_is_killed() {
+    let mut ws = running(None);
+    assert!(record_pane_death(&mut ws, None, None));
+}
+
+#[test]
+fn record_death_when_exit_zero_then_succeeded_and_pane_is_killed() {
+    let mut ws = running(Some("working"));
+    assert!(record_pane_death(&mut ws, Some(0), Some("done".into())));
+    assert_eq!(ws.status, WorkerStatus::Succeeded);
+    assert_eq!(ws.exit_code, Some(0));
+    assert_eq!(ws.agent_state.as_deref(), Some("done"));
+}
+
+#[test]
+fn record_death_when_session_gone_then_last_state_kept_and_nothing_to_kill() {
+    let mut ws = running(Some("blocked"));
+    assert!(!record_pane_death(&mut ws, Some(EXIT_SESSION_GONE), None));
+    assert_eq!(ws.status, WorkerStatus::Failed);
+    assert_eq!(ws.exit_code, Some(EXIT_SESSION_GONE));
+    assert_eq!(ws.agent_state.as_deref(), Some("blocked"));
 }
 
 #[test]
@@ -72,7 +117,7 @@ fn parse_when_pane_absent_then_pane_gone() {
     assert_eq!(
         parse_pane_check("%9:0::working\n", "%3"),
         PaneCheck::Dead {
-            code: EXIT_PANE_GONE,
+            code: Some(EXIT_PANE_GONE),
             agent_state: None
         }
     );
