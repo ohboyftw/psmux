@@ -31,15 +31,21 @@ pub(crate) fn fire_notifications(notifs: Vec<(String, String)>) {
 
 /// Copies every pane's OSC 7501 state into its cache and returns the
 /// worst-of transitions as `(pane id, transition)`.  Dead panes are visited
-/// too: under remain-on-exit their `done`/`error` records stay visible.
+/// too: under remain-on-exit their `done`/`error` records stay visible, and
+/// the exit rule is applied again to drop records parsed after the exit.
 pub(crate) fn collect_program_status(
     app: &mut AppState,
 ) -> Vec<(usize, crate::agent_state::AgentTransition)> {
     let mut out = Vec::new();
     for win in &mut app.windows {
         crate::tree::visit_leaves_mut(&mut win.root, &mut |p| {
-            let Ok(term) = p.term.lock() else { return };
-            if let Some(t) = p.agent_state.observe(term.screen()) {
+            let Ok(mut term) = p.term.lock() else { return };
+            let transition = if p.dead {
+                p.agent_state.observe_dead(term.screen_mut())
+            } else {
+                p.agent_state.observe(term.screen())
+            };
+            if let Some(t) = transition {
                 out.push((p.id, t));
             }
         });

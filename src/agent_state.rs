@@ -109,6 +109,14 @@ impl AgentStateCache {
         })
     }
 
+    /// [`observe`](Self::observe) for a dead pane: applies the process-exit
+    /// rule first, so a report parsed after the exit was handled cannot
+    /// bring back a `working`, `blocked` or `idle` record.
+    pub fn observe_dead(&mut self, screen: &mut Screen) -> Option<AgentTransition> {
+        screen.program_status_on_process_exit();
+        self.observe(screen)
+    }
+
     /// Copies `screen`'s records even when the sequence did not change, as
     /// after the process-exit lifetime rule.  Does not touch transition
     /// detection: the next [`observe`](Self::observe) reports the change.

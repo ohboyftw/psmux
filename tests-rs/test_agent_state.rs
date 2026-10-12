@@ -146,6 +146,32 @@ fn observe_after_exit_refresh_then_final_transition_still_reported() {
     assert_eq!((t.old, t.new), (Some(ProgramState::Working), None));
 }
 
+#[test]
+fn observe_dead_when_report_parsed_after_exit_then_record_dropped_without_event() {
+    let mut parser = vt100::Parser::new(24, 80, 0);
+    let mut cache = AgentStateCache::default();
+    report(&mut parser, "state=working");
+    cache.observe(parser.screen());
+    exit_and_refresh(&mut parser, &mut cache);
+    cache.observe(parser.screen());
+    report(&mut parser, "state=working");
+    assert_eq!(cache.observe_dead(parser.screen_mut()), None);
+    assert_eq!(cache.worst(), None);
+}
+
+#[test]
+fn observe_dead_when_done_parsed_after_exit_then_done_reported() {
+    let mut parser = vt100::Parser::new(24, 80, 0);
+    let mut cache = AgentStateCache::default();
+    report(&mut parser, "state=working");
+    cache.observe(parser.screen());
+    exit_and_refresh(&mut parser, &mut cache);
+    cache.observe(parser.screen());
+    report(&mut parser, "state=done");
+    let t = cache.observe_dead(parser.screen_mut()).expect("transition");
+    assert_eq!((t.old, t.new), (None, Some(ProgramState::Done)));
+}
+
 /// Shape Claude Code 2.1.295 emits (tasklist section 0): root plus one child
 /// per background task.  Synthetic until a live capture replaces it.
 const CC_FIXTURE: &[&str] = &[
