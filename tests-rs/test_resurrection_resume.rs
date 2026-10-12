@@ -532,3 +532,33 @@ fn resurrect_when_name_has_a_non_numeric_dot_then_restored() {
     resurrect("my.proj", &snap, &dir, Duration::ZERO, &mut |_| true).expect("resurrect");
     fs::remove_dir_all(&dir).ok();
 }
+
+fn age(path: &std::path::Path, secs: u64) {
+    let when = std::time::SystemTime::now() - Duration::from_secs(secs);
+    fs::File::options()
+        .write(true)
+        .open(path)
+        .and_then(|f| f.set_modified(when))
+        .expect("set mtime");
+}
+
+#[test]
+fn resurrect_when_snapshot_is_the_oldest_then_the_new_servers_prune_keeps_it_and_its_copy() {
+    let dir = fresh_dir("psmux_resurrect_survives_startup_prune");
+    let snap = snapshot_with_first_pane(pane(None, "claude-code", None));
+    save_snapshot_to(&snap, &dir).expect("save");
+    age(&dir.join("s.json"), 86_400);
+    for i in 0..50 {
+        let other = dir.join(format!("other{i}.json"));
+        fs::write(&other, "{}").expect("write");
+        age(&other, 3_600);
+    }
+
+    resurrect("s", &snap, &dir, Duration::ZERO, &mut |_| true).expect("resurrect");
+    // What the restored server does at startup.
+    prune_snapshots_in(&dir, 50);
+
+    assert!(dir.join("s.json").exists(), "snapshot pruned");
+    assert!(backup_path("s", &dir).exists(), "copy pruned");
+    fs::remove_dir_all(&dir).ok();
+}

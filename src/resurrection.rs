@@ -243,7 +243,15 @@ pub fn resurrect(
         ));
     }
     let backup = backup_path(name, dir);
-    fs::copy(dir.join(format!("{name}.json")), &backup)?;
+    let snapshot = dir.join(format!("{name}.json"));
+    fs::copy(&snapshot, &backup)?;
+    // The restored server prunes all but the 50 newest snapshots when it
+    // starts, and the one being restored is usually the oldest; pruning it
+    // also removes the copy.  Make it the newest.
+    fs::File::options()
+        .write(true)
+        .open(&snapshot)?
+        .set_modified(std::time::SystemTime::now())?;
     eprintln!(
         "psmux resurrect: if the restored session ends at once, rename {} to {name}.json and run resurrect again",
         backup.display()
