@@ -63,7 +63,10 @@ fn embed_windows_resources() {
         .set("InternalName", "psmux")
         // psmux, pmux and tmux are the same image; psmux.exe is canonical.
         .set("OriginalFilename", "psmux.exe")
-        .set("LegalCopyright", "Copyright (c) psmux contributors. MIT licensed.")
+        .set(
+            "LegalCopyright",
+            "Copyright (c) psmux contributors. MIT licensed.",
+        )
         .set("FileVersion", version)
         .set("ProductVersion", version);
 
