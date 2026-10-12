@@ -80,9 +80,12 @@ keys anyway. That includes an agent waiting at a `blocked` prompt: keys meant
 to answer it arrive after the 30 seconds, so send those without
 `--wait-ready`.
 
-Name the pane by id. A bare `-t %N` is looked up across the running servers,
-starting with your own session; when the pane belongs to another session,
-write `-t sess:.%N`. Without `-t`, or with a pane index such as `-t :0.1` or
+Name the pane by id, and always qualify it: write `-t sess:.%N`. A bare
+`-t %N` is not searched for across sessions. `send-keys` sends it to your own
+session when you run it inside a psmux pane, and otherwise to the most
+recently used session. If that session has no such pane, the server answers
+`can't find pane` but `send-keys` has already exited 0, so the keys go
+nowhere without an error. Without `-t`, or with a pane index such as `-t :0.1` or
 `-t sess:0.1`, there is no wait and the keys go out at once. The keys go to
 the `-t` pane, not to the pane that is active when they are sent.
 

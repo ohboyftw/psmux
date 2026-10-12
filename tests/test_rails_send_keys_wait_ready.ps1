@@ -24,11 +24,10 @@ $S = New-IsolatedSession "sendkeys-waitready"
 $null = psmux new-window -t $S 2>&1
 Start-Sleep -Seconds 2
 
-# Session-qualified pane ids, not a bare %N. A bare id is looked up across live
-# servers starting with the caller's own session (session.rs), so when this
-# script runs inside another psmux pane it can miss the isolated session, and a
-# miss still exits 0. docs/scripting.md gives users the same advice for panes
-# in another session.
+# Session-qualified pane ids, not a bare %N. send-keys drops -t before routing,
+# so a bare id goes to the caller's own session (or the most recently used one)
+# and is never searched for across servers. A miss still exits 0.
+# docs/scripting.md gives users the same advice.
 $Pane = @{}
 foreach ($row in (psmux list-panes -a -t $S -F '#{window_index} #{pane_id}' 2>$null)) {
     $bits = "$row".Split(' ')
