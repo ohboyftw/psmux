@@ -274,9 +274,17 @@ alone is not enough while the warm pool is on: `new-session` claims a standby
 that read its environment when it was spawned (from your session, so it
 publishes to your bus), and a standby a test spawns hands the test's
 environment to your next session. So the harness and `run_all_tests.ps1`
-also set `PSMUX_NO_WARM=1`, and the two warm-pool tests, which need the
-pool, run in a scratch `PSMUX_DATA_DIR` where they can claim only their own
-standbys.
+also set `PSMUX_NO_WARM=1`. The two warm-pool tests
+(`test_warm_session_claim.ps1`, `test_warm_off.ps1`) need the pool, so they
+run in a scratch `PSMUX_DATA_DIR` and their own `-L` namespace, read and
+write a scratch config through `PSMUX_CONFIG_FILE` instead of
+`~/.psmux.conf`, and clean up with `kill-server -L` plus a kill of only the
+processes whose command line names that namespace; they leave your sessions
+and your bus alone. That is not true of every script: any test that runs a
+bare `kill-server` (for example the cleanup in `run_all_tests.ps1`) still
+ends every psmux session on the machine. It spares the bus, which the
+`kill-server` sweep never ends, but do not run such scripts beside sessions
+you want to keep.
 
 `scripts/mycel_bus_conformance.ps1` checks a freshly built `psmux bus`
 against the real Python mycel client. It runs the bus on a free port with a

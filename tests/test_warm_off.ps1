@@ -19,6 +19,20 @@ $env:PSMUX_DATA_DIR = Join-Path $env:TEMP "psmux-warm-test-$PID"
 New-Item -ItemType Directory -Path $env:PSMUX_DATA_DIR -Force | Out-Null
 $PSMUX_DIR = $env:PSMUX_DATA_DIR
 
+# Everything this test starts lives in its own -L namespace, so cleanup can
+# end exactly its own servers: `kill-server -L` never sweeps other psmux
+# processes, and the fallback below matches only command lines naming this
+# namespace. No bare kill-server and no Stop-Process on every psmux image.
+$L = "warmtest$PID"
+
+$PSMUX = 'psmux'
+
+# The config this test writes is a scratch file, never ~/.psmux.conf:
+# PSMUX_CONFIG_FILE replaces the home-directory search, and a missing file
+# means no config (warm defaults to on).
+$configPath = Join-Path $env:PSMUX_DATA_DIR 'psmux.conf'
+$env:PSMUX_CONFIG_FILE = $configPath
+
 $pass = 0
 $fail = 0
 $total = 0
@@ -34,25 +48,25 @@ function Assert-True($condition, $msg) {
     }
 }
 
-function Kill-AllPsmux {
-    Get-Process -Name psmux,tmux,pmux -ErrorAction SilentlyContinue |
-        Stop-Process -Force -ErrorAction SilentlyContinue
+function Stop-ScratchPsmux {
+    & $PSMUX -L $L kill-server 2>$null
     Start-Sleep -Milliseconds 500
-    # Clean stale port files
-    Get-ChildItem "$PSMUX_DIR\*.port" -ErrorAction SilentlyContinue |
-        Remove-Item -Force -ErrorAction SilentlyContinue
-    Get-ChildItem "$PSMUX_DIR\*.key" -ErrorAction SilentlyContinue |
+    $ours = "(^|\s)-L\s+" + [regex]::Escape($L) + "(\s|$)"
+    Get-CimInstance Win32_Process -Filter "Name='psmux.exe' OR Name='pmux.exe' OR Name='tmux.exe'" -ErrorAction SilentlyContinue |
+        Where-Object { $_.CommandLine -match $ours } |
+        ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
+    Get-ChildItem "$PSMUX_DIR\${L}__*.port", "$PSMUX_DIR\${L}__*.key" -ErrorAction SilentlyContinue |
         Remove-Item -Force -ErrorAction SilentlyContinue
 }
 
 function Get-WarmPortFiles {
-    Get-ChildItem "$PSMUX_DIR\__warm__*.port" -ErrorAction SilentlyContinue
+    Get-ChildItem "$PSMUX_DIR\${L}____warm__*.port" -ErrorAction SilentlyContinue
 }
 
 function Get-WarmProcesses {
-    # Look for psmux processes whose command line contains __warm__
+    # This test's psmux processes whose command line contains __warm__
     Get-CimInstance Win32_Process -Filter "Name='psmux.exe'" -ErrorAction SilentlyContinue |
-        Where-Object { $_.CommandLine -match '__warm__' }
+        Where-Object { $_.CommandLine -match '__warm__' -and $_.CommandLine -match [regex]::Escape($L) }
 }
 
 # ── Setup ──────────────────────────────────────────────────────
@@ -63,29 +77,17 @@ Write-Host " Warm Off: Comprehensive E2E Tests" -ForegroundColor Cyan
 Write-Host "============================================" -ForegroundColor Cyan
 Write-Host ""
 
-# Clean config and kill everything
-Kill-AllPsmux
+# Start from a clean scratch namespace
+Stop-ScratchPsmux
 
-$configPath = "$env:USERPROFILE\.psmux.conf"
-$hadConfig = Test-Path $configPath
-if ($hadConfig) {
-    $originalConfig = Get-Content $configPath -Raw
-}
-
-# Helper: set config for warm-off testing (preserves user lines + adds warm off)
+# Helper: set config for warm-off testing
 function Set-WarmOff {
     Set-Content $configPath "set -g warm off"
 }
 
-# Helper: ensure no warm config (warm defaults to on)
+# Helper: no config at all (warm defaults to on)
 function Set-WarmDefault {
-    if ($hadConfig) {
-        # Restore original but strip any warm line to test default behavior
-        $cleaned = ($originalConfig -split "`n" | Where-Object { $_ -notmatch '^\s*set\s.*\bwarm\b' }) -join "`n"
-        Set-Content $configPath $cleaned
-    } else {
-        Remove-Item $configPath -Force -ErrorAction SilentlyContinue
-    }
+    Remove-Item $configPath -Force -ErrorAction SilentlyContinue
 }
 
 # ══════════════════════════════════════════════════════════════
@@ -99,7 +101,7 @@ Set-WarmOff
 # ── Test 1.1: New session should NOT spawn warm server ──
 Write-Host ""
 Write-Host "Test 1.1: New session with warm off" -ForegroundColor White
-psmux new-session -d -s cfgtest1
+psmux -L $L new-session -d -s cfgtest1
 Start-Sleep -Seconds 3
 
 $warmFiles = Get-WarmPortFiles
@@ -111,7 +113,7 @@ Assert-True ($null -eq $warmProcs -or @($warmProcs).Count -eq 0) "No __warm__ pr
 # ── Test 1.2: New window should NOT spawn warm pane ──
 Write-Host ""
 Write-Host "Test 1.2: New window with warm off" -ForegroundColor White
-psmux new-window -t cfgtest1
+psmux -L $L new-window -t cfgtest1
 Start-Sleep -Seconds 2
 
 $warmFiles = Get-WarmPortFiles
@@ -123,7 +125,7 @@ Assert-True ($null -eq $warmProcs -or @($warmProcs).Count -eq 0) "No __warm__ pr
 # ── Test 1.3: Vertical split should NOT spawn warm pane ──
 Write-Host ""
 Write-Host "Test 1.3: Vertical split with warm off" -ForegroundColor White
-psmux split-window -v -t cfgtest1
+psmux -L $L split-window -v -t cfgtest1
 Start-Sleep -Seconds 2
 
 $warmFiles = Get-WarmPortFiles
@@ -132,7 +134,7 @@ Assert-True ($null -eq $warmFiles -or $warmFiles.Count -eq 0) "No __warm__.port 
 # ── Test 1.4: Horizontal split should NOT spawn warm pane ──
 Write-Host ""
 Write-Host "Test 1.4: Horizontal split with warm off" -ForegroundColor White
-psmux split-window -h -t cfgtest1
+psmux -L $L split-window -h -t cfgtest1
 Start-Sleep -Seconds 2
 
 $warmFiles = Get-WarmPortFiles
@@ -141,7 +143,7 @@ Assert-True ($null -eq $warmFiles -or $warmFiles.Count -eq 0) "No __warm__.port 
 # ── Test 1.5: Second session should NOT spawn warm server ──
 Write-Host ""
 Write-Host "Test 1.5: Second session with warm off" -ForegroundColor White
-psmux new-session -d -s cfgtest2
+psmux -L $L new-session -d -s cfgtest2
 Start-Sleep -Seconds 3
 
 $warmFiles = Get-WarmPortFiles
@@ -153,13 +155,13 @@ Assert-True ($null -eq $warmProcs -or @($warmProcs).Count -eq 0) "No __warm__ pr
 # ── Test 1.6: show-options confirms warm is off ──
 Write-Host ""
 Write-Host "Test 1.6: Show-options reports warm off" -ForegroundColor White
-$warmVal = psmux show-options -g -v warm -t cfgtest1 2>&1
+$warmVal = psmux -L $L show-options -g -v warm -t cfgtest1 2>&1
 Assert-True ($warmVal -match "off") "show-options -g -v warm returns off"
 
 # Cleanup suite 1
-psmux kill-server 2>$null
+psmux -L $L kill-server 2>$null
 Start-Sleep -Seconds 1
-Kill-AllPsmux
+Stop-ScratchPsmux
 
 # ══════════════════════════════════════════════════════════════
 # TEST SUITE 2: Environment variable based warm off
@@ -174,7 +176,7 @@ $env:PSMUX_NO_WARM = "1"
 # ── Test 2.1: New session with env var ──
 Write-Host ""
 Write-Host "Test 2.1: New session with PSMUX_NO_WARM=1" -ForegroundColor White
-psmux new-session -d -s envtest1
+psmux -L $L new-session -d -s envtest1
 Start-Sleep -Seconds 3
 
 $warmFiles = Get-WarmPortFiles
@@ -186,7 +188,7 @@ Assert-True ($null -eq $warmProcs -or @($warmProcs).Count -eq 0) "No __warm__ pr
 # ── Test 2.2: New window with env var ──
 Write-Host ""
 Write-Host "Test 2.2: New window with PSMUX_NO_WARM=1" -ForegroundColor White
-psmux new-window -t envtest1
+psmux -L $L new-window -t envtest1
 Start-Sleep -Seconds 2
 
 $warmFiles = Get-WarmPortFiles
@@ -195,16 +197,16 @@ Assert-True ($null -eq $warmFiles -or $warmFiles.Count -eq 0) "No __warm__.port 
 # ── Test 2.3: Split with env var ──
 Write-Host ""
 Write-Host "Test 2.3: Split with PSMUX_NO_WARM=1" -ForegroundColor White
-psmux split-window -h -t envtest1
+psmux -L $L split-window -h -t envtest1
 Start-Sleep -Seconds 2
 
 $warmFiles = Get-WarmPortFiles
 Assert-True ($null -eq $warmFiles -or $warmFiles.Count -eq 0) "No __warm__.port after split with env var"
 
 # Cleanup suite 2
-psmux kill-server 2>$null
+psmux -L $L kill-server 2>$null
 Start-Sleep -Seconds 1
-Kill-AllPsmux
+Stop-ScratchPsmux
 Remove-Item env:\PSMUX_NO_WARM -ErrorAction SilentlyContinue
 
 # ══════════════════════════════════════════════════════════════
@@ -221,7 +223,7 @@ Set-WarmDefault
 # ── Test 3.1: Default (warm on) spawns warm server ──
 Write-Host ""
 Write-Host "Test 3.1: Default warm on spawns warm" -ForegroundColor White
-psmux new-session -d -s toggletest
+psmux -L $L new-session -d -s toggletest
 Start-Sleep -Seconds 5
 
 $warmFiles = Get-WarmPortFiles
@@ -230,16 +232,16 @@ Assert-True ($null -ne $warmFiles -and @($warmFiles).Count -gt 0) "Warm port fil
 # ── Test 3.2: Runtime set warm off removes warm files ──
 Write-Host ""
 Write-Host "Test 3.2: Runtime warm off removes warm" -ForegroundColor White
-psmux set-option -g warm off -t toggletest 2>$null
+psmux -L $L set-option -g warm off -t toggletest 2>$null
 Start-Sleep -Seconds 3
 
-$warmVal = psmux show-options -g -v warm -t toggletest 2>&1
+$warmVal = psmux -L $L show-options -g -v warm -t toggletest 2>&1
 Assert-True ($warmVal -match "off") "show-options reports warm off after runtime set"
 
 # ── Test 3.3: New window after runtime warm off has no warm ──
 Write-Host ""
 Write-Host "Test 3.3: New window after runtime warm off" -ForegroundColor White
-psmux new-window -t toggletest
+psmux -L $L new-window -t toggletest
 Start-Sleep -Seconds 3
 
 $warmFiles = Get-WarmPortFiles
@@ -248,7 +250,7 @@ Assert-True ($null -eq $warmFiles -or $warmFiles.Count -eq 0) "No warm port file
 # ── Test 3.4: Split after runtime warm off has no warm ──
 Write-Host ""
 Write-Host "Test 3.4: Split after runtime warm off" -ForegroundColor White
-psmux split-window -v -t toggletest
+psmux -L $L split-window -v -t toggletest
 Start-Sleep -Seconds 3
 
 $warmFiles = Get-WarmPortFiles
@@ -257,37 +259,37 @@ Assert-True ($null -eq $warmFiles -or $warmFiles.Count -eq 0) "No warm port file
 # ── Test 3.5: Runtime set warm on restores warm ──
 Write-Host ""
 Write-Host "Test 3.5: Runtime warm on restores warm" -ForegroundColor White
-psmux set-option -g warm on -t toggletest 2>$null
+psmux -L $L set-option -g warm on -t toggletest 2>$null
 Start-Sleep -Seconds 3
 
-$warmVal = psmux show-options -g -v warm -t toggletest 2>&1
+$warmVal = psmux -L $L show-options -g -v warm -t toggletest 2>&1
 Assert-True ($warmVal -match "on") "show-options reports warm on after runtime re-enable"
 
 # ── Test 3.6: New window after runtime warm on has warm ──
 Write-Host ""
 Write-Host "Test 3.6: New window after runtime warm on" -ForegroundColor White
-psmux new-window -t toggletest
+psmux -L $L new-window -t toggletest
 Start-Sleep -Seconds 3
 
 $warmFiles = Get-WarmPortFiles
 # Warm pane is internal to the server, port file is for the warm SERVER
 # After re-enabling warm, new operations should restore warm state
-$warmVal2 = psmux show-options -g -v warm -t toggletest 2>&1
+$warmVal2 = psmux -L $L show-options -g -v warm -t toggletest 2>&1
 Assert-True ($warmVal2 -match "on") "warm still on after new-window (runtime warm on)"
 
 # ── Test 3.7: Split after runtime warm on ──
 Write-Host ""
 Write-Host "Test 3.7: Split after runtime warm on" -ForegroundColor White
-psmux split-window -h -t toggletest
+psmux -L $L split-window -h -t toggletest
 Start-Sleep -Seconds 3
 
-$warmVal3 = psmux show-options -g -v warm -t toggletest 2>&1
+$warmVal3 = psmux -L $L show-options -g -v warm -t toggletest 2>&1
 Assert-True ($warmVal3 -match "on") "warm still on after split-window (runtime warm on)"
 
 # Cleanup suite 3
-psmux kill-server 2>$null
+psmux -L $L kill-server 2>$null
 Start-Sleep -Seconds 1
-Kill-AllPsmux
+Stop-ScratchPsmux
 
 # ══════════════════════════════════════════════════════════════
 # TEST SUITE 4: Chained sessions (spooki44's scenario)
@@ -299,11 +301,11 @@ Set-WarmOff
 
 Write-Host ""
 Write-Host "Test 4.1: Create 3 sessions, no warm chain" -ForegroundColor White
-psmux new-session -d -s chain1
+psmux -L $L new-session -d -s chain1
 Start-Sleep -Seconds 2
-psmux new-session -d -s chain2
+psmux -L $L new-session -d -s chain2
 Start-Sleep -Seconds 2
-psmux new-session -d -s chain3
+psmux -L $L new-session -d -s chain3
 Start-Sleep -Seconds 2
 
 $warmFiles = Get-WarmPortFiles
@@ -314,14 +316,14 @@ Assert-True ($null -eq $warmProcs -or @($warmProcs).Count -eq 0) "No __warm__ pr
 
 # Every session should report warm off
 foreach ($s in @("chain1", "chain2", "chain3")) {
-    $v = psmux show-options -g -v warm -t $s 2>&1
+    $v = psmux -L $L show-options -g -v warm -t $s 2>&1
     Assert-True ($v -match "off") "Session $s reports warm off"
 }
 
 # Cleanup suite 4
-psmux kill-server 2>$null
+psmux -L $L kill-server 2>$null
 Start-Sleep -Seconds 1
-Kill-AllPsmux
+Stop-ScratchPsmux
 
 # ══════════════════════════════════════════════════════════════
 # TEST SUITE 5: Default behavior preserved (warm on)
@@ -334,26 +336,23 @@ Set-WarmDefault
 
 Write-Host ""
 Write-Host "Test 5.1: Default config spawns warm server" -ForegroundColor White
-psmux new-session -d -s defaulttest
+psmux -L $L new-session -d -s defaulttest
 Start-Sleep -Seconds 5
 
 $warmFiles = Get-WarmPortFiles
 Assert-True ($null -ne $warmFiles -and @($warmFiles).Count -gt 0) "Warm port file exists with default config"
 
-$warmVal = psmux show-options -g -v warm -t defaulttest 2>&1
+$warmVal = psmux -L $L show-options -g -v warm -t defaulttest 2>&1
 Assert-True ($warmVal -match "on") "show-options reports warm on by default"
 
 # Cleanup suite 5
-psmux kill-server 2>$null
+psmux -L $L kill-server 2>$null
 Start-Sleep -Seconds 1
-Kill-AllPsmux
+Stop-ScratchPsmux
 
-# ── Restore original config ──
-if ($hadConfig) {
-    Set-Content $configPath $originalConfig
-} else {
-    Remove-Item $configPath -Force -ErrorAction SilentlyContinue
-}
+# ── Remove the scratch config ──
+Remove-Item $configPath -Force -ErrorAction SilentlyContinue
+$env:PSMUX_CONFIG_FILE = $null
 
 # ── Summary ──
 Write-Host ""
