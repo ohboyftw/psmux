@@ -117,7 +117,12 @@ JSON-RPC push event.
 the bus with. It is also the `publisher` of every psmux event.
 
 ### psmux/session/created
-**When:** a session server starts a new session.
+**When:** a session server starts a new session. With the warm pool on (the
+default), `new-session` usually claims a standby server that started earlier
+as `__warm__` (`__warm__0`, `__warm__1`, ... for a larger pool), so the
+session first appears here under that name, followed by
+`psmux/session/renamed` with the claimed name when it is claimed. A standby
+that is never claimed is never renamed.
 **Payload:**
 ```json
 { "session_name": "work", "client_id": "psmux@hostname" }
@@ -125,12 +130,14 @@ the bus with. It is also the `publisher` of every psmux event.
 **Trigger:** `src/server/mod.rs` (server start).
 
 ### psmux/session/renamed
-**When:** a session is renamed via `rename-session`.
+**When:** a session is renamed via `rename-session`, or a warm standby is
+claimed by `new-session` (`old_name` is then `__warm__` or `__warm__N`).
 **Payload:**
 ```json
 { "session_name": "work", "old_name": "scratch", "client_id": "psmux@hostname" }
 ```
-**Trigger:** `src/server/mod.rs` (rename-session handler).
+**Trigger:** `src/server/mod.rs` (`rename_server_session`, from the
+rename-session and claim-session handlers).
 
 ### psmux/session/killed
 **When:** a session is killed via `kill-session`.

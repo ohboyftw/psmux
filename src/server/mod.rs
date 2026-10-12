@@ -233,6 +233,30 @@ fn is_warm_server(app: &AppState) -> bool {
     crate::session::is_warm_session(&app.port_file_base())
 }
 
+/// Rename this server's session: move its port and key files to the new
+/// name and announce `SessionRenamed` to control clients and the mycel bus.
+/// A claimed warm standby is renamed here too, so a subscriber that saw
+/// `__warm__` created learns the name it was claimed under. Returns the old
+/// name.
+fn rename_server_session(app: &mut AppState, name: String) -> String {
+    let new_base = match app.socket_name {
+        Some(ref sn) => format!("{}__{}", sn, name),
+        None => name.clone(),
+    };
+    if let Some(port) = app.control_port {
+        crate::session::migrate_server_state(&app.port_file_base(), &new_base, port);
+    }
+    let old_name = std::mem::replace(&mut app.session_name, name);
+    crate::control::emit_lifecycle(
+        &app.control_clients,
+        &crate::control::LifecycleEvent::SessionRenamed {
+            new_name: &app.session_name,
+            old_name: &old_name,
+        },
+    );
+    old_name
+}
+
 /// Returns true when every pane across all windows has exited (is dead).
 /// This is needed for warm server cleanup when `remain-on-exit` is on:
 /// `remain-on-exit` keeps dead panes in the tree (preventing window
@@ -3758,28 +3782,7 @@ pub fn run_server(
                             let _ = resp.send(reply);
                         }
                         CtrlReq::RenameSession(name) => {
-                            let _old_session_name = app.session_name.clone();
-                            // Compute new port file base with socket_name prefix
-                            let new_base = if let Some(ref sn) = app.socket_name {
-                                format!("{}__{}", sn, name)
-                            } else {
-                                name.clone()
-                            };
-                            if let Some(port) = app.control_port {
-                                crate::session::migrate_server_state(
-                                    &app.port_file_base(),
-                                    &new_base,
-                                    port,
-                                );
-                            }
-                            app.session_name = name;
-                            crate::control::emit_lifecycle(
-                                &app.control_clients,
-                                &crate::control::LifecycleEvent::SessionRenamed {
-                                    new_name: &app.session_name,
-                                    old_name: &_old_session_name,
-                                },
-                            );
+                            rename_server_session(&mut app, name);
                             // Update env so run-shell/hooks from this server target the new name
                             crate::util::set_env("PSMUX_TARGET_SESSION", app.port_file_base());
                             hook_event = Some("after-rename-session");
@@ -3787,19 +3790,7 @@ pub fn run_server(
                         CtrlReq::ClaimSession(name, client_cwd, client_size, resp) => {
                             // Same as RenameSession but with a synchronous response
                             // so the CLI knows the rename completed before attaching.
-                            let new_base = if let Some(ref sn) = app.socket_name {
-                                format!("{}__{}", sn, name)
-                            } else {
-                                name.clone()
-                            };
-                            if let Some(port) = app.control_port {
-                                crate::session::migrate_server_state(
-                                    &app.port_file_base(),
-                                    &new_base,
-                                    port,
-                                );
-                            }
-                            app.session_name = name;
+                            rename_server_session(&mut app, name);
                             // Update env so run-shell/hooks from this server target the new name
                             crate::util::set_env("PSMUX_TARGET_SESSION", app.port_file_base());
                             // Re-load user config so the claimed session reflects the
@@ -6528,3 +6519,7 @@ mod test_issue761;
 #[cfg(test)]
 #[path = "../../tests-rs/test_wait_until_queue.rs"]
 mod test_wait_until_queue;
+
+#[cfg(test)]
+#[path = "../../tests-rs/test_warm_claim_announce.rs"]
+mod test_warm_claim_announce;
