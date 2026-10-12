@@ -565,7 +565,10 @@ fn run_main() -> io::Result<()> {
                             // Source the config to create remaining panes
                             if !cmds.is_empty() {
                                 let source_status = std::process::Command::new(&exe)
-                                    .args(["source-file", tmp_config.to_str().unwrap_or("")])
+                                    .args(crate::resurrection::source_file_args(
+                                        &session_name,
+                                        tmp_config.to_str().unwrap_or(""),
+                                    ))
                                     .status();
                                 if let Ok(ss) = source_status {
                                     if !ss.success() {

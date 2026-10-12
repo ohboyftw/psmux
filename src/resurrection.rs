@@ -105,6 +105,21 @@ pub fn first_pane_new_session_args(session_name: &str, snap: &SessionSnapshot) -
     args
 }
 
+/// argv (without the executable) that sources `path` into `session_name`.
+///
+/// `-t` comes before the subcommand so the global parse routes the command to
+/// the new session.  Without it the child inherits a target resolved when the
+/// session did not exist yet: the session the caller's pane is in (`TMUX`),
+/// or the most recent live session.
+pub fn source_file_args(session_name: &str, path: &str) -> Vec<String> {
+    vec![
+        "-t".into(),
+        session_name.into(),
+        "source-file".into(),
+        path.into(),
+    ]
+}
+
 /// Whether an agent-state transition changes what resurrect would resume:
 /// an agent appearing in or leaving a pane does; flips between states do not.
 pub fn changes_resume_source(t: &crate::agent_state::AgentTransition) -> bool {

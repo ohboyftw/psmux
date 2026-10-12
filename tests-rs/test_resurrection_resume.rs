@@ -114,6 +114,14 @@ fn first_pane_args_when_shell_pane_then_no_command() {
     );
 }
 
+#[test]
+fn source_file_args_when_built_then_session_is_named_before_the_subcommand() {
+    assert_eq!(
+        source_file_args("s", "C:/t/r.conf"),
+        ["-t", "s", "source-file", "C:/t/r.conf"]
+    );
+}
+
 fn transition(
     old: Option<vt100::ProgramState>,
     new: Option<vt100::ProgramState>,
