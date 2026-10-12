@@ -214,9 +214,13 @@ build or installer cannot replace the file:
 psmux bus stop        # or: mycel stop
 ```
 
-`psmux bus stop` asks whatever bus answers (a psmux bus or a standalone
-`mycel` server) to shut down. The bus is not gone for good: the next event
-any running session publishes starts it again, within about 30 seconds. To
+`psmux bus stop` stops only a bus that psmux started: `~/.mycel/server`
+must name its `pid`, that pid must be a running psmux, and the bus at the
+file's address must answer. A standalone `mycel` server (it writes no `pid`)
+or a bus it cannot verify is left running, and the command says so and
+exits non-zero; use `mycel stop` for those. The bus is not gone for good:
+the next event any running session publishes starts it again, within about
+30 seconds. To
 keep it stopped, set `PSMUX_BUS=0` before starting psmux: that turns
 publishing off, so session servers neither start a bus nor publish to one
 that is running. Session servers read it once when they start, so servers
@@ -232,7 +236,8 @@ than start their own bus. (`PSMUX_BUS=0` would turn psmux's publishing off
 altogether.)
 
 If `~/.mycel/server` cannot be written, the bus still runs and clients find
-it on the port. After three starts in a row that never produced a live bus
+it on the port, but `psmux bus stop` cannot verify it; stop that one with
+`mycel stop`. After three starts in a row that never produced a live bus
 (for example, another program holds port 4321), a session server waits 30
 minutes before it tries again. The liveness probes that `psmux bus` and
 `psmux bus stop` make connect as `psmux-bus-probe`, and the psmux bus

@@ -126,9 +126,14 @@ pub fn run_bus_command(words: &[&str]) -> std::io::Result<()> {
     if !stop {
         return run_bus_process(&loc);
     }
-    match stop_live_bus(&loc) {
-        Ok(true) => println!("mycel bus stopped"),
-        Ok(false) => println!("no mycel bus is running"),
+    match stop_live_bus(&loc, is_psmux_pid) {
+        Ok(StopOutcome::Stopped) => println!("mycel bus stopped"),
+        Ok(StopOutcome::NoBus) => println!("no mycel bus is running"),
+        Ok(StopOutcome::NotOurs) => {
+            return Err(Error::other(
+                "the live mycel bus was not started by psmux; stop it with `mycel stop`",
+            ))
+        }
         Err(e) => return Err(Error::other(e.to_string())),
     }
     Ok(())
@@ -156,18 +161,48 @@ pub fn run_bus_process(loc: &BusLocation) -> std::io::Result<()> {
     }
 }
 
-/// Run `psmux bus stop`: ask the live bus, if any, to shut down. Returns
-/// whether a bus answered. The next psmux event starts a new one unless
-/// `PSMUX_BUS=0` (publishing off) was set before the session servers
-/// started.
-pub fn stop_live_bus(loc: &BusLocation) -> Result<bool, ClientError> {
-    let Some(addr) = find_live_bus(loc, PROBE_TIMEOUT) else {
-        return Ok(false);
+/// What `psmux bus stop` found.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StopOutcome {
+    /// A bus psmux started was asked to shut down and acknowledged.
+    Stopped,
+    /// No bus answers.
+    NoBus,
+    /// A bus answers, but nothing shows psmux started it (a standalone
+    /// mycel, or a pid that is gone or not psmux). It is left running.
+    NotOurs,
+}
+
+/// Run `psmux bus stop`: shut down the live bus only if psmux started it,
+/// that is, the discovery file names its pid, `is_psmux_pid` confirms that
+/// pid, and the bus at the file's address answers. The next psmux event
+/// starts a new one unless `PSMUX_BUS=0` (publishing off) was set before
+/// the session servers started.
+pub fn stop_live_bus(
+    loc: &BusLocation,
+    is_psmux_pid: impl Fn(u32) -> bool,
+) -> Result<StopOutcome, ClientError> {
+    let ours = loc
+        .discovery_path
+        .as_deref()
+        .and_then(|p| psmux_bus_addr(p, &is_psmux_pid));
+    let Some(addr) = ours else {
+        return Ok(match find_live_bus(loc, PROBE_TIMEOUT) {
+            Some(_) => StopOutcome::NotOurs,
+            None => StopOutcome::NoBus,
+        });
     };
     let mut client = Client::connect(addr, PROBE_CLIENT_ID, PROBE_TIMEOUT)?;
     client.set_read_timeout(Some(PROBE_TIMEOUT))?;
     client.shutdown("psmux bus stop")?;
-    Ok(true)
+    Ok(StopOutcome::Stopped)
+}
+
+/// The address of the live psmux bus the discovery file at `path` names.
+fn psmux_bus_addr(path: &Path, is_psmux_pid: impl Fn(u32) -> bool) -> Option<SocketAddr> {
+    shared_bus_pid(path, is_psmux_pid)?;
+    let addr = discovery::read(path)?.socket_addr()?;
+    probe(addr, PROBE_TIMEOUT).then_some(addr)
 }
 
 /// Start `exe bus --port P [--discovery PATH]` as a detached background

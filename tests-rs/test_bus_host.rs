@@ -175,13 +175,46 @@ fn run_bus_process_returns_ok_when_a_non_mycel_listener_holds_the_port() {
 }
 
 #[test]
-fn stop_live_bus_shuts_the_bus_down() {
+fn stop_live_bus_stops_a_bus_psmux_started() {
+    let path = temp_discovery("stop-ours");
+    let h = bus_with_discovery(&path);
+    let loc = BusLocation {
+        port: NO_PORT,
+        discovery_path: Some(path),
+    };
+    assert_eq!(stop_live_bus(&loc, |_| true).unwrap(), StopOutcome::Stopped);
+    h.join();
+}
+
+#[test]
+fn stop_live_bus_refuses_a_bus_with_no_psmux_pid() {
+    // A standalone mycel: it answers on the port, and no discovery file
+    // names a psmux pid for it.
     let h = bus();
     let loc = BusLocation {
         port: h.local_addr().port(),
-        discovery_path: None,
+        discovery_path: Some(temp_discovery("stop-standalone")),
     };
-    assert!(stop_live_bus(&loc).unwrap());
+    assert_eq!(stop_live_bus(&loc, |_| true).unwrap(), StopOutcome::NotOurs);
+    assert_eq!(find_live_bus(&loc, PROBE_TIMEOUT), Some(h.local_addr()));
+    h.stop();
+    h.join();
+}
+
+#[test]
+fn stop_live_bus_refuses_a_pid_that_is_not_psmux() {
+    let path = temp_discovery("stop-foreign");
+    let h = bus_with_discovery(&path);
+    let loc = BusLocation {
+        port: NO_PORT,
+        discovery_path: Some(path),
+    };
+    assert_eq!(
+        stop_live_bus(&loc, |_| false).unwrap(),
+        StopOutcome::NotOurs
+    );
+    assert_eq!(find_live_bus(&loc, PROBE_TIMEOUT), Some(h.local_addr()));
+    h.stop();
     h.join();
 }
 
@@ -191,7 +224,7 @@ fn stop_live_bus_reports_no_bus() {
         port: NO_PORT,
         discovery_path: None,
     };
-    assert!(!stop_live_bus(&loc).unwrap());
+    assert_eq!(stop_live_bus(&loc, |_| true).unwrap(), StopOutcome::NoBus);
 }
 
 #[test]
