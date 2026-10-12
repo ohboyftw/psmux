@@ -68,7 +68,10 @@ The server samples the state once per 100 ms tick, so a state held for less
 than one tick can be missed, and several changes within one tick publish as
 one (or none, when the pane ends where it began). When a pane's process exits,
 the final change is published before `psmux/pane/exited`; without
-`remain-on-exit` a report written just before the exit can be lost.
+`remain-on-exit` a report written just before the exit can be lost. The final
+change is sent when the pane's process exits, not when the pane is killed:
+`kill-pane`, `kill-window` and `kill-session` do not publish a last
+`psmux/pane/status` event.
 **Trigger:** `src/server/helpers.rs` (`emit_status_transition`, from the
 server tick and `prune_exited`).
 
@@ -280,11 +283,12 @@ run in a scratch `PSMUX_DATA_DIR` and their own `-L` namespace, read and
 write a scratch config through `PSMUX_CONFIG_FILE` instead of
 `~/.psmux.conf`, and clean up with `kill-server -L` plus a kill of only the
 processes whose command line names that namespace; they leave your sessions
-and your bus alone. That is not true of every script: any test that runs a
-bare `kill-server` (for example the cleanup in `run_all_tests.ps1`) still
-ends every psmux session on the machine. It spares the bus, which the
-`kill-server` sweep never ends, but do not run such scripts beside sessions
-you want to keep.
+and your bus alone. That is not true of every script. `tests/run_all_tests.ps1` runs a bare
+`kill-server` in its cleanup, which ends every psmux session on the machine
+(it spares the bus, which the sweep never ends). The same cleanup also
+deletes `~/.psmux.conf`, `~/.psmuxrc`, and every `.port` and `.key` file
+under `~/.psmux`. Do not run it on a machine that has sessions or
+configuration you want to keep.
 
 `scripts/mycel_bus_conformance.ps1` checks a freshly built `psmux bus`
 against the real Python mycel client. It runs the bus on a free port with a

@@ -532,7 +532,9 @@ Listed in the `initialize` capabilities as `"state_changed"`.
   (for example `working` to `null`, or `working` to `done`) before
   `context_exited`, also for panes that are then removed. This is best
   effort: without `remain-on-exit`, output the pane wrote just before it
-  exited may not have been read yet, and a last report in it is lost.
+  exited may not have been read yet, and a last report in it is lost. This
+  happens when the process exits, not when the pane is killed: `kill-pane`,
+  `kill-window` and `kill-session` send no final `nE` event.
 
 The same change is published on mycel as
 [`psmux/pane/status`](mycel-topics.md#psmuxpanestatus), where empty

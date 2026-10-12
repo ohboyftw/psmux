@@ -320,7 +320,9 @@ Turn this off with `set -g agent-toasts off` (default `on`).
   its own.
 - The server samples the state once per 100 ms, so a state held for less
   than that can be missed. A pane's final state at exit is read when the
-  pane is reaped, so `done` followed by exit still toasts.
+  pane is reaped, so `done` followed by exit still toasts. A pane that is
+  killed (`kill-pane`, `kill-window`, `kill-session`) is not read this way,
+  so no final state change or `psmux/pane/status` event is sent for it.
 - When the last pane exits and the server shuts down (`exit-empty`, the
   default), the most important waiting toast is started just before the
   server exits, ignoring the limits above. A toast that was already being
