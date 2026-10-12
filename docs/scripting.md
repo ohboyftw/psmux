@@ -332,7 +332,9 @@ psmux saves a snapshot of each session's layout, and `psmux resurrect <name>`
 rebuilds the session from it: every window, with its name and its panes, each
 pane in its saved directory. Panes are arranged with the `tiled` layout, not
 their original sizes. Resurrect refuses a session name that is already
-running. When a pane was running an agent that reports its state with
+running. A pane whose saved directory no longer exists starts in psmux's
+default directory instead, and resurrect prints a line naming the pane and
+the directory. When a pane was running an agent that reports its state with
 OSC 7501, the snapshot records the agent's `app` name, and resurrect starts
 the agent's resume command in that pane instead of the pane's original
 command:
@@ -369,8 +371,21 @@ command:
   directory before `PATH`, a `claude.bat` or `pi.cmd` placed in that
   directory runs instead of the real agent. PowerShell does not search the
   current directory.
+- An agent pane whose saved directory no longer exists is not resumed: it
+  runs the pane's original command, and the line resurrect prints names the
+  resume command it skipped. In any other directory `--continue` would resume
+  a different conversation.
 - When the resumed agent exits, the pane exits with it; it does not fall back
   to the shell that originally ran the agent.
+- Resurrect does not delete the snapshot, and it keeps a copy as
+  `<name>.json.bak` in the same directory. If the resumed agents exit at once
+  and the session ends with them, rename the copy to `<name>.json` and run
+  `resurrect` again; the snapshot file itself may have been rewritten by the
+  restored session without its agents. `delete-resurrect` removes both
+  files. Because the snapshot is kept, a restored session that ends before
+  writing a snapshot of its own (an agent reporting, a window or pane change,
+  or `kill-server`) is still listed as resurrectable, and resurrecting it
+  resumes the same agents again.
 
 ## Paste Buffers
 

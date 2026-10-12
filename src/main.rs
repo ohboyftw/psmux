@@ -500,43 +500,27 @@ fn run_main() -> io::Result<()> {
                         "Resurrecting session '{}' ({} windows, {} panes)",
                         snap.session_name, win_count, pane_count
                     );
-                    // Delete the snapshot now — it'll be re-created by the new server
-                    let _ = crate::resurrection::delete_snapshot(&session_name, &dir);
-
-                    let steps = crate::resurrection::restore_steps(&session_name, &snap);
-                    eprintln!("Spawning session with {} setup commands...", steps.len());
-
-                    // Create the session with the first pane, then run one psmux
-                    // command per remaining window, pane, layout and name.
                     let exe = std::env::current_exe().unwrap_or_else(|_| "psmux".into());
-                    let status = std::process::Command::new(&exe)
-                        .args(crate::resurrection::first_pane_new_session_args(
-                            &session_name,
-                            &snap,
-                        ))
-                        .status();
-
-                    if let Ok(s) = status {
-                        if s.success() || s.code() == Some(0) {
-                            // Give server time to start
-                            std::thread::sleep(Duration::from_millis(800));
-                            for step in &steps {
-                                let ok = std::process::Command::new(&exe)
-                                    .args(step)
-                                    .status()
-                                    .is_ok_and(|st| st.success());
-                                if !ok {
-                                    eprintln!("Warning: `{}` failed", step[2..].join(" "));
-                                }
-                            }
-
-                            // Now attach to the session
-                            eprintln!("Attaching to resurrected session '{}'...", session_name);
-                            let _ = std::process::Command::new(&exe)
-                                .args(["attach", "-t", &session_name])
-                                .status();
-                        }
+                    let mut run = |args: &[String]| {
+                        std::process::Command::new(&exe)
+                            .args(args)
+                            .status()
+                            .is_ok_and(|st| st.success())
+                    };
+                    if let Err(e) = crate::resurrection::resurrect(
+                        &session_name,
+                        &snap,
+                        &dir,
+                        Duration::from_millis(800),
+                        &mut run,
+                    ) {
+                        eprintln!("psmux resurrect: {e}");
+                        std::process::exit(1);
                     }
+                    eprintln!("Attaching to resurrected session '{}'...", session_name);
+                    let _ = std::process::Command::new(&exe)
+                        .args(["attach", "-t", &session_name])
+                        .status();
                 }
                 Err(e) => {
                     eprintln!("No resurrectable snapshot for '{}': {}", session_name, e);

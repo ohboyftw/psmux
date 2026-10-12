@@ -74,13 +74,53 @@ pub fn resume_command_for(app: &str) -> Option<&'static str> {
     }
 }
 
+/// Whether a saved pane directory still exists, as resurrect checks it.
+pub type DirExists<'a> = &'a dyn Fn(&str) -> bool;
+
 /// The command resurrect runs for `pc`: the agent's resume command when the
-/// pane ran a known agent, else the pane's original command.
-pub fn restore_command(pc: &PaneCommand) -> Option<String> {
-    match resume_command_for(&pc.app) {
+/// pane ran a known agent and its directory still exists, else the pane's
+/// original command.  `--continue` is keyed on the directory, so anywhere
+/// else it would resume another conversation, or none.
+pub fn restore_command(pc: &PaneCommand, cwd_exists: bool) -> Option<String> {
+    match resume_command_for(&pc.app).filter(|_| cwd_exists) {
         Some(cmd) => Some(cmd.to_string()),
         None => pc.command.clone(),
     }
+}
+
+/// `-c <cwd>` when the directory exists (a missing one would be ignored by
+/// the server without a word), then the restore command.
+fn pane_args(pc: &PaneCommand, exists: DirExists) -> Vec<String> {
+    let cwd_exists = exists(&pc.cwd);
+    let mut args = Vec::new();
+    if cwd_exists {
+        args.push("-c".to_string());
+        args.push(pc.cwd.clone());
+    }
+    args.extend(restore_command(pc, cwd_exists));
+    args
+}
+
+/// One line per pane whose saved directory no longer exists, saying where it
+/// starts instead and, for an agent pane, that it is not resumed.
+pub fn missing_dir_warnings(snap: &SessionSnapshot, exists: DirExists) -> Vec<String> {
+    let mut warnings = Vec::new();
+    for (wi, ws) in snap.windows.iter().enumerate() {
+        for (pi, pc) in ws.pane_commands.iter().enumerate() {
+            if exists(&pc.cwd) {
+                continue;
+            }
+            let mut line = format!(
+                "window {wi} pane {pi}: {} no longer exists; the pane starts in psmux's default directory",
+                pc.cwd
+            );
+            if let Some(resume) = resume_command_for(&pc.app) {
+                line.push_str(&format!(" and does not run `{resume}`"));
+            }
+            warnings.push(line);
+        }
+    }
+    warnings
 }
 
 /// argv (without the executable) that recreates the snapshot's first pane.
@@ -89,19 +129,20 @@ pub fn restore_command(pc: &PaneCommand) -> Option<String> {
 /// commands are shell-wrapped like `new-window`/`split-window` ones, while
 /// `--` spawns its argument as a raw program name, which fails for a command
 /// line such as `claude --continue` and for npm shims such as `pi.cmd`.
-pub fn first_pane_new_session_args(session_name: &str, snap: &SessionSnapshot) -> Vec<String> {
+pub fn first_pane_new_session_args(
+    session_name: &str,
+    snap: &SessionSnapshot,
+    exists: DirExists,
+) -> Vec<String> {
     let mut args = vec![
         "new-session".into(),
         "-d".into(),
         "-s".into(),
         session_name.into(),
     ];
-    let first = snap.windows.first().and_then(|w| w.pane_commands.first());
-    if let Some(pc) = first {
-        args.push("-c".into());
-        args.push(pc.cwd.clone());
+    if let Some(pc) = snap.windows.first().and_then(|w| w.pane_commands.first()) {
+        args.extend(pane_args(pc, exists));
     }
-    args.extend(first.and_then(restore_command));
     args
 }
 
@@ -116,13 +157,15 @@ pub fn first_pane_new_session_args(session_name: &str, snap: &SessionSnapshot) -
 /// is in (`TMUX`), or the most recent live session.  The steps run in order;
 /// `new-window` makes its window active, so the splits and the name that
 /// follow it land in that window.
-pub fn restore_steps(session_name: &str, snap: &SessionSnapshot) -> Vec<Vec<String>> {
-    let step = |args: &[&str]| -> Vec<String> {
-        ["-t", session_name]
-            .iter()
-            .chain(args)
-            .map(|s| s.to_string())
-            .collect()
+pub fn restore_steps(
+    session_name: &str,
+    snap: &SessionSnapshot,
+    exists: DirExists,
+) -> Vec<Vec<String>> {
+    let step = |verb: &str, args: Vec<String>| -> Vec<String> {
+        let mut v = vec!["-t".to_string(), session_name.to_string(), verb.to_string()];
+        v.extend(args);
+        v
     };
     let mut steps = Vec::new();
     for (wi, ws) in snap.windows.iter().enumerate() {
@@ -132,22 +175,61 @@ pub fn restore_steps(session_name: &str, snap: &SessionSnapshot) -> Vec<Vec<Stri
                 (_, 0) => "new-window",
                 _ => "split-window",
             };
-            let command = restore_command(pc);
-            let mut args = vec![verb, "-c", pc.cwd.as_str()];
-            args.extend(command.as_deref());
-            steps.push(step(&args));
+            steps.push(step(verb, pane_args(pc, exists)));
         }
         if ws.pane_commands.len() > 1 {
-            steps.push(step(&["select-layout", "tiled"]));
+            steps.push(step("select-layout", vec!["tiled".into()]));
         }
         if !ws.name.is_empty() {
             // The CLI sends the name unquoted; quote it for the server's
             // tokenizer so a name with spaces is not cut at the first one.
             let quoted = format!("\"{}\"", ws.name.replace('\\', "\\\\").replace('"', "\\\""));
-            steps.push(step(&["rename-window", &quoted]));
+            steps.push(step("rename-window", vec![quoted]));
         }
     }
     steps
+}
+
+/// Rebuild session `name` from `snap`, the snapshot loaded from `dir`.
+/// `run` runs one psmux invocation (argv without the executable) and says
+/// whether it succeeded; `settle` is how long the new server gets to start
+/// before the restore steps.
+///
+/// The snapshot is not deleted, and a copy is kept at [`backup_path`]: a
+/// resumed agent can exit at once (no conversation for its directory, or it
+/// fails to start), its pane and then the server exit with it, and a retry
+/// needs the snapshot.  The file itself is not enough, because the new server
+/// rewrites it on its own save points (each restore step, an agent appearing
+/// or leaving) and a pane that has died records no agent.
+pub fn resurrect(
+    name: &str,
+    snap: &SessionSnapshot,
+    dir: &Path,
+    settle: Duration,
+    run: &mut dyn FnMut(&[String]) -> bool,
+) -> io::Result<()> {
+    let backup = backup_path(name, dir);
+    fs::copy(dir.join(format!("{name}.json")), &backup)?;
+    eprintln!(
+        "psmux resurrect: if the restored session ends at once, rename {} to {name}.json and run resurrect again",
+        backup.display()
+    );
+    let exists = |p: &str| Path::new(p).is_dir();
+    for warning in missing_dir_warnings(snap, &exists) {
+        eprintln!("psmux resurrect: {warning}");
+    }
+    let steps = restore_steps(name, snap, &exists);
+    eprintln!("Spawning session with {} setup commands...", steps.len());
+    if !run(&first_pane_new_session_args(name, snap, &exists)) {
+        return Err(io::Error::other(format!("new-session for '{name}' failed")));
+    }
+    thread::sleep(settle);
+    for step in &steps {
+        if !run(step) {
+            eprintln!("Warning: `{}` failed", step[2..].join(" "));
+        }
+    }
+    Ok(())
 }
 
 /// Whether an agent-state transition changes what resurrect would resume:
@@ -298,8 +380,16 @@ pub fn list_resurrectable(dir: &Path) -> Vec<String> {
     names
 }
 
-/// Delete the snapshot file for `session_name` from `dir`.
+/// Where resurrect keeps a copy of the snapshot it restores from.  Neither
+/// [`list_resurrectable`] nor [`prune_snapshots_in`] sees it.
+pub fn backup_path(session_name: &str, dir: &Path) -> PathBuf {
+    dir.join(format!("{session_name}.json.bak"))
+}
+
+/// Delete the snapshot file for `session_name` from `dir`, and the copy
+/// resurrect kept of it.
 pub fn delete_snapshot(session_name: &str, dir: &Path) -> io::Result<()> {
+    let _ = fs::remove_file(backup_path(session_name, dir));
     let path = dir.join(format!("{session_name}.json"));
     fs::remove_file(path)
 }
