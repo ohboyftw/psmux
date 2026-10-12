@@ -105,12 +105,8 @@ pub fn spawn_server_hidden(exe: &std::path::Path, args: &[String]) -> std::io::R
     // Each argument is quoted to handle spaces.
     let mut cmdline = format!("\"{}\"", exe.display());
     for arg in args {
-        if arg.contains(' ') || arg.contains('"') {
-            cmdline.push_str(&format!(" \"{}\"", arg.replace('"', "\\\"")));
-        } else {
-            cmdline.push(' ');
-            cmdline.push_str(arg);
-        }
+        cmdline.push(' ');
+        cmdline.push_str(&quote_windows_arg(arg));
     }
     let mut si: STARTUPINFOW = unsafe { std::mem::zeroed() };
     si.cb = std::mem::size_of::<STARTUPINFOW>() as u32;
@@ -2591,3 +2587,37 @@ pub fn augment_enter_shift(key: &mut crossterm::event::KeyEvent) {
         }
     }
 }
+
+/// Quote one argument for a Windows command line so `CommandLineToArgvW` and
+/// the CRT read it back unchanged: backslashes are literal except before a
+/// `"`, so a run of them is doubled before an escaped `"` and before the
+/// closing quote.  An argument with no space, tab or `"` is passed as is.
+pub fn quote_windows_arg(arg: &str) -> String {
+    if !arg.is_empty() && !arg.contains([' ', '\t', '"']) {
+        return arg.to_string();
+    }
+    let mut out = String::from("\"");
+    let mut backslashes = 0;
+    for c in arg.chars() {
+        match c {
+            '\\' => backslashes += 1,
+            '"' => {
+                out.push_str(&"\\".repeat(backslashes * 2 + 1));
+                out.push('"');
+                backslashes = 0;
+            }
+            _ => {
+                out.push_str(&"\\".repeat(backslashes));
+                out.push(c);
+                backslashes = 0;
+            }
+        }
+    }
+    out.push_str(&"\\".repeat(backslashes * 2));
+    out.push('"');
+    out
+}
+
+#[cfg(test)]
+#[path = "../tests-rs/test_windows_argv_quote.rs"]
+mod windows_argv_quote_tests;
