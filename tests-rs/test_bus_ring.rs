@@ -7,6 +7,8 @@ use super::*;
 const NO_TTL: RingConfig = RingConfig {
     max_events: 100,
     ttl_ms: 0,
+    max_bytes: usize::MAX,
+    max_total_bytes: usize::MAX,
 };
 
 fn ev(topic: &str, ts: i64, seq: u64) -> Event {
@@ -50,6 +52,8 @@ fn total_count_includes_evicted() {
     let cfg = RingConfig {
         max_events: 3,
         ttl_ms: 0,
+        max_bytes: usize::MAX,
+        max_total_bytes: usize::MAX,
     };
     let r = ring_with(cfg, &[1000, 2000, 3000, 4000, 5000]);
     assert_eq!(r.len(), 3);
@@ -61,6 +65,8 @@ fn count_eviction_keeps_newest() {
     let cfg = RingConfig {
         max_events: 3,
         ttl_ms: 0,
+        max_bytes: usize::MAX,
+        max_total_bytes: usize::MAX,
     };
     let r = ring_with(cfg, &[1000, 2000, 3000, 4000, 5000]);
     assert_eq!(r.oldest_ts(), 3000);
@@ -72,6 +78,8 @@ fn push_reports_evicted_count() {
     let cfg = RingConfig {
         max_events: 1,
         ttl_ms: 0,
+        max_bytes: usize::MAX,
+        max_total_bytes: usize::MAX,
     };
     let mut r = RingBuffer::new(cfg);
     assert_eq!(r.push(ev("t", 1, 1), 1).evicted.by_count, 0);
@@ -83,6 +91,8 @@ fn ttl_expiry_is_not_counted_as_overflow() {
     let cfg = RingConfig {
         max_events: 100,
         ttl_ms: 5000,
+        max_bytes: usize::MAX,
+        max_total_bytes: usize::MAX,
     };
     let mut r = ring_with(cfg, &[1000, 2000]);
     let evicted = r.push(ev("t", 9000, 3), 9000).evicted;
@@ -107,6 +117,8 @@ fn ttl_eviction_on_push() {
     let cfg = RingConfig {
         max_events: 100,
         ttl_ms: 5000,
+        max_bytes: usize::MAX,
+        max_total_bytes: usize::MAX,
     };
     let r = ring_with(cfg, &[1000, 4000, 7000]);
     assert_eq!(r.len(), 2);
@@ -119,6 +131,8 @@ fn ttl_is_measured_from_now_not_newest_event() {
     let cfg = RingConfig {
         max_events: 100,
         ttl_ms: 5000,
+        max_bytes: usize::MAX,
+        max_total_bytes: usize::MAX,
     };
     let mut r = ring_with(cfg, &[1000, 2000]);
     assert!(r.replay(0, 0, 100_000).is_empty());
@@ -269,6 +283,8 @@ fn stats_forget_topics_that_expired() {
     let cfg = RingConfig {
         max_events: 10,
         ttl_ms: 1000,
+        max_bytes: usize::MAX,
+        max_total_bytes: usize::MAX,
     };
     let mut s = BufferStore::new(cfg);
     s.store(ev("old", 1000, 1), 1000);
@@ -282,6 +298,8 @@ fn store_reports_evictions_for_its_topic() {
     let cfg = RingConfig {
         max_events: 2,
         ttl_ms: 0,
+        max_bytes: usize::MAX,
+        max_total_bytes: usize::MAX,
     };
     let mut s = BufferStore::new(cfg);
     let evicted: Vec<usize> = (1..=4)
@@ -302,6 +320,8 @@ fn sequence_keeps_counting_after_the_topic_expires() {
     let cfg = RingConfig {
         max_events: 10,
         ttl_ms: 1000,
+        max_bytes: usize::MAX,
+        max_total_bytes: usize::MAX,
     };
     let mut s = BufferStore::new(cfg);
     let first = s.next_sequence("a");
@@ -315,6 +335,8 @@ fn prune_forgets_an_idle_topic_and_its_sequence() {
     let cfg = RingConfig {
         max_events: 10,
         ttl_ms: 1000,
+        max_bytes: usize::MAX,
+        max_total_bytes: usize::MAX,
     };
     let mut s = BufferStore::new(cfg);
     for topic in ["x/task/1/done", "x/task/2/done"] {
@@ -331,6 +353,8 @@ fn a_pruned_topic_counts_on_above_its_old_sequences() {
     let cfg = RingConfig {
         max_events: 10,
         ttl_ms: 1000,
+        max_bytes: usize::MAX,
+        max_total_bytes: usize::MAX,
     };
     let mut s = BufferStore::new(cfg);
     for _ in 0..3 {
@@ -346,11 +370,74 @@ fn store_replay_drops_events_past_the_ttl() {
     let cfg = RingConfig {
         max_events: 10,
         ttl_ms: 1000,
+        max_bytes: usize::MAX,
+        max_total_bytes: usize::MAX,
     };
     let mut s = BufferStore::new(cfg);
     s.store(ev("a", 1000, 1), 1000);
     s.store(ev("a", 4500, 2), 4500);
     assert_eq!(seqs(&s.replay("a", 0, 0, 5000)), [("a".to_string(), 2)]);
+}
+
+// ── byte budgets ──
+
+/// An event carrying a 1000-byte payload.
+fn big(topic: &str, ts: i64, seq: u64) -> Event {
+    Event {
+        payload: vec![b'x'; 1000],
+        ..ev(topic, ts, seq)
+    }
+}
+
+fn budget(max_bytes: usize, max_total_bytes: usize) -> RingConfig {
+    RingConfig {
+        max_bytes,
+        max_total_bytes,
+        ..NO_TTL
+    }
+}
+
+#[test]
+fn topic_byte_budget_evicts_the_oldest_events() {
+    let one = event_cost(&big("t", 1, 1));
+    let mut r = RingBuffer::new(budget(one * 5 / 2, usize::MAX));
+    let evicted: Vec<usize> = (1..=3)
+        .map(|i| r.push(big("t", i, i as u64), i).evicted.by_count)
+        .collect();
+    assert_eq!(evicted, [0, 0, 1]);
+    assert_eq!(stamps(&r.replay(0, 0, 3)), [2, 3]);
+}
+
+#[test]
+fn an_event_over_the_topic_budget_is_kept_alone() {
+    let mut r = RingBuffer::new(budget(10, usize::MAX));
+    r.push(big("t", 1, 1), 1);
+    r.push(big("t", 2, 2), 2);
+    assert_eq!(stamps(&r.replay(0, 0, 2)), [2]);
+}
+
+#[test]
+fn store_byte_budget_evicts_the_oldest_event_of_any_topic() {
+    let one = event_cost(&big("a", 1, 1));
+    let mut s = BufferStore::new(budget(usize::MAX, one * 5 / 2));
+    s.store(big("a", 1, 1), 1);
+    s.store(big("b", 2, 1), 2);
+    let stored = s.store(big("c", 3, 1), 3);
+    assert_eq!(stored.evicted.by_count, 1);
+    let topics: Vec<String> = s
+        .replay("#", 0, 0, 3)
+        .into_iter()
+        .map(|e| e.topic)
+        .collect();
+    assert_eq!(topics, ["b", "c"]);
+}
+
+#[test]
+fn store_byte_budget_keeps_the_event_just_stored() {
+    let mut s = BufferStore::new(budget(usize::MAX, 10));
+    s.store(big("a", 1, 1), 1);
+    s.store(big("b", 2, 1), 2);
+    assert_eq!(seqs(&s.replay("#", 0, 0, 2)), [("b".to_string(), 1)]);
 }
 
 // ── overflow storm guard (12.6 #12) ──
@@ -363,6 +450,8 @@ fn evictions_from_system_topics_are_never_reported() {
     let cfg = RingConfig {
         max_events: 2,
         ttl_ms: 0,
+        max_bytes: usize::MAX,
+        max_total_bytes: usize::MAX,
     };
     let mut s = BufferStore::new(cfg);
     let topic = "$mycel/server/buffer_overflow";

@@ -20,9 +20,15 @@
 //!   repeats a sequence number, which dedup by `(topic, sequence)` across
 //!   replay and live delivery relies on, and the map holds only topics with
 //!   buffered events.
+//! - Retention is also bounded in bytes ([`event_cost`]): per topic by
+//!   [`RingConfig::max_bytes`] and for the whole store by
+//!   [`RingConfig::max_total_bytes`], oldest events first. The event just
+//!   stored is always kept, so one event larger than a budget still lands.
 //! - Keys are canonical topics (see [`topic::validate_topic`]).
 
 use std::collections::{HashMap, VecDeque};
+
+use prost::Message as _;
 
 use super::proto::Event;
 use super::topic;
@@ -31,6 +37,20 @@ use super::topic;
 pub const DEFAULT_MAX_EVENTS: usize = 10_000;
 /// Default event lifetime, in ms (10 minutes).
 pub const DEFAULT_TTL_MS: i64 = 600_000;
+/// Default bytes kept per topic (64 MiB).
+pub const DEFAULT_MAX_BYTES: usize = 64 << 20;
+/// Default bytes kept by the whole store (256 MiB).
+pub const DEFAULT_MAX_TOTAL_BYTES: usize = 256 << 20;
+
+/// Bytes charged per buffered event on top of its encoded size: the
+/// in-memory `Event` and its strings and map, so that many small events
+/// cannot hold far more memory than the byte budgets say.
+const EVENT_OVERHEAD: usize = 128;
+
+/// What a buffered event counts against the byte budgets.
+pub fn event_cost(event: &Event) -> usize {
+    event.encoded_len() + EVENT_OVERHEAD
+}
 
 /// Retention limits shared by every topic buffer.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -39,6 +59,10 @@ pub struct RingConfig {
     pub max_events: usize,
     /// Event lifetime in ms; `<= 0` disables TTL eviction.
     pub ttl_ms: i64,
+    /// Bytes ([`event_cost`]) kept per topic.
+    pub max_bytes: usize,
+    /// Bytes ([`event_cost`]) kept across every topic of a [`BufferStore`].
+    pub max_total_bytes: usize,
 }
 
 impl Default for RingConfig {
@@ -46,6 +70,8 @@ impl Default for RingConfig {
         RingConfig {
             max_events: DEFAULT_MAX_EVENTS,
             ttl_ms: DEFAULT_TTL_MS,
+            max_bytes: DEFAULT_MAX_BYTES,
+            max_total_bytes: DEFAULT_MAX_TOTAL_BYTES,
         }
     }
 }
@@ -53,8 +79,8 @@ impl Default for RingConfig {
 /// Events evicted by one push, split by cause.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct Evicted {
-    /// Dropped because the buffer was full. Only these are an overflow
-    /// worth announcing on `$mycel/server/buffer_overflow`.
+    /// Dropped because a count or byte budget was full. Only these are an
+    /// overflow worth announcing on `$mycel/server/buffer_overflow`.
     pub by_count: usize,
     /// Dropped because they outlived the TTL: ordinary ageing, not an
     /// overflow.
@@ -77,6 +103,8 @@ pub struct Stored {
 pub struct RingBuffer {
     cfg: RingConfig,
     events: VecDeque<Event>,
+    /// [`event_cost`] of `events`.
+    bytes: usize,
     total_pushed: u64,
 }
 
@@ -86,21 +114,25 @@ impl RingBuffer {
         RingBuffer {
             cfg,
             events: VecDeque::new(),
+            bytes: 0,
             total_pushed: 0,
         }
     }
 
-    /// Append an event and evict by count and TTL.
+    /// Append an event and evict by count, bytes and TTL.
     pub fn push(&mut self, mut event: Event, now_ms: i64) -> Stored {
         if let Some(newest) = self.events.back() {
             event.ts_unix_ms = event.ts_unix_ms.max(newest.ts_unix_ms);
         }
         let ts_unix_ms = event.ts_unix_ms;
+        self.bytes += event_cost(&event);
         self.events.push_back(event);
         self.total_pushed += 1;
         let mut by_count = 0;
-        while self.events.len() > self.cfg.max_events {
-            self.events.pop_front();
+        while self.events.len() > self.cfg.max_events
+            || (self.bytes > self.cfg.max_bytes && self.events.len() > 1)
+        {
+            self.pop_oldest();
             by_count += 1;
         }
         let by_ttl = self.expire(now_ms);
@@ -118,9 +150,21 @@ impl RingBuffer {
         let cutoff = now_ms.saturating_sub(self.cfg.ttl_ms);
         let before = self.events.len();
         while self.events.front().is_some_and(|e| e.ts_unix_ms < cutoff) {
-            self.events.pop_front();
+            self.pop_oldest();
         }
         before - self.events.len()
+    }
+
+    /// Drop the oldest event and return its [`event_cost`] (0 when empty).
+    fn pop_oldest(&mut self) -> usize {
+        let freed = self.events.pop_front().map_or(0, |e| event_cost(&e));
+        self.bytes -= freed;
+        freed
+    }
+
+    /// [`event_cost`] of the buffered events.
+    pub fn bytes(&self) -> usize {
+        self.bytes
     }
 
     /// Events currently buffered.
@@ -185,6 +229,8 @@ pub struct BufferStore {
     sequences: HashMap<String, u64>,
     /// Highest sequence of any topic forgotten by [`BufferStore::prune`].
     retired_high: u64,
+    /// [`event_cost`] of every buffered event.
+    total_bytes: usize,
 }
 
 impl BufferStore {
@@ -195,6 +241,7 @@ impl BufferStore {
             buffers: HashMap::new(),
             sequences: HashMap::new(),
             retired_high: 0,
+            total_bytes: 0,
         }
     }
 
@@ -211,13 +258,41 @@ impl BufferStore {
         first
     }
 
-    /// Buffer an event under its (canonical) topic.
+    /// Buffer an event under its (canonical) topic, then evict the oldest
+    /// events of any topic while the store is over its byte budget. Those
+    /// evictions count in the returned `by_count`.
     pub fn store(&mut self, event: Event, now_ms: i64) -> Stored {
         let cfg = self.cfg;
-        self.buffers
-            .entry(event.topic.clone())
-            .or_insert_with(|| RingBuffer::new(cfg))
-            .push(event, now_ms)
+        let topic = event.topic.clone();
+        let buf = self
+            .buffers
+            .entry(topic.clone())
+            .or_insert_with(|| RingBuffer::new(cfg));
+        let before = buf.bytes();
+        let mut stored = buf.push(event, now_ms);
+        self.total_bytes = self.total_bytes - before + buf.bytes();
+        stored.evicted.by_count += self.evict_over_budget(&topic);
+        stored
+    }
+
+    /// Drop the oldest buffered event (by timestamp, across topics) until
+    /// the store fits `max_total_bytes`, never the only event of `keep`.
+    /// Returns how many were dropped.
+    fn evict_over_budget(&mut self, keep: &str) -> usize {
+        let mut dropped = 0;
+        while self.total_bytes > self.cfg.max_total_bytes {
+            let oldest = self
+                .buffers
+                .iter_mut()
+                .filter(|(t, b)| !b.is_empty() && (t.as_str() != keep || b.len() > 1))
+                .min_by_key(|(_, b)| b.oldest_ts());
+            let Some((_, buf)) = oldest else {
+                break;
+            };
+            self.total_bytes -= buf.pop_oldest();
+            dropped += 1;
+        }
+        dropped
     }
 
     /// Unexpired events of every topic matching `pattern` with
@@ -314,6 +389,7 @@ impl BufferStore {
             buf.expire(now_ms);
             !buf.is_empty()
         });
+        self.total_bytes = self.buffers.values().map(RingBuffer::bytes).sum();
         let buffers = &self.buffers;
         let retired_high = &mut self.retired_high;
         self.sequences.retain(|topic, seq| {

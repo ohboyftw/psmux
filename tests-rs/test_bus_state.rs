@@ -389,6 +389,8 @@ fn overflow_is_announced_without_recursing() {
         ring: RingConfig {
             max_events: 1,
             ttl_ms: 0,
+            max_bytes: usize::MAX,
+            max_total_bytes: usize::MAX,
         },
         ..Limits::default()
     };
@@ -435,6 +437,8 @@ fn heartbeat_forgets_topics_past_the_ttl() {
         ring: RingConfig {
             max_events: 10,
             ttl_ms: 1000,
+            max_bytes: usize::MAX,
+            max_total_bytes: usize::MAX,
         },
         ..Limits::default()
     });
