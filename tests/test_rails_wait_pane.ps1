@@ -54,8 +54,10 @@ Test-Case "wait-pane actually waits for its timeout (>=1400ms, not ~130ms)" {
 # remain-on-exit is required: without it the pane is reaped before wait-pane can
 # read the code, and a reaped pane answers 0 (server/mod.rs:328-331) — which
 # would pass case (c) for the wrong reason.
+# bash, not pwsh: pwsh -Command turns a native exit code other than 0/1 into 1,
+# so the shell wrapper would hide 42 (same approach as test_push_events.ps1).
 $null = psmux set-option -t $S remain-on-exit on 2>&1
-$null = psmux split-window -t $S --raw -- cmd /c exit 42 2>&1
+$null = psmux split-window -d -t $S --shell bash -- "exit 42" 2>&1
 Start-Sleep -Milliseconds 800
 $dead = (psmux list-panes -t $S -F '#{pane_id}' 2>$null | Select-Object -Last 1)
 $DeadTarget = "${S}:.$("$dead".Trim())"
