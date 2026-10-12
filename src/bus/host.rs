@@ -73,6 +73,26 @@ pub fn find_live_bus(loc: &BusLocation, timeout: Duration) -> Option<SocketAddr>
     loc.candidates().into_iter().find(|a| probe(*a, timeout))
 }
 
+/// The pid of the psmux bus the discovery file at `path` names, while that
+/// bus still holds its port and `is_psmux_pid` says the pid is a psmux
+/// process. Only a psmux bus writes `pid`; a standalone mycel writes none.
+pub fn shared_bus_pid(path: &Path, is_psmux_pid: impl Fn(u32) -> bool) -> Option<u32> {
+    let info = discovery::read(path)?;
+    let pid = info.pid?;
+    let held = std::net::TcpListener::bind(info.socket_addr()?).is_err();
+    (held && is_psmux_pid(pid)).then_some(pid)
+}
+
+/// Whether `pid` is a running psmux, pmux or tmux image.
+pub fn is_psmux_pid(pid: u32) -> bool {
+    crate::warm_reap::running_image_stem(pid).is_some_and(|name| {
+        matches!(
+            name.to_ascii_lowercase().as_str(),
+            "psmux" | "pmux" | "tmux"
+        )
+    })
+}
+
 /// Parse `psmux bus [--port N] [--discovery PATH]` arguments (the words
 /// after `bus`).
 pub fn parse_args(args: &[&str], mut loc: BusLocation) -> Result<BusLocation, String> {

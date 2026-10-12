@@ -280,6 +280,12 @@ mod ffi {
             kernel: *mut FileTime,
             user: *mut FileTime,
         ) -> i32;
+        pub fn QueryFullProcessImageNameW(
+            h_process: isize,
+            flags: u32,
+            name: *mut u16,
+            size: *mut u32,
+        ) -> i32;
     }
 
     /// Run `f` with a query handle on `pid`, closing it afterwards.
@@ -321,6 +327,32 @@ pub fn process_is_alive(pid: u32) -> bool {
         (ok != 0).then_some(code == ffi::STILL_ACTIVE)
     })
     .unwrap_or(false)
+}
+
+/// The file stem of process `pid`'s image (e.g. `psmux`), while it runs.
+#[cfg(windows)]
+pub fn running_image_stem(pid: u32) -> Option<String> {
+    if !process_is_alive(pid) {
+        return None;
+    }
+    ffi::with_process(pid, |h| {
+        let mut buf = [0u16; 1024];
+        let mut size = buf.len() as u32;
+        // SAFETY: `h` is a live query handle; `buf` holds `size` u16s and
+        // `size` is a valid in/out pointer for the call.
+        let ok = unsafe { ffi::QueryFullProcessImageNameW(h, 0, buf.as_mut_ptr(), &mut size) };
+        if ok == 0 {
+            return None;
+        }
+        let path = PathBuf::from(String::from_utf16_lossy(&buf[..size as usize]));
+        Some(path.file_stem()?.to_string_lossy().into_owned())
+    })
+}
+
+/// Process images are not looked up off Windows.
+#[cfg(not(windows))]
+pub fn running_image_stem(_pid: u32) -> Option<String> {
+    None
 }
 
 /// Creation times are not available off Windows; an unknown never makes a

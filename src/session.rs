@@ -1208,12 +1208,26 @@ fn parse_window_line(line: &str) -> Option<(usize, String, usize, String, bool, 
     ))
 }
 
+/// Whether kill-server's sweep ends process `pid`, whose image is `exe`: a
+/// psmux, pmux or tmux image other than this process and the shared mycel
+/// bus (`bus_pid`), which other servers and mycel clients still use.
+fn is_sweep_target(exe: &str, pid: u32, my_pid: u32, bus_pid: Option<u32>) -> bool {
+    if pid == my_pid || Some(pid) == bus_pid {
+        return false;
+    }
+    let exe = exe.to_lowercase();
+    ["psmux.exe", "pmux.exe", "tmux.exe"]
+        .iter()
+        .any(|t| exe == *t || exe.ends_with(&format!("\\{t}")))
+}
+
 /// Force-kill any remaining psmux/pmux/tmux server processes that didn't
 /// exit via the TCP kill-server command.  This is the nuclear fallback that
 /// guarantees kill-server always succeeds.
 ///
 /// On Windows, uses CreateToolhelp32Snapshot to enumerate processes and
-/// TerminateProcess to kill them.  Skips the current process.
+/// TerminateProcess to kill them.  Skips the current process and the shared
+/// mycel bus that the discovery file names.
 #[cfg(windows)]
 pub fn kill_remaining_server_processes() {
     const TH32CS_SNAPPROCESS: u32 = 0x00000002;
@@ -1246,6 +1260,9 @@ pub fn kill_remaining_server_processes() {
     }
 
     let my_pid = std::process::id();
+    let bus_pid = crate::bus::host::BusLocation::from_env()
+        .discovery_path
+        .and_then(|p| crate::bus::host::shared_bus_pid(&p, crate::bus::host::is_psmux_pid));
 
     unsafe {
         let snap = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
@@ -1256,23 +1273,16 @@ pub fn kill_remaining_server_processes() {
         let mut pe: PROCESSENTRY32W = std::mem::zeroed();
         pe.dw_size = std::mem::size_of::<PROCESSENTRY32W>() as u32;
 
-        let target_names: &[&str] = &["psmux.exe", "pmux.exe", "tmux.exe"];
         let mut pids_to_kill: Vec<u32> = Vec::new();
 
         if Process32FirstW(snap, &mut pe) != 0 {
             loop {
                 let pid = pe.th32_process_id;
-                if pid != my_pid {
-                    // Extract exe name from wide string
-                    let len = pe.sz_exe_file.iter().position(|&c| c == 0).unwrap_or(260);
-                    let name = String::from_utf16_lossy(&pe.sz_exe_file[..len]);
-                    let name_lower = name.to_lowercase();
-                    for target in target_names {
-                        if name_lower == *target || name_lower.ends_with(&format!("\\{}", target)) {
-                            pids_to_kill.push(pid);
-                            break;
-                        }
-                    }
+                // Extract exe name from wide string
+                let len = pe.sz_exe_file.iter().position(|&c| c == 0).unwrap_or(260);
+                let name = String::from_utf16_lossy(&pe.sz_exe_file[..len]);
+                if is_sweep_target(&name, pid, my_pid, bus_pid) {
+                    pids_to_kill.push(pid);
                 }
                 if Process32NextW(snap, &mut pe) == 0 {
                     break;
@@ -1846,3 +1856,7 @@ mod test_issue622_hassession_reap;
 #[cfg(test)]
 #[path = "../tests-rs/test_tree_entry_rollup.rs"]
 mod tree_entry_rollup_tests;
+
+#[cfg(test)]
+#[path = "../tests-rs/test_kill_server_spares_bus.rs"]
+mod test_kill_server_spares_bus;

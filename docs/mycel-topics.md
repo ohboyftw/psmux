@@ -203,9 +203,12 @@ reads it. A psmux bus binds `127.0.0.1:4321` without `SO_REUSEADDR`, writes
 the file only after the bind succeeds, and removes it when it stops cleanly.
 
 The bus is its own `psmux.exe` process. It has no window, works in your home
-directory, and keeps running after every session has ended, so
-`kill-server` does not release `psmux.exe`. Stop it before you rebuild or
-upgrade psmux, or the build or installer cannot replace the file:
+directory, and keeps running after every session has ended. It is shared by
+every session server on the desktop and by other mycel clients, so
+`kill-server` leaves it running: the sweep that ends leftover psmux
+processes skips the bus that `~/.mycel/server` names (by its `pid`, while it
+still holds its port). Stop it before you rebuild or upgrade psmux, or the
+build or installer cannot replace the file:
 
 ```powershell
 psmux bus stop        # or: mycel stop

@@ -201,3 +201,65 @@ fn bus_cwd_is_not_the_callers_directory() {
     assert!(cwd.is_dir());
     assert_ne!(cwd, std::env::current_dir().unwrap());
 }
+
+/// A bus hosted in this process that wrote `path` (pid = this process).
+fn bus_with_discovery(path: &std::path::Path) -> BusHandle {
+    start(BusConfig::new(
+        "127.0.0.1:0".parse().unwrap(),
+        Some(path.to_path_buf()),
+    ))
+    .unwrap()
+}
+
+#[test]
+fn shared_bus_pid_names_the_psmux_bus_holding_its_port() {
+    let path = temp_discovery("shared-live");
+    let h = bus_with_discovery(&path);
+    assert_eq!(shared_bus_pid(&path, |_| true), Some(std::process::id()));
+    h.stop();
+    h.join();
+}
+
+#[test]
+fn shared_bus_pid_is_none_when_the_pid_is_not_psmux() {
+    let path = temp_discovery("shared-foreign");
+    let h = bus_with_discovery(&path);
+    assert_eq!(shared_bus_pid(&path, |_| false), None);
+    h.stop();
+    h.join();
+}
+
+#[test]
+fn shared_bus_pid_is_none_when_nothing_holds_the_port() {
+    let path = temp_discovery("shared-stale");
+    discovery::write(&path, &DiscoveryInfo::for_local_bus(free_port())).unwrap();
+    assert_eq!(shared_bus_pid(&path, |_| true), None);
+}
+
+#[test]
+fn shared_bus_pid_is_none_for_a_file_without_a_pid() {
+    let path = temp_discovery("shared-nopid");
+    let h = bus();
+    let info = DiscoveryInfo {
+        pid: None,
+        ..DiscoveryInfo::for_local_bus(h.local_addr().port())
+    };
+    discovery::write(&path, &info).unwrap();
+    assert_eq!(shared_bus_pid(&path, |_| true), None);
+    h.stop();
+    h.join();
+}
+
+/// A loopback port that was free a moment ago.
+fn free_port() -> u16 {
+    let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    l.local_addr().unwrap().port()
+}
+
+#[test]
+fn is_psmux_pid_reads_the_running_image() {
+    let me = std::process::id();
+    let stem = crate::warm_reap::running_image_stem(me).unwrap();
+    assert!(stem.starts_with("psmux-"), "test binary image is {stem}");
+    assert!(!is_psmux_pid(me), "a test binary is not a psmux image");
+}
