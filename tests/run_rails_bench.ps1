@@ -26,6 +26,7 @@ $startedAt = Get-Date
 $totalPass = 0
 $totalFail = 0
 $fileResults = @()
+$skipLines = @()
 
 Write-Host "=== psmux rails-bench ($($files.Count) file(s)) ===" -ForegroundColor Cyan
 Write-Host ""
@@ -33,7 +34,10 @@ Write-Host ""
 foreach ($f in $files) {
     Write-Host "--- $($f.Name) ---" -ForegroundColor Magenta
     $pre = Get-Date
-    & pwsh -NoProfile -File $f.FullName
+    & pwsh -NoProfile -File $f.FullName | ForEach-Object {
+        if ("$_" -match 'SKIPPED') { $skipLines += "$($f.Name): $("$_".Trim())" }
+        $_
+    }
     $exit = $LASTEXITCODE
     $elapsed = [int]((Get-Date) - $pre).TotalMilliseconds
     $fileResults += [PSCustomObject]@{
@@ -58,9 +62,13 @@ $duration = [int]((Get-Date) - $startedAt).TotalSeconds
 Write-Host "=== rails-bench summary ===" -ForegroundColor Cyan
 $fileResults | Format-Table File, Fail, Ms -AutoSize | Out-Host
 Write-Host ("Files passed: {0}  failed: {1}  elapsed: {2}s" -f $totalPass, $totalFail, $duration)
+if ($skipLines) {
+    Write-Host "Skipped cases (not counted as passed):" -ForegroundColor Yellow
+    $skipLines | ForEach-Object { Write-Host "  $_" -ForegroundColor Yellow }
+}
 
 if ($totalFail -eq 0) {
-    Write-Host "ALL GREEN" -ForegroundColor Green
+    Write-Host ($skipLines ? "ALL GREEN (with skipped cases, see above)" : "ALL GREEN") -ForegroundColor Green
     exit 0
 } else {
     Write-Host "FAILURES: $totalFail file(s) had failing cases" -ForegroundColor Red
