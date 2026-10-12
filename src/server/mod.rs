@@ -1,6 +1,7 @@
 mod connection;
 pub(crate) mod helpers;
 mod options;
+mod spawn_args;
 
 use std::env;
 use std::io::{self, Write};

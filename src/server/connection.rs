@@ -10,7 +10,6 @@ use crate::util::base64_decode;
 
 static NEXT_CLIENT_ID: AtomicU64 = AtomicU64::new(1);
 use super::helpers::TMUX_COMMANDS;
-use crate::commands::parse_command_line;
 
 /// Strip all ANSI/VT escape sequences from text, producing clean UTF-8 output.
 /// Handles CSI sequences (\x1b[...X), OSC sequences (\x1b]...BEL/ST), and
@@ -288,8 +287,20 @@ pub(crate) fn handle_connection(
             }
         }
 
-        // Use quote-aware parser to preserve arguments with spaces
-        let parsed = crate::cli::normalize_flag_equals(parse_command_line(&line));
+        // Use quote-aware parser to preserve arguments with spaces. Only an
+        // unquoted argument can be a flag: `quoted_args` keeps that bit so a
+        // quoted value such as a window name `"-d"` is never read as one.
+        let mut parsed: Vec<String> = Vec::new();
+        let mut parsed_quoted: Vec<bool> = Vec::new();
+        for (tok, quoted) in crate::session::split_wire_line(&line) {
+            let parts = if quoted {
+                vec![tok]
+            } else {
+                crate::cli::normalize_flag_equals(vec![tok])
+            };
+            parsed_quoted.extend(std::iter::repeat_n(quoted, parts.len()));
+            parsed.extend(parts);
+        }
         let raw_cmd = parsed.first().map(|s| s.as_str()).unwrap_or("");
         // Check command aliases before normal dispatch
         let alias_expanded = if let Ok(map) = aliases.read() {
@@ -306,6 +317,10 @@ pub(crate) fn handle_connection(
         } else {
             (raw_cmd, parsed.iter().skip(1).map(|s| s.as_str()).collect())
         };
+        // Alias words are unquoted; the line's own arguments keep their bit.
+        let quoted: Vec<bool> = std::iter::repeat_n(false, args.len() + 1 - parsed.len().max(1))
+            .chain(parsed_quoted.iter().skip(1).copied())
+            .collect();
 
         // Parse -t argument from command line (takes precedence over global TARGET)
         let mut target_win: Option<usize> = global_target_win;
@@ -320,47 +335,38 @@ pub(crate) fn handle_connection(
         // A bare `--` ends flag parsing. A `-t` after it belongs to the operand
         // — a send-keys payload, or the command line behind `exec -t %N --` —
         // and consuming it there silently ate two tokens out of that operand.
-        let end_of_opts = args.iter().position(|a| *a == "--");
-        let is_flag_pos = |i: usize| end_of_opts.is_none_or(|eo| i < eo);
-        let mut i = 0;
-        while i < args.len() {
-            if args[i] == "-t" && is_flag_pos(i) {
-                if let Some(v) = args.get(i + 1) {
-                    raw_target = Some(v.to_string());
-                    // Parse the -t value using parse_target for consistent handling
-                    let pt = parse_target(v);
-                    if pt.window.is_some() {
-                        target_win = pt.window;
-                    }
-                    if pt.pane.is_some() {
-                        target_pane = pt.pane;
-                        pane_is_id = pt.pane_is_id;
-                    }
-                    if pt.window_unresolved {
-                        unresolved_target = Some((TargetKind::Window, v.to_string()));
-                    } else if pt.pane_unresolved {
-                        unresolved_target = Some((TargetKind::Pane, v.to_string()));
-                    }
+        let target_positions = super::spawn_args::target_flag_positions(&args, &quoted);
+        for &i in &target_positions {
+            if let Some(v) = args.get(i + 1) {
+                raw_target = Some(v.to_string());
+                // Parse the -t value using parse_target for consistent handling
+                let pt = parse_target(v);
+                if pt.window.is_some() {
+                    target_win = pt.window;
                 }
-                i += 2;
-                continue;
+                if pt.pane.is_some() {
+                    target_pane = pt.pane;
+                    pane_is_id = pt.pane_is_id;
+                }
+                if pt.window_unresolved {
+                    unresolved_target = Some((TargetKind::Window, v.to_string()));
+                } else if pt.pane_unresolved {
+                    unresolved_target = Some((TargetKind::Pane, v.to_string()));
+                }
             }
-            i += 1;
         }
         // Build args without -t and its value so command handlers get clean positional args
-        let args: Vec<&str> = {
-            let mut filtered = Vec::new();
-            let mut i = 0;
-            while i < args.len() {
-                if args[i] == "-t" && is_flag_pos(i) {
-                    i += 2; // skip -t and its value
-                    continue;
-                }
-                filtered.push(args[i]);
-                i += 1;
-            }
-            filtered
+        let dropped = |i: &usize| {
+            target_positions.contains(i) || (*i > 0 && target_positions.contains(&(i - 1)))
         };
+        let quoted: Vec<bool> = (0..args.len())
+            .filter(|i| !dropped(i))
+            .map(|i| quoted[i])
+            .collect();
+        let args: Vec<&str> = (0..args.len())
+            .filter(|i| !dropped(i))
+            .map(|i| args[i])
+            .collect();
         // A `-t` that names something which cannot exist is an error, not a
         // reason to fall back. Dropping it is how `-t sess:nosuchwindow` came to
         // run against whatever window was ACTIVE and still exit 0.
@@ -462,60 +468,33 @@ pub(crate) fn handle_connection(
         }
         match cmd {
             "new-window" | "neww" => {
-                let name: Option<String> = args
-                    .windows(2)
-                    .find(|w| w[0] == "-n")
-                    .map(|w| w[1].trim_matches('"').to_string());
-                let start_dir: Option<String> = args
-                    .windows(2)
-                    .find(|w| w[0] == "-c")
-                    .map(|w| w[1].trim_matches('"').to_string());
-                let detached = args.contains(&"-d");
-                let print_info = args.contains(&"-P");
-                let format_str: Option<String> = args
-                    .windows(2)
-                    .find(|w| w[0] == "-F")
-                    .map(|w| w[1].trim_matches('"').to_string());
+                let spawn = super::spawn_args::parse_spawn_args(
+                    &args,
+                    &quoted,
+                    &["-n", "-c", "-F", "-e", "--shell"],
+                );
+                let name: Option<String> =
+                    spawn.value("-n").map(|v| v.trim_matches('"').to_string());
+                let start_dir: Option<String> =
+                    spawn.value("-c").map(|v| v.trim_matches('"').to_string());
+                let detached = spawn.has("-d");
+                let print_info = spawn.has("-P");
+                let format_str: Option<String> =
+                    spawn.value("-F").map(|v| v.trim_matches('"').to_string());
                 // Parse -e KEY=VAL environment variables (can appear multiple times)
-                let env_vars: Vec<(String, String)> = args
-                    .windows(2)
-                    .filter(|w| w[0] == "-e")
-                    .filter_map(|w| {
-                        let s = w[1].trim_matches('"');
-                        s.split_once('=')
+                let env_vars: Vec<(String, String)> = spawn
+                    .values("-e")
+                    .filter_map(|v| {
+                        v.trim_matches('"')
+                            .split_once('=')
                             .map(|(k, v)| (k.to_string(), v.to_string()))
                     })
                     .collect();
-                // Parse --shell SHELL override
-                let shell_arg: Option<String> = args
-                    .windows(2)
-                    .find(|w| w[0] == "--shell")
-                    .map(|w| w[1].trim_matches('"').to_string());
-                // Parse command: everything after "--" is the command, or
-                // fall back to finding a single positional arg.
-                let cmd_str: Option<String> =
-                    if let Some(pos) = args.iter().position(|a| *a == "--") {
-                        let after: Vec<&str> = args[pos + 1..]
-                            .iter()
-                            .map(|s| s.trim_matches('"'))
-                            .collect();
-                        if after.is_empty() {
-                            None
-                        } else {
-                            Some(after.join(" "))
-                        }
-                    } else {
-                        args.iter()
-                            .find(|a| {
-                                !a.starts_with('-')
-                                    && args.windows(2).all(|w| !(w[0] == "-n" && w[1] == **a))
-                                    && args.windows(2).all(|w| !(w[0] == "-c" && w[1] == **a))
-                                    && args.windows(2).all(|w| !(w[0] == "-F" && w[1] == **a))
-                                    && args.windows(2).all(|w| !(w[0] == "-e" && w[1] == **a))
-                                    && args.windows(2).all(|w| !(w[0] == "--shell" && w[1] == **a))
-                            })
-                            .map(|s| s.trim_matches('"').to_string())
-                    };
+                let shell_arg: Option<String> = spawn
+                    .value("--shell")
+                    .map(|v| v.trim_matches('"').to_string());
+                // Everything after "--" is the command, else the first positional.
+                let cmd_str: Option<String> = spawn.command;
                 if print_info {
                     let (rtx, rrx) = mpsc::channel::<String>();
                     let _ = tx.send(CtrlReq::NewWindowPrint(
@@ -575,72 +554,42 @@ pub(crate) fn handle_connection(
                 }
             }
             "split-window" | "splitw" => {
-                let kind = if args.contains(&"-h") {
+                let spawn = super::spawn_args::parse_spawn_args(
+                    &args,
+                    &quoted,
+                    &["-c", "-p", "-l", "-F", "-e", "--shell"],
+                );
+                let kind = if spawn.has("-h") {
                     LayoutKind::Horizontal
                 } else {
                     LayoutKind::Vertical
                 };
-                let detached = args.contains(&"-d");
-                let print_info = args.contains(&"-P");
-                let format_str: Option<String> = args
-                    .windows(2)
-                    .find(|w| w[0] == "-F")
-                    .map(|w| w[1].trim_matches('"').to_string());
-                let start_dir: Option<String> = args
-                    .windows(2)
-                    .find(|w| w[0] == "-c")
-                    .map(|w| w[1].trim_matches('"').to_string());
-                let size_pct: Option<u16> = args
-                    .windows(2)
-                    .find(|w| w[0] == "-p")
-                    .and_then(|w| w[1].trim_matches('%').parse().ok())
-                    .or_else(|| {
-                        args.windows(2).find(|w| w[0] == "-l").and_then(|w| {
-                            let s = w[1].trim_matches('%');
-                            s.parse().ok()
-                        })
-                    });
+                let detached = spawn.has("-d");
+                let print_info = spawn.has("-P");
+                let format_str: Option<String> =
+                    spawn.value("-F").map(|v| v.trim_matches('"').to_string());
+                let start_dir: Option<String> =
+                    spawn.value("-c").map(|v| v.trim_matches('"').to_string());
+                let pct = |flag| {
+                    spawn
+                        .value(flag)
+                        .and_then(|v: &str| v.trim_matches('%').parse::<u16>().ok())
+                };
+                let size_pct: Option<u16> = pct("-p").or_else(|| pct("-l"));
                 // Parse -e KEY=VAL environment variables (can appear multiple times)
-                let env_vars: Vec<(String, String)> = args
-                    .windows(2)
-                    .filter(|w| w[0] == "-e")
-                    .filter_map(|w| {
-                        let s = w[1].trim_matches('"');
-                        s.split_once('=')
+                let env_vars: Vec<(String, String)> = spawn
+                    .values("-e")
+                    .filter_map(|v| {
+                        v.trim_matches('"')
+                            .split_once('=')
                             .map(|(k, v)| (k.to_string(), v.to_string()))
                     })
                     .collect();
-                // Parse --shell SHELL override
-                let shell_arg: Option<String> = args
-                    .windows(2)
-                    .find(|w| w[0] == "--shell")
-                    .map(|w| w[1].trim_matches('"').to_string());
-                // Parse command: everything after "--" is the command, or
-                // fall back to finding a single positional arg.
-                let cmd_str: Option<String> =
-                    if let Some(pos) = args.iter().position(|a| *a == "--") {
-                        let after: Vec<&str> = args[pos + 1..]
-                            .iter()
-                            .map(|s| s.trim_matches('"'))
-                            .collect();
-                        if after.is_empty() {
-                            None
-                        } else {
-                            Some(after.join(" "))
-                        }
-                    } else {
-                        args.iter()
-                            .find(|a| {
-                                !a.starts_with('-')
-                                    && args.windows(2).all(|w| !(w[0] == "-c" && w[1] == **a))
-                                    && args.windows(2).all(|w| !(w[0] == "-p" && w[1] == **a))
-                                    && args.windows(2).all(|w| !(w[0] == "-l" && w[1] == **a))
-                                    && args.windows(2).all(|w| !(w[0] == "-F" && w[1] == **a))
-                                    && args.windows(2).all(|w| !(w[0] == "-e" && w[1] == **a))
-                                    && args.windows(2).all(|w| !(w[0] == "--shell" && w[1] == **a))
-                            })
-                            .map(|s| s.trim_matches('"').to_string())
-                    };
+                let shell_arg: Option<String> = spawn
+                    .value("--shell")
+                    .map(|v| v.trim_matches('"').to_string());
+                // Everything after "--" is the command, else the first positional.
+                let cmd_str: Option<String> = spawn.command;
                 if print_info {
                     let (rtx, rrx) = mpsc::channel::<String>();
                     let _ = tx.send(CtrlReq::SplitWindowPrint(
