@@ -356,6 +356,11 @@ pub fn prune_snapshots_in(dir: &Path, keep: usize) {
     files.sort_by(|a, b| b.1.cmp(&a.1));
     for (path, _) in files.into_iter().skip(keep) {
         let _ = fs::remove_file(&path);
+        // The copy resurrect kept (`<name>.json.bak`) is not a `.json` file,
+        // so nothing else would ever remove it.
+        let mut backup = path.into_os_string();
+        backup.push(".bak");
+        let _ = fs::remove_file(backup);
     }
 }
 

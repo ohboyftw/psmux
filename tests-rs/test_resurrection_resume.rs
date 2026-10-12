@@ -418,3 +418,17 @@ fn resurrect_when_new_session_fails_then_error_and_no_steps() {
     assert_eq!(calls, 1);
     fs::remove_dir_all(&dir).ok();
 }
+
+#[test]
+fn prune_when_snapshot_removed_then_its_kept_copy_goes_too() {
+    let dir = fresh_dir("psmux_resurrect_prune_removes_backup");
+    let snap = snapshot_with_first_pane(pane(None, "", None));
+    save_snapshot_to(&snap, &dir).expect("save");
+    fs::copy(dir.join("s.json"), backup_path("s", &dir)).expect("copy");
+
+    prune_snapshots_in(&dir, 0);
+
+    assert!(!dir.join("s.json").exists());
+    assert!(!backup_path("s", &dir).exists());
+    fs::remove_dir_all(&dir).ok();
+}
