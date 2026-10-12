@@ -337,6 +337,44 @@ fn readiness_when_working_child_under_idle_root_then_not_ready() {
 }
 
 #[test]
+fn readiness_when_working_root_and_error_child_on_silent_pane_then_working_reported() {
+    let mut parser = vt100::Parser::new(24, 80, 0);
+    let mut cache = AgentStateCache::default();
+    report(&mut parser, "state=working");
+    report(&mut parser, "id=t1:state=error");
+    cache.observe(parser.screen());
+    assert_eq!(cache.worst(), Some(ProgramState::Error));
+    let r = readiness_of(7, 10_000, SILENT_NOW, cache.activity());
+    assert_eq!(r.state, Some(ProgramState::Working));
+    assert_eq!(r.source, ReadinessSource::Reported);
+    assert!(!r.is_ready());
+}
+
+#[test]
+fn readiness_when_idle_root_and_done_child_with_fresh_output_then_idle_reported() {
+    let mut parser = vt100::Parser::new(24, 80, 0);
+    let mut cache = AgentStateCache::default();
+    report(&mut parser, "state=idle");
+    report(&mut parser, "id=t1:state=done");
+    cache.observe(parser.screen());
+    assert_eq!(cache.worst(), Some(ProgramState::Done));
+    let r = readiness_of(7, SILENT_NOW, SILENT_NOW, cache.activity());
+    assert_eq!(r.state, Some(ProgramState::Idle));
+    assert_eq!(r.source, ReadinessSource::Reported);
+    assert!(r.is_ready());
+}
+
+#[test]
+fn parser_replaced_when_activity_cached_then_activity_empty() {
+    let mut parser = vt100::Parser::new(24, 80, 0);
+    let mut cache = AgentStateCache::default();
+    report(&mut parser, "state=working");
+    cache.observe(parser.screen());
+    cache.parser_replaced();
+    assert_eq!(cache.activity(), None);
+}
+
+#[test]
 fn readiness_when_record_cleared_then_falls_back_to_silence() {
     let mut parser = vt100::Parser::new(24, 80, 0);
     let mut cache = AgentStateCache::default();

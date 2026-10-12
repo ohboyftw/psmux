@@ -45,6 +45,7 @@ pub struct AgentStateCache {
     observed: Option<(u64, u64)>,
     root: Option<ProgramState>,
     worst: Option<ProgramState>,
+    activity: Option<ProgramState>,
     worst_id: Option<String>,
     details: AgentRecordDetails,
     prev_worst: Option<ProgramState>,
@@ -59,6 +60,12 @@ impl AgentStateCache {
     /// Worst state over all records: blocked > error > working > done > idle.
     pub fn worst(&self) -> Option<ProgramState> {
         self.worst
+    }
+
+    /// Worst state over the `idle`, `working` and `blocked` records only:
+    /// what the program says it is doing, which readiness goes by.
+    pub fn activity(&self) -> Option<ProgramState> {
+        self.activity
     }
 
     /// Id of the child record that carries the worst state; `None` for the root.
@@ -78,6 +85,7 @@ impl AgentStateCache {
         self.generation += 1;
         self.root = None;
         self.worst = None;
+        self.activity = None;
         self.worst_id = None;
         self.details = AgentRecordDetails::default();
     }
@@ -109,6 +117,18 @@ impl AgentStateCache {
         self.root = screen.program_status().map(ProgramStatusRecord::state);
         let worst = worst_record(screen);
         self.worst = worst.map(|(_, r)| r.state());
+        self.activity = worst_of(
+            screen
+                .program_status_records()
+                .map(|(_, r)| r.state())
+                .filter(|s| {
+                    matches!(
+                        s,
+                        ProgramState::Idle | ProgramState::Working | ProgramState::Blocked
+                    )
+                })
+                .map(Some),
+        );
         self.worst_id = worst.and_then(|(id, _)| id.map(str::to_owned));
         self.details = worst
             .map(|(id, r)| record_details(screen, id, r))
@@ -265,12 +285,14 @@ impl PaneReadiness {
 /// [`OUTPUT_STABLE_MS`] of silence is idle and anything more recent is
 /// working.
 ///
-/// `reported` is the worst-of state over all records, so a `working` or
-/// `blocked` child record (a background task) keeps the pane not ready under
-/// an `idle` root.  `done` and `error` are verdicts, not activity: they
-/// survive OSC 133 A and process exit, so letting them win would leave a pane
-/// not ready forever after its agent stopped.  With only such records left,
-/// silence decides, as it does with no record.  A `working` record left by a
+/// `reported` is [`AgentStateCache::activity`], the worst-of state over the
+/// `idle`, `working` and `blocked` records only, so a `working` or `blocked`
+/// child record (a background task) keeps the pane not ready under an `idle`
+/// root.  `done` and `error` are verdicts, not activity: they survive OSC
+/// 133 A and process exit, so letting them win would leave a pane not ready
+/// forever after its agent stopped, and a leftover one must not hide a live
+/// `working` or `idle` record.  With only such records left, silence
+/// decides, as it does with no record.  A `working` record left by a
 /// crashed agent still wins until OSC 133 A, process exit, RIS or
 /// `clear-history`.
 ///
@@ -336,7 +358,7 @@ impl crate::types::Pane {
             self.data_version.load(Acquire),
             self.last_output_time.load(Acquire),
             now_ms,
-            self.agent_state.worst(),
+            self.agent_state.activity(),
         )
     }
 }

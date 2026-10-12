@@ -483,7 +483,7 @@ The `display-message` command supports these variables:
 | `#{pane_agent_title}` | Title of the worst record |
 | `#{pane_agent_msg}` | One-line message of the worst record |
 | `#{pane_agent_readiness}` | State the `#{pane_ready}` rule reached: the reported `idle`, `working` or `blocked`, or, by output silence, `idle` (silent for 500 ms) or `working`; empty when nothing is reported and the pane has produced no output yet |
-| `#{pane_agent_source}` | Which rule `#{pane_ready}` used: `reported` when the pane's worst OSC 7501 record is `idle`, `working` or `blocked`, `output_stable` otherwise. `output_stable` with an empty `#{pane_agent_readiness}` means no output yet, not silence |
+| `#{pane_agent_source}` | Which rule `#{pane_ready}` used: `reported` when the pane has an `idle`, `working` or `blocked` OSC 7501 record, `output_stable` otherwise. `output_stable` with an empty `#{pane_agent_readiness}` means no output yet, not silence |
 | `#{pane_ready}` | `1` when `#{pane_agent_readiness}` is `idle` |
 | `#{window_agent_state}` | Worst `#{pane_agent_state}` over the window's panes, in the same order; empty when no pane reports |
 
@@ -534,12 +534,15 @@ takes its reported state (`#{pane_agent_source}` is `reported`); a pane with
 none falls back to 500 ms of output silence (`output_stable`). After
 `state=clear` the pane falls back to silence again. An agent that redraws a
 spinner while it reports `idle` is ready; one that reports `working` while
-silent is not. The reported state is the worst over all records, so a Claude
-Code background task that is `working` keeps the pane not ready while the main
-session is `idle`.
+silent is not. The reported state is the worst over the `idle`, `working` and
+`blocked` records, so a Claude Code background task that is `working` keeps
+the pane not ready while the main session is `idle`.
 
 `done` and `error` records survive the end of the program, so they do not
-decide readiness: with only those left, the pane is judged by output silence.
+decide readiness, even when `#{pane_agent_state}` shows one: a leftover
+`error` child does not hide a `working` root, and a leftover `done` child does
+not hide an `idle` one. With only those left, the pane is judged by output
+silence.
 A `working` or `blocked` record does decide, and an agent that crashes or is
 killed never sends `state=clear`, so its leftover record keeps the pane not
 ready: `#{pane_ready}` stays 0, `wait-pane --ready` without `--timeout` never
