@@ -534,7 +534,7 @@ Listed in the `initialize` capabilities as `"state_changed"`.
   effort: without `remain-on-exit`, output the pane wrote just before it
   exited may not have been read yet, and a last report in it is lost. This
   happens when the process exits, not when the pane is killed: `kill-pane`,
-  `kill-window` and `kill-session` send no final `nE` event.
+  `kill-window` and `kill-session` send no final `state_changed` event.
 
 The same change is published on mycel as
 [`psmux/pane/status`](mycel-topics.md#psmuxpanestatus), where empty
