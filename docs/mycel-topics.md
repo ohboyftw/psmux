@@ -184,6 +184,12 @@ unchanged. A few rules are stricter or fixed:
 - A Replay followed by a Subscribe of the same pattern also delivers the
   events published between the two, so `mycel sub --replay` no longer loses
   them.
+- Replay history keeps up to 10 000 events per topic for 10 minutes. A topic
+  whose events have all aged out is forgotten within one heartbeat (30 s),
+  even if nobody asks for a replay or status. Sequence numbers never repeat
+  within a topic: a topic published again after it was forgotten continues
+  above the highest number the bus has handed out instead of restarting
+  at 1.
 
 ---
 

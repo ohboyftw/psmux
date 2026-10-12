@@ -430,6 +430,23 @@ fn heartbeat_publishes_one_event_per_client() {
 }
 
 #[test]
+fn heartbeat_forgets_topics_past_the_ttl() {
+    let mut s = State::new(Limits {
+        ring: RingConfig {
+            max_events: 10,
+            ttl_ms: 1000,
+        },
+        ..Limits::default()
+    });
+    hello(&mut s, 1, "a");
+    publish(&mut s, 1, "x/task/1/done", "{}", T0);
+    s.disconnect(1, T0);
+    s.heartbeat(T0 + 5000);
+    assert!(s.store.sequence_marks("#").is_empty());
+    assert!(s.store.sequence_marks("$mycel/#").is_empty());
+}
+
+#[test]
 fn liveness_probe_announces_no_presence() {
     let mut s = state();
     hello(&mut s, 1, "monitor");

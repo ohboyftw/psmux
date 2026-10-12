@@ -311,6 +311,37 @@ fn sequence_keeps_counting_after_the_topic_expires() {
 }
 
 #[test]
+fn prune_forgets_an_idle_topic_and_its_sequence() {
+    let cfg = RingConfig {
+        max_events: 10,
+        ttl_ms: 1000,
+    };
+    let mut s = BufferStore::new(cfg);
+    for topic in ["x/task/1/done", "x/task/2/done"] {
+        let seq = s.next_sequence(topic);
+        s.store(ev(topic, 1000, seq), 1000);
+    }
+    s.prune(5000);
+    assert!(s.buffers.is_empty());
+    assert!(s.sequences.is_empty());
+}
+
+#[test]
+fn a_pruned_topic_counts_on_above_its_old_sequences() {
+    let cfg = RingConfig {
+        max_events: 10,
+        ttl_ms: 1000,
+    };
+    let mut s = BufferStore::new(cfg);
+    for _ in 0..3 {
+        let seq = s.next_sequence("a");
+        s.store(ev("a", 1000, seq), 1000);
+    }
+    s.prune(5000);
+    assert!(s.next_sequence("a") > 3);
+}
+
+#[test]
 fn store_replay_drops_events_past_the_ttl() {
     let cfg = RingConfig {
         max_events: 10,

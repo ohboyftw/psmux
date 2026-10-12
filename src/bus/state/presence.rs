@@ -22,8 +22,10 @@ impl State {
         true
     }
 
-    /// One `$mycel/clients/heartbeat` per registered client.
+    /// One `$mycel/clients/heartbeat` per registered client, after
+    /// forgetting topics whose events have all aged out.
     pub fn heartbeat(&mut self, now: i64) {
+        self.store.prune(now);
         let ids: Vec<String> = self
             .registry
             .values()

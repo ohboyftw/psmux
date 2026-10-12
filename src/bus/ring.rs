@@ -2,8 +2,10 @@
 //!
 //! Differences from the C++ `BufferStore`:
 //! - TTL is measured from the caller's `now`, not from the topic's newest
-//!   event, and is applied on push, on replay and on stats. An idle topic
-//!   therefore ages out instead of keeping its last events forever.
+//!   event, and is applied on push, on replay, on stats and by
+//!   [`BufferStore::prune`], which the bus runs on every heartbeat tick. An
+//!   idle topic therefore ages out instead of keeping its last events
+//!   forever.
 //! - Timestamps inside one topic never go backwards (a push is clamped to
 //!   the newest buffered timestamp), so sorting replay output by time with
 //!   a stable sort keeps each topic in sequence order.
@@ -12,10 +14,12 @@
 //!   100 in the window; this matches C++ and is left for M2/M3 to revisit.
 //!   Topics whose buffers expire to empty are dropped.
 //! - Per-topic sequence numbers live in [`BufferStore::next_sequence`]'s
-//!   own map, which expiry never touches, so a topic that ages out and is
-//!   published again keeps counting up instead of restarting at 1.
-//!   Dedup by `(topic, sequence)` across replay and live delivery relies
-//!   on this. The map holds one entry per topic ever published.
+//!   own map. A topic that ages out is forgotten there too, but the store
+//!   remembers the highest number it ever handed out, and a topic that is
+//!   (re)published with no entry starts above it. A topic therefore never
+//!   repeats a sequence number, which dedup by `(topic, sequence)` across
+//!   replay and live delivery relies on, and the map holds only topics with
+//!   buffered events.
 //! - Keys are canonical topics (see [`topic::validate_topic`]).
 
 use std::collections::{HashMap, VecDeque};
@@ -179,6 +183,8 @@ pub struct BufferStore {
     cfg: RingConfig,
     buffers: HashMap<String, RingBuffer>,
     sequences: HashMap<String, u64>,
+    /// Highest sequence of any topic forgotten by [`BufferStore::prune`].
+    retired_high: u64,
 }
 
 impl BufferStore {
@@ -188,18 +194,21 @@ impl BufferStore {
             cfg,
             buffers: HashMap::new(),
             sequences: HashMap::new(),
+            retired_high: 0,
         }
     }
 
-    /// The next sequence number for `topic`, starting at 1. Never reset,
-    /// not even when the topic's buffer expires.
+    /// The next sequence number for `topic`. A topic the store has no entry
+    /// for starts above every sequence it has forgotten (at 1 in a fresh
+    /// store), so no topic ever repeats a number.
     pub fn next_sequence(&mut self, topic: &str) -> u64 {
         if let Some(seq) = self.sequences.get_mut(topic) {
             *seq += 1;
             return *seq;
         }
-        self.sequences.insert(topic.to_owned(), 1);
-        1
+        let first = self.retired_high + 1;
+        self.sequences.insert(topic.to_owned(), first);
+        first
     }
 
     /// Buffer an event under its (canonical) topic.
@@ -298,11 +307,21 @@ impl BufferStore {
         stats
     }
 
-    /// Apply TTL to every buffer and forget topics left empty.
-    fn prune(&mut self, now_ms: i64) {
+    /// Apply TTL to every buffer and forget topics left empty, sequence
+    /// counters included.
+    pub fn prune(&mut self, now_ms: i64) {
         self.buffers.retain(|_, buf| {
             buf.expire(now_ms);
             !buf.is_empty()
+        });
+        let buffers = &self.buffers;
+        let retired_high = &mut self.retired_high;
+        self.sequences.retain(|topic, seq| {
+            let keep = buffers.contains_key(topic);
+            if !keep {
+                *retired_high = (*retired_high).max(*seq);
+            }
+            keep
         });
     }
 }
