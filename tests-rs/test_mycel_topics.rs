@@ -20,9 +20,12 @@ const TOPIC_EXITED: &str = "psmux/pane/exited";
 /// Deprecated shim topic for pane exit events. TODO: remove next release.
 const TOPIC_DIED_SHIM: &str = "psmux/pane/died";
 
-fn read_tree_rs() -> String {
-    let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("src/tree.rs");
-    fs::read_to_string(&path).expect("read src/tree.rs")
+/// Every lifecycle event is published from one place: `src/control.rs`
+/// (`publish_lifecycle_to_mycel`). The trigger sites in tree.rs,
+/// server/mod.rs and backend/dispatcher.rs call `emit_lifecycle`.
+fn read_publish_site() -> String {
+    let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("src/control.rs");
+    fs::read_to_string(&path).expect("read src/control.rs")
 }
 
 #[test]
@@ -36,20 +39,20 @@ fn deprecated_died_shim_topic_still_exists() {
 }
 
 #[test]
-fn tree_rs_publishes_canonical_exited_topic() {
-    let src = read_tree_rs();
+fn publish_site_publishes_canonical_exited_topic() {
+    let src = read_publish_site();
     assert!(
         src.contains(TOPIC_EXITED) || src.contains("topics::PANE_EXITED"),
-        "src/tree.rs must publish canonical topic psmux/pane/exited (literal or topics::PANE_EXITED)"
+        "src/control.rs must publish canonical topic psmux/pane/exited (literal or topics::PANE_EXITED)"
     );
 }
 
 #[test]
-fn tree_rs_publishes_deprecation_shim_topic() {
-    let src = read_tree_rs();
+fn publish_site_publishes_deprecation_shim_topic() {
+    let src = read_publish_site();
     assert!(
         src.contains(TOPIC_DIED_SHIM),
-        "src/tree.rs must publish deprecation shim psmux/pane/died until next release"
+        "src/control.rs must publish deprecation shim psmux/pane/died until next release"
     );
 }
 
@@ -73,12 +76,28 @@ fn pane_ready_payload_has_pane_id_and_elapsed_ms() {
 }
 
 #[test]
-fn server_mod_rs_publishes_pane_ready_topic() {
-    let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("src/server/mod.rs");
-    let src = fs::read_to_string(&path).expect("read src/server/mod.rs");
+fn publish_site_publishes_pane_ready_topic() {
+    let src = read_publish_site();
     assert!(
         src.contains("psmux/pane/ready") || src.contains("topics::PANE_READY"),
-        "src/server/mod.rs must publish psmux/pane/ready alongside context_ready"
+        "src/control.rs must publish psmux/pane/ready alongside context_ready"
+    );
+}
+
+// ─── Ticket 04a: psmux/pane/status on reported state transitions ────────────
+
+#[test]
+fn pane_status_topic_constant_matches_spec() {
+    assert_eq!(psmux::mycel::topics::PANE_STATUS, "psmux/pane/status");
+}
+
+#[test]
+fn control_rs_publishes_pane_status_topic() {
+    let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("src/control.rs");
+    let src = fs::read_to_string(&path).expect("read src/control.rs");
+    assert!(
+        src.contains("topics::PANE_STATUS"),
+        "src/control.rs must publish psmux/pane/status from publish_lifecycle_to_mycel"
     );
 }
 
@@ -120,12 +139,11 @@ fn exec_completed_supports_nonzero_exit_code() {
 }
 
 #[test]
-fn dispatcher_publishes_exec_completed_topic() {
-    let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("src/backend/dispatcher.rs");
-    let src = fs::read_to_string(&path).expect("read src/backend/dispatcher.rs");
+fn publish_site_publishes_exec_completed_topic() {
+    let src = read_publish_site();
     assert!(
         src.contains("psmux/exec/completed") || src.contains("topics::EXEC_COMPLETED"),
-        "src/backend/dispatcher.rs must publish psmux/exec/completed alongside exec_completed"
+        "src/control.rs must publish psmux/exec/completed alongside exec_completed"
     );
 }
 
@@ -165,20 +183,19 @@ fn session_payload_has_session_name_and_client_id() {
 }
 
 #[test]
-fn server_mod_rs_publishes_session_topics() {
-    let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("src/server/mod.rs");
-    let src = fs::read_to_string(&path).expect("read src/server/mod.rs");
+fn publish_site_publishes_session_topics() {
+    let src = read_publish_site();
     assert!(
         src.contains("psmux/session/created") || src.contains("topics::SESSION_CREATED"),
-        "src/server/mod.rs must publish psmux/session/created"
+        "src/control.rs must publish psmux/session/created"
     );
     assert!(
         src.contains("psmux/session/renamed") || src.contains("topics::SESSION_RENAMED"),
-        "src/server/mod.rs must publish psmux/session/renamed"
+        "src/control.rs must publish psmux/session/renamed"
     );
     assert!(
         src.contains("psmux/session/killed") || src.contains("topics::SESSION_KILLED"),
-        "src/server/mod.rs must publish psmux/session/killed"
+        "src/control.rs must publish psmux/session/killed"
     );
 }
 

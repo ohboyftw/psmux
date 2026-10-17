@@ -2,6 +2,8 @@
 // suppress dead_code warnings for functions only used by a subset of binaries.
 #![allow(dead_code)]
 
+mod agent_state;
+mod agent_toast;
 mod app;
 mod cli;
 mod client;
@@ -30,14 +32,18 @@ mod session;
 mod ssh_input;
 mod style;
 mod tree;
+mod tree_chooser;
 mod types;
 mod util;
 mod wait_for;
+mod wait_until;
 mod warm_reap;
 mod window_ops;
 
 #[allow(unused)]
 mod backend;
+mod bus;
+mod detached;
 #[cfg(feature = "mycel")]
 mod mycel;
 mod octal;
@@ -71,6 +77,46 @@ use crate::session::{
 };
 use crate::ssh_input::{is_ssh_session, send_mouse_enable, InputSource};
 
+fn build_send_paste_control(cmd_args: &[&str]) -> io::Result<String> {
+    let mut payload: Option<&str> = None;
+    let mut i = 1;
+    while i < cmd_args.len() {
+        match cmd_args[i] {
+            "-t" => {
+                i += 1;
+                if i >= cmd_args.len() {
+                    return Err(io::Error::new(
+                        io::ErrorKind::InvalidInput,
+                        "send-paste -t requires a target",
+                    ));
+                }
+            }
+            value if payload.is_none() => payload = Some(value),
+            _ => {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    "send-paste requires exactly one UTF-8 base64 payload",
+                ));
+            }
+        }
+        i += 1;
+    }
+
+    let payload = payload
+        .filter(|value| crate::util::base64_decode(value).is_some())
+        .ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "send-paste requires exactly one UTF-8 base64 payload",
+            )
+        })?;
+    Ok(format!("send-paste {}\n", payload))
+}
+
+#[cfg(test)]
+#[path = "../tests-rs/test_send_paste_cli.rs"]
+mod test_send_paste_cli;
+
 fn main() {
     crash::install_crash_handler();
     if let Err(e) = run_main() {
@@ -101,6 +147,39 @@ fn check_target_resolvable(target: &str) -> io::Result<()> {
         io::ErrorKind::NotFound,
         format!("{prefix}{target}"),
     ))
+}
+
+/// Exit 2 with a usage line on a bad `--until` state, or on `--until` with
+/// another wait condition (`--ready`, `--file`, `--exit`, `--output`).
+fn check_until_arg(cmd: &str, until: Option<&str>, other_condition: bool) {
+    let Some(name) = until else {
+        return;
+    };
+    if agent_state::parse_state(name).is_none() {
+        eprintln!("{cmd}: --until expects idle|working|blocked|done|error, got '{name}'");
+        std::process::exit(2);
+    }
+    if other_condition {
+        eprintln!("{cmd}: --until cannot be combined with another wait condition (--ready is --until idle)");
+        std::process::exit(2);
+    }
+}
+
+/// An `--until` wait on a pane that is already gone exits 2, as one that
+/// dies during the wait does; target resolution reports it as `NotFound`.
+/// With `json`, stdout carries the same error outcome the server sends.
+fn until_gone_is_2(resp: io::Result<String>, until: bool, json: bool) -> io::Result<String> {
+    match resp {
+        Err(e) if until && e.kind() == io::ErrorKind::NotFound => {
+            eprintln!("psmux: {e}");
+            if json {
+                let outcome = wait_until::until_outcome(wait_until::UNTIL_GONE, 0);
+                println!("{}", serde_json::to_string(&outcome).unwrap_or_default());
+            }
+            std::process::exit(2);
+        }
+        other => other,
+    }
 }
 
 /// `psmux debug spawns`: print how many processes the target server has
@@ -387,7 +466,9 @@ fn run_main() -> io::Result<()> {
             for name in crate::resurrection::list_resurrectable(&resurrect_dir) {
                 // Skip if a live session with this name was already printed
                 let port_file = crate::paths::port_file(&name);
-                if std::path::Path::new(&port_file).exists() {
+                if std::path::Path::new(&port_file).exists()
+                    || crate::session::is_warm_session(&name)
+                {
                     continue;
                 }
                 println!("{}: (resurrectable)", name);
@@ -402,6 +483,16 @@ fn run_main() -> io::Result<()> {
                 .get(1)
                 .map(|s| s.to_string())
                 .unwrap_or_else(|| "default".to_string());
+            // new-session exits 0 for a session that already runs, and the
+            // restore steps would then add windows to that live session.
+            if std::path::Path::new(&crate::paths::port_file(&session_name)).exists() {
+                eprintln!(
+                    "psmux: session '{}' is running; not resurrecting (delete {} if it is not)",
+                    session_name,
+                    crate::paths::port_file(&session_name)
+                );
+                std::process::exit(1);
+            }
             let dir = crate::resurrection::resurrect_dir(None);
             match crate::resurrection::load_snapshot_from(&session_name, &dir) {
                 Ok(snap) => {
@@ -412,124 +503,27 @@ fn run_main() -> io::Result<()> {
                         "Resurrecting session '{}' ({} windows, {} panes)",
                         snap.session_name, win_count, pane_count
                     );
-                    // Delete the snapshot now — it'll be re-created by the new server
-                    let _ = crate::resurrection::delete_snapshot(&session_name, &dir);
-
-                    // Build a new-session equivalent that applies the snapshot.
-                    // We serialize the snapshot path as an env var so the server
-                    // can pick it up during init.  Simpler approach: write commands
-                    // to a temp config file and source it.
-                    let tmp_config =
-                        std::env::temp_dir().join(format!("psmux-resurrect-{}.conf", session_name));
-                    let mut cmds = Vec::new();
-                    for (wi, ws) in snap.windows.iter().enumerate() {
-                        for (pi, pc) in ws.pane_commands.iter().enumerate() {
-                            let cwd_flag = format!("-c \"{}\"", pc.cwd.replace('"', "\\\""));
-                            if pi == 0 && wi > 0 {
-                                // New window for 2nd+ windows
-                                if let Some(ref cmd) = pc.command {
-                                    cmds.push(format!(
-                                        "new-window {} \"{}\"",
-                                        cwd_flag,
-                                        cmd.replace('"', "\\\"")
-                                    ));
-                                } else {
-                                    cmds.push(format!("new-window {}", cwd_flag));
-                                }
-                            } else if pi > 0 {
-                                // Split for 2nd+ panes in a window
-                                if let Some(ref cmd) = pc.command {
-                                    cmds.push(format!(
-                                        "split-window {} \"{}\"",
-                                        cwd_flag,
-                                        cmd.replace('"', "\\\"")
-                                    ));
-                                } else {
-                                    cmds.push(format!("split-window {}", cwd_flag));
-                                }
-                            }
-                            // First pane of first window is handled by new-session itself
-                        }
-                        // Apply tiled layout to spread panes evenly
-                        if ws.pane_commands.len() > 1 {
-                            cmds.push("select-layout tiled".to_string());
-                        }
-                        // Set window name
-                        if !ws.name.is_empty() {
-                            cmds.push(format!(
-                                "rename-window \"{}\"",
-                                ws.name.replace('"', "\\\"")
-                            ));
-                        }
-                    }
-                    // Write temp config
-                    let config_content = cmds.join("\n");
-                    std::fs::write(&tmp_config, &config_content).ok();
-
-                    // Build new-session args: -s <name> + source the temp config
-                    // The first pane's command and cwd come from the snapshot
-                    let first_cwd = snap
-                        .windows
-                        .first()
-                        .and_then(|w| w.pane_commands.first())
-                        .map(|pc| pc.cwd.clone());
-                    let first_cmd = snap
-                        .windows
-                        .first()
-                        .and_then(|w| w.pane_commands.first())
-                        .and_then(|pc| pc.command.clone());
-
-                    // Reconstruct argv for new-session
-                    let mut new_args = vec![
-                        "new-session".to_string(),
-                        "-s".to_string(),
-                        session_name.clone(),
-                    ];
-                    if let Some(ref cwd) = first_cwd {
-                        new_args.push("-c".to_string());
-                        new_args.push(cwd.clone());
-                    }
-                    // Source the temp config on startup to create remaining windows/panes
-                    eprintln!("Spawning session with {} setup commands...", cmds.len());
-
-                    // Instead of complex argv threading, just launch new-session
-                    // and source the config file through the control port after startup.
-                    // For MVP: create the session, then source.
                     let exe = std::env::current_exe().unwrap_or_else(|_| "psmux".into());
-                    let status = std::process::Command::new(&exe)
-                        .args(["new-session", "-d", "-s", &session_name])
-                        .args(first_cwd.iter().flat_map(|c| vec!["-c", c.as_str()]))
-                        .args(first_cmd.iter().flat_map(|c| vec!["--", c.as_str()]))
-                        .status();
-
-                    if let Ok(s) = status {
-                        if s.success() || s.code() == Some(0) {
-                            // Give server time to start
-                            std::thread::sleep(Duration::from_millis(800));
-                            // Source the config to create remaining panes
-                            if !cmds.is_empty() {
-                                let source_status = std::process::Command::new(&exe)
-                                    .args(["source-file", tmp_config.to_str().unwrap_or("")])
-                                    .status();
-                                if let Ok(ss) = source_status {
-                                    if !ss.success() {
-                                        eprintln!(
-                                            "Warning: source-file returned {}",
-                                            ss.code().unwrap_or(-1)
-                                        );
-                                    }
-                                }
-                            }
-                            // Clean up temp file
-                            let _ = std::fs::remove_file(&tmp_config);
-
-                            // Now attach to the session
-                            eprintln!("Attaching to resurrected session '{}'...", session_name);
-                            let _ = std::process::Command::new(&exe)
-                                .args(["attach", "-t", &session_name])
-                                .status();
-                        }
+                    let mut run = |args: &[String]| {
+                        std::process::Command::new(&exe)
+                            .args(args)
+                            .status()
+                            .is_ok_and(|st| st.success())
+                    };
+                    if let Err(e) = crate::resurrection::resurrect(
+                        &session_name,
+                        &snap,
+                        &dir,
+                        Duration::from_millis(800),
+                        &mut run,
+                    ) {
+                        eprintln!("psmux resurrect: {e}");
+                        std::process::exit(1);
                     }
+                    eprintln!("Attaching to resurrected session '{}'...", session_name);
+                    let _ = std::process::Command::new(&exe)
+                        .args(["attach", "-t", &session_name])
+                        .status();
                 }
                 Err(e) => {
                     eprintln!("No resurrectable snapshot for '{}': {}", session_name, e);
@@ -574,6 +568,12 @@ fn run_main() -> io::Result<()> {
                 .unwrap_or_else(|| "0".to_string());
             env::set_var("PSMUX_SESSION_NAME", name);
             env::set_var("PSMUX_REMOTE_ATTACH", "1");
+        }
+        "bus" => {
+            // Host the mycel event bus (started on demand by a session
+            // server's first publish), or `bus stop` to shut it down.
+            let words: Vec<&str> = cmd_args.iter().skip(1).map(|s| s.as_str()).collect();
+            return crate::bus::host::run_bus_command(&words);
         }
         "server" => {
             // Internal command - run headless server (used when spawning background server)
@@ -1215,10 +1215,10 @@ fn run_main() -> io::Result<()> {
                     cmd_line.push_str(&format!(" -F \"{}\"", fmt.replace("\"", "\\\"")));
                 }
                 if let Some(name) = &name_arg {
-                    cmd_line.push_str(&format!(" -n \"{}\"", name.replace("\"", "\\\"")));
+                    cmd_line.push_str(&format!(" -n {}", crate::util::quote_arg(name)));
                 }
                 if let Some(dir) = &start_dir {
-                    cmd_line.push_str(&format!(" -c \"{}\"", dir.replace("\"", "\\\"")));
+                    cmd_line.push_str(&format!(" -c {}", crate::util::quote_arg(dir)));
                 }
                 // Each argv token is double-quoted so the server tokenizer keeps
                 // them as separate, intact arguments even when they contain spaces.
@@ -1251,19 +1251,19 @@ fn run_main() -> io::Result<()> {
                 cmd_line.push_str(&format!(" -F \"{}\"", fmt.replace("\"", "\\\"")));
             }
             if let Some(name) = &name_arg {
-                cmd_line.push_str(&format!(" -n \"{}\"", name.replace("\"", "\\\"")));
+                cmd_line.push_str(&format!(" -n {}", crate::util::quote_arg(name)));
             }
             if let Some(dir) = &start_dir {
-                cmd_line.push_str(&format!(" -c \"{}\"", dir.replace("\"", "\\\"")));
+                cmd_line.push_str(&format!(" -c {}", crate::util::quote_arg(dir)));
             }
             for ev in &env_vars {
-                cmd_line.push_str(&format!(" -e \"{}\"", ev.replace("\"", "\\\"")));
+                cmd_line.push_str(&format!(" -e {}", crate::util::quote_arg(ev)));
             }
             if let Some(ref sh) = shell_arg {
-                cmd_line.push_str(&format!(" --shell \"{}\"", sh.replace("\"", "\\\"")));
+                cmd_line.push_str(&format!(" --shell {}", crate::util::quote_arg(sh)));
             }
             if !cmd_arg.is_empty() {
-                cmd_line.push_str(&format!(" \"{}\"", cmd_arg.replace("\"", "\\\"")));
+                cmd_line.push_str(&format!(" {}", crate::util::quote_arg(cmd_arg)));
             }
             cmd_line.push('\n');
             if print_info {
@@ -1363,19 +1363,19 @@ fn run_main() -> io::Result<()> {
                 cmd_line.push_str(&format!(" -F \"{}\"", fmt.replace("\"", "\\\"")));
             }
             if let Some(dir) = &start_dir {
-                cmd_line.push_str(&format!(" -c \"{}\"", dir.replace("\"", "\\\"")));
+                cmd_line.push_str(&format!(" -c {}", crate::util::quote_arg(dir)));
             }
             if let Some(pct) = &size_pct {
                 cmd_line.push_str(&format!(" -p {}", pct));
             }
             for ev in &env_vars {
-                cmd_line.push_str(&format!(" -e \"{}\"", ev.replace("\"", "\\\"")));
+                cmd_line.push_str(&format!(" -e {}", crate::util::quote_arg(ev)));
             }
             if let Some(ref sh) = shell_arg {
-                cmd_line.push_str(&format!(" --shell \"{}\"", sh.replace("\"", "\\\"")));
+                cmd_line.push_str(&format!(" --shell {}", crate::util::quote_arg(sh)));
             }
             if !cmd_arg.is_empty() {
-                cmd_line.push_str(&format!(" \"{}\"", cmd_arg.replace("\"", "\\\"")));
+                cmd_line.push_str(&format!(" {}", crate::util::quote_arg(cmd_arg)));
             }
             cmd_line.push('\n');
             if print_info {
@@ -1539,24 +1539,13 @@ fn run_main() -> io::Result<()> {
             send_control(cmd)?;
             return Ok(());
         }
-        // send-paste - Paste base64-encoded text to a pane
+        // Base64 is the protocol boundary: unlike send-keys -l, it cannot
+        // inject a second newline-delimited control command. It also avoids
+        // nesting the payload inside PowerShell -EncodedCommand, which
+        // crossed cmd.exe's 8191-character limit around 2 KiB of text.
         "send-paste" => {
-            let mut payload = String::new();
-            let mut i = 1;
-            while i < cmd_args.len() {
-                match cmd_args[i].as_str() {
-                    "-t" => {
-                        i += 1;
-                    } // consume target (handled globally)
-                    _ => {
-                        payload = cmd_args[i].to_string();
-                    }
-                }
-                i += 1;
-            }
-            if !payload.is_empty() {
-                send_control(format!("send-paste {}\n", payload))?;
-            }
+            let normalized: Vec<&str> = cmd_args.iter().map(|arg| arg.as_str()).collect();
+            send_control(build_send_paste_control(&normalized)?)?;
             return Ok(());
         }
         // select-pane - Select the active pane
@@ -2787,6 +2776,7 @@ fn run_main() -> io::Result<()> {
             let mut exit_pid: Option<String> = None;
             let mut output_pat: Option<String> = None;
             let mut ready_mode = false;
+            let mut until: Option<String> = None;
             let mut json_mode = false;
             let mut timeout: Option<String> = None;
             let mut target: Option<String> = None;
@@ -2823,6 +2813,17 @@ fn run_main() -> io::Result<()> {
                             i += 1;
                         }
                     }
+                    // Must consume its value here, or the catch-all below
+                    // takes `blocked` as a channel name.
+                    "--until" => {
+                        until = Some(
+                            cmd_args
+                                .get(i + 1)
+                                .map(|s| s.to_string())
+                                .unwrap_or_default(),
+                        );
+                        i += 1;
+                    }
                     "--timeout" => {
                         if let Some(t) = cmd_args.get(i + 1) {
                             timeout = Some(t.to_string());
@@ -2837,8 +2838,14 @@ fn run_main() -> io::Result<()> {
                 i += 1;
             }
 
-            let use_executor =
-                file_path.is_some() || exit_pid.is_some() || output_pat.is_some() || ready_mode;
+            let other_condition =
+                ready_mode || file_path.is_some() || exit_pid.is_some() || output_pat.is_some();
+            check_until_arg("wait-for", until.as_deref(), other_condition);
+            let use_executor = file_path.is_some()
+                || exit_pid.is_some()
+                || output_pat.is_some()
+                || ready_mode
+                || until.is_some();
 
             if use_executor {
                 let mut cmd = "wait-for".to_string();
@@ -2858,6 +2865,9 @@ fn run_main() -> io::Result<()> {
                 if ready_mode {
                     cmd.push_str(" --ready");
                 }
+                if let Some(ref u) = until {
+                    cmd.push_str(&format!(" --until {}", u));
+                }
                 if json_mode {
                     cmd.push_str(" --json");
                 }
@@ -2875,27 +2885,26 @@ fn run_main() -> io::Result<()> {
                     .unwrap_or(3_600_000);
                 let read_timeout =
                     std::time::Duration::from_millis(timeout_ms.saturating_add(5_000));
-                let resp = send_control_with_response_timeout(cmd, Some(read_timeout))?;
+                let resp = until_gone_is_2(
+                    send_control_with_response_timeout(cmd, Some(read_timeout)),
+                    until.is_some(),
+                    json_mode,
+                )?;
                 let trimmed = resp.trim();
-                // Exit-code mapping: success=0, timeout=1, error=2.
-                let exit_code = if json_mode {
-                    // Parse WaitOutcome JSON.
-                    match serde_json::from_str::<serde_json::Value>(trimmed) {
-                        Ok(v) => match v.get("kind").and_then(|k| k.as_str()) {
-                            Some("success") | Some("exit_success") => 0,
-                            Some("timeout") => 1,
-                            _ => 2,
-                        },
-                        Err(_) => 2,
+                let exit_code = wait_until::wait_for_exit_code(trimmed, json_mode);
+                if trimmed.is_empty() {
+                    eprintln!("psmux: server closed the connection");
+                    if json_mode {
+                        let outcome = wait_for::WaitOutcome::Error {
+                            reason: "server closed the connection".into(),
+                        };
+                        println!("{}", serde_json::to_string(&outcome).unwrap_or_default());
                     }
-                } else if trimmed == "TIMEOUT" {
-                    1
-                } else if trimmed.starts_with("ERROR") {
+                    std::process::exit(exit_code);
+                }
+                if !json_mode && trimmed.starts_with("ERROR") {
                     eprintln!("{}", trimmed);
-                    2
-                } else {
-                    0
-                };
+                }
                 if json_mode {
                     println!("{}", trimmed);
                 } else if !resp.is_empty() && exit_code != 2 {
@@ -3161,7 +3170,12 @@ fn run_main() -> io::Result<()> {
                             .exit_code
                             .map(|c| format!(" exit={c}"))
                             .unwrap_or_default();
-                        println!("  {} {}{}", w.id, status, code);
+                        let agent = ws
+                            .agent_state
+                            .as_deref()
+                            .map(|a| format!(" agent={a}"))
+                            .unwrap_or_default();
+                        println!("  {} {}{}{}", w.id, status, code, agent);
                     }
                 }
             }
@@ -3185,6 +3199,7 @@ fn run_main() -> io::Result<()> {
             // --timeout is milliseconds (matches wait-for).
             let mut timeout_ms: Option<u64> = None;
             let mut wait_ready = false;
+            let mut until: Option<String> = None;
             let mut i = 1;
 
             while i < cmd_args.len() {
@@ -3194,6 +3209,15 @@ fn run_main() -> io::Result<()> {
                             target = Some(v.to_string());
                             i += 1;
                         }
+                    }
+                    "--until" => {
+                        until = Some(
+                            cmd_args
+                                .get(i + 1)
+                                .map(|s| s.to_string())
+                                .unwrap_or_default(),
+                        );
+                        i += 1;
                     }
                     "--timeout" => {
                         if let Some(v) = cmd_args.get(i + 1) {
@@ -3209,21 +3233,37 @@ fn run_main() -> io::Result<()> {
                 i += 1;
             }
 
+            check_until_arg("wait-pane", until.as_deref(), wait_ready);
             if let Some(t) = target {
                 let mut cmd = format!("wait-pane -t {}", t);
                 if wait_ready {
                     cmd.push_str(" --ready");
                 }
+                if let Some(ref u) = until {
+                    cmd.push_str(&format!(" --until {}", u));
+                }
                 if let Some(ms) = timeout_ms {
                     cmd.push_str(&format!(" --timeout {}", ms));
                 }
                 cmd.push('\n');
-                let resp = send_control_with_response_timeout(cmd, None)?;
-                let code: i32 = resp.trim().parse().unwrap_or(1);
-                std::process::exit(code);
+                let resp = until_gone_is_2(
+                    send_control_with_response_timeout(cmd, None),
+                    until.is_some(),
+                    false,
+                )?;
+                let trimmed = resp.trim();
+                if until.is_some() && trimmed.is_empty() {
+                    eprintln!("psmux: server closed the connection");
+                }
+                std::process::exit(wait_until::wait_pane_exit_code(trimmed, until.is_some()));
             } else {
                 eprintln!("wait-pane: missing target (-t %N)");
-                std::process::exit(1);
+                // --until usage errors exit 2; 1 there means a timeout.
+                std::process::exit(if until.is_some() {
+                    wait_until::UNTIL_GONE
+                } else {
+                    1
+                });
             }
         }
         // select-layout - Select a layout for the window

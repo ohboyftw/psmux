@@ -233,14 +233,14 @@ See [docs/power-pack-tools.md](docs/power-pack-tools.md) for the full tool stack
 > - **`wait-for --exit PID`** — Block until a process exits via `WaitForSingleObject`, returns exit code
 > - **`wait-for --file PATH`** — Block until a file appears (server-side polling). Eliminates client-side sentinel loops
 > - **`wait-for --output REGEX`** — Block until a regex matches the pane's live screen buffer (50ms polling)
-> - **`wait-for --ready`** — Block until the pane reaches an idle prompt (reuses `context_ready` signal)
+> - **`wait-for --ready`** — Block until the pane is idle (`#{pane_ready}`: reported OSC 7501 `idle`, else 500 ms of output silence)
 > - **`--timeout <ms>`** — Milliseconds on both `wait-for` and `wait-pane`. CLI socket read-timeout sizes from it plus headroom; exit codes `0` success, `1` timeout, `2` error
 > - **`--json` output** — All wait-for modes return structured `WaitOutcome` JSON for machine consumption
 > - **JSON-RPC `wait_for`** — Same conditions available via the CustomPaneBackend named pipe
 >
 > **Mycel Event Bus:**
-> - **7 `psmux/*` topics** — `pane/created`, `pane/ready`, `pane/exited`, `exec/completed`, `session/created`, `session/renamed`, `session/killed`
-> - **Fire-and-forget** — Non-blocking publish to mycel server when built with `--features mycel`
+> - **8 `psmux/*` topics** — `pane/created`, `pane/ready`, `pane/status`, `pane/exited`, `exec/completed`, `session/created`, `session/renamed`, `session/killed`
+> - **Fire-and-forget** — Non-blocking publish to the mycel bus. psmux starts its own bus (`psmux bus`) when none is running; `psmux bus stop` stops it, `PSMUX_BUS=0` turns publishing off, and `--no-default-features` builds without it
 > - **Deprecation shim** — `psmux/pane/died` still published alongside `psmux/pane/exited` for one release
 >
 > **DAG Orchestration:**
@@ -321,6 +321,7 @@ tv psmux-keys        # Browse key bindings
 | **[Key Bindings](docs/keybindings.md)** | Default keys and customization |
 | **[Scripting](docs/scripting.md)** | 92 commands, hooks, targets, pipe-pane, exec, wait-for, wait-pane |
 | **[Orchestrate](docs/orchestrate.md)** | DAG worker runner — plan.json schema, exit codes, state.json, recovery |
+| **[Pi Workers](docs/pi-performance.md)** | Running Pi workers in psmux — startup cost, completion signals per Pi mode, waiting on OSC 7501 state |
 | **[Configuration](docs/configuration.md)** | Config files, options, environment variables |
 | **[Plugins & Themes](docs/plugins.md)** | Plugin ecosystem — Catppuccin, Dracula, Nord, and more |
 | **[Mouse Over SSH](docs/mouse-ssh.md)** | SSH mouse support and Windows version requirements |

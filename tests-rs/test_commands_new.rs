@@ -876,9 +876,16 @@ fn choose_tree_enters_window_chooser_mode() {
 #[test]
 fn choose_tree_builds_correct_tree_from_list_all_sessions() {
     // Directly test list_all_sessions_tree with known data
+    let window = |name: &str, panes, active, agent| crate::session::CurrentWindow {
+        name: name.to_string(),
+        panes,
+        size: "120x30".to_string(),
+        active,
+        agent,
+    };
     let windows = vec![
-        ("editor".to_string(), 1usize, "120x30".to_string(), true),
-        ("server".to_string(), 2, "120x30".to_string(), false),
+        window("editor", 1, true, "working"),
+        window("server", 2, false, "blocked"),
     ];
     // Create a fake port file for our session so the tree builder can find it
     let home = std::env::var("USERPROFILE")
@@ -905,6 +912,10 @@ fn choose_tree_builds_correct_tree_from_list_all_sessions() {
             headers[0].is_current_session,
             "should be marked as current session"
         );
+        assert_eq!(
+            headers[0].agent_state, "blocked",
+            "header rolls up its windows' worst agent state"
+        );
 
         let wins: Vec<_> = our_entries
             .iter()
@@ -917,6 +928,8 @@ fn choose_tree_builds_correct_tree_from_list_all_sessions() {
         assert!(!wins[1].is_active_window, "server should not be active");
         assert_eq!(wins[0].window_panes, 1);
         assert_eq!(wins[0].window_size, "120x30");
+        assert_eq!(wins[0].agent_state, "working");
+        assert_eq!(wins[1].agent_state, "blocked");
     }
 }
 

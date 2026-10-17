@@ -9,16 +9,68 @@ use crate::util::WinInfo;
 /// is still running the previous one.
 static TOAST_IN_FLIGHT: AtomicBool = AtomicBool::new(false);
 
-/// Drain OSC 99/777 desktop notifications from all panes and fire
-/// Windows toast notifications for each.
-pub(crate) fn drain_notifications(app: &mut AppState) {
+/// Drains the OSC 99/777 desktop notifications of all panes as
+/// `(title, body)`.  Read before the reap, so a pane pruned this tick
+/// still has its notifications shown.
+pub(crate) fn take_notifications(app: &mut AppState) -> Vec<(String, String)> {
     let mut notifs: Vec<(String, String)> = Vec::new();
     for win in &mut app.windows {
         collect_notifications(&mut win.root, &mut notifs);
     }
+    notifs
+}
+
+/// Shows OSC 99/777 notifications.  Called after [`flush_agent_toasts`],
+/// so a due agent toast gets the in-flight slot first; a notification
+/// that finds a toast in flight is dropped.
+pub(crate) fn fire_notifications(notifs: Vec<(String, String)>) {
     for (title, body) in notifs {
-        fire_toast_notification(&title, &body);
+        let _ = fire_toast_notification(&title, &body);
     }
+}
+
+/// Copies every pane's OSC 7501 state into its cache and returns the
+/// worst-of transitions as `(pane id, transition)`.  Dead panes are visited
+/// too: under remain-on-exit their `done`/`error` records stay visible, and
+/// the exit rule is applied again to drop records parsed after the exit.
+pub(crate) fn collect_program_status(
+    app: &mut AppState,
+) -> Vec<(usize, crate::agent_state::AgentTransition)> {
+    let mut out = Vec::new();
+    for win in &mut app.windows {
+        crate::tree::visit_leaves_mut(&mut win.root, &mut |p| {
+            let Ok(mut term) = p.term.lock() else { return };
+            let transition = if p.dead {
+                p.agent_state.observe_dead(term.screen_mut())
+            } else {
+                p.agent_state.observe(term.screen())
+            };
+            if let Some(t) = transition {
+                out.push((p.id, t));
+            }
+        });
+    }
+    out
+}
+
+/// Sends one `state_changed` pipe push and one `PaneStatusChanged`
+/// lifecycle event (mycel `psmux/pane/status`) per transition.
+pub(crate) fn emit_status_transition(
+    clients: &[crate::control::ControlClient],
+    pane_id: usize,
+    transition: &crate::agent_state::AgentTransition,
+) {
+    let event = crate::backend::protocol::StateChangedEvent::new(pane_id, transition);
+    if let Ok(json) = serde_json::to_string(&event) {
+        crate::types::push_backend_event(&json);
+    }
+    crate::control::emit_lifecycle(
+        clients,
+        &crate::control::LifecycleEvent::PaneStatusChanged {
+            pane_id,
+            transition,
+        },
+    );
 }
 
 fn collect_notifications(node: &mut Node, out: &mut Vec<(String, String)>) {
@@ -66,12 +118,46 @@ fn toast_command(title: &str, body: &str) -> std::process::Command {
     cmd
 }
 
+/// Shows the agent toast that is due, if any.  A toast that cannot fire
+/// because another toast is still in flight stays pending for the next tick.
+pub(crate) fn flush_agent_toasts(app: &mut AppState, now: std::time::Instant) {
+    if app.agent_toasts.pending_len() > 0 {
+        let live: std::collections::HashSet<usize> = app
+            .windows
+            .iter()
+            .flat_map(|w| crate::tree::collect_pane_ids(&w.root))
+            .collect();
+        app.agent_toasts.forget_gone(&live);
+    }
+    let Some(toast) = app.agent_toasts.due(now) else {
+        return;
+    };
+    let pane_id = toast.pane_id;
+    if fire_toast_notification(&toast.title, &toast.body) {
+        app.agent_toasts.mark_fired(pane_id, now);
+    }
+}
+
+/// Shows the most important waiting agent toast before the server exits,
+/// ignoring rate limits and the in-flight slot.  The process is started on
+/// this thread, since `process::exit` would end a helper thread first.
+pub(crate) fn fire_last_agent_toast(app: &mut AppState) {
+    use crate::platform::HideWindowCommandExt;
+    let Some(toast) = app.agent_toasts.take_any() else {
+        return;
+    };
+    crate::proc_stats::record_spawn(crate::proc_stats::SpawnKind::Other);
+    let _ = toast_command(&toast.title, &toast.body)
+        .hide_window()
+        .spawn();
+}
+
 /// Fire a Windows toast notification via PowerShell.
 /// Spawns a detached process so it doesn't block the server loop.
-fn fire_toast_notification(title: &str, body: &str) {
-    // Skip if a previous notification is still in flight
+/// Returns false, showing nothing, while a previous toast is still in flight.
+fn fire_toast_notification(title: &str, body: &str) -> bool {
     if TOAST_IN_FLIGHT.swap(true, Ordering::AcqRel) {
-        return;
+        return false;
     }
     let mut cmd = toast_command(title, body);
     std::thread::spawn(move || {
@@ -80,6 +166,7 @@ fn fire_toast_notification(title: &str, body: &str) {
         let _ = cmd.hide_window().status();
         TOAST_IN_FLIGHT.store(false, Ordering::Release);
     });
+    true
 }
 
 /// Collect all leaf pane paths in tree order (for next/prev pane cycling).

@@ -83,6 +83,7 @@ fn test_list_returns_color_in_metadata() {
         cwd: None,
         title: None,
         shell_name: None,
+        program_status: None,
         metadata: Some(psmux::backend::protocol::AgentMetadata {
             name: Some("worker-1".into()),
             color: Some("blue".into()),

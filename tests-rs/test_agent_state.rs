@@ -1,0 +1,577 @@
+use super::*;
+
+fn report(parser: &mut vt100::Parser, body: &str) {
+    parser.process(format!("\x1b]7501;{body}\x1b\\").as_bytes());
+}
+
+fn label(cache: &AgentStateCache) -> &'static str {
+    state_label(cache.worst())
+}
+
+#[test]
+fn observe_when_first_report_then_transition_from_none() {
+    let mut parser = vt100::Parser::new(24, 80, 0);
+    let mut cache = AgentStateCache::default();
+    report(&mut parser, "state=working");
+    let t = cache.observe(parser.screen()).expect("transition");
+    assert_eq!(t.old, None);
+    assert_eq!(t.new, Some(ProgramState::Working));
+    assert_eq!(t.record_id, None);
+}
+
+#[test]
+fn observe_when_progress_only_changes_then_no_transition() {
+    let mut parser = vt100::Parser::new(24, 80, 0);
+    let mut cache = AgentStateCache::default();
+    report(&mut parser, "state=working:progress=10");
+    cache.observe(parser.screen());
+    report(&mut parser, "state=working:progress=50");
+    assert_eq!(cache.observe(parser.screen()), None);
+}
+
+#[test]
+fn observe_when_nothing_changed_then_no_transition() {
+    let mut parser = vt100::Parser::new(24, 80, 0);
+    let mut cache = AgentStateCache::default();
+    assert_eq!(cache.observe(parser.screen()), None);
+    report(&mut parser, "state=idle");
+    cache.observe(parser.screen());
+    assert_eq!(cache.observe(parser.screen()), None);
+}
+
+#[test]
+fn observe_when_child_blocked_then_transition_names_child() {
+    let mut parser = vt100::Parser::new(24, 80, 0);
+    let mut cache = AgentStateCache::default();
+    report(&mut parser, "state=working");
+    cache.observe(parser.screen());
+    report(&mut parser, "id=t1:state=blocked:kind=question");
+    let t = cache.observe(parser.screen()).expect("transition");
+    assert_eq!(t.old, Some(ProgramState::Working));
+    assert_eq!(t.new, Some(ProgramState::Blocked));
+    assert_eq!(t.record_id.as_deref(), Some("t1"));
+    assert_eq!(cache.root(), Some(ProgramState::Working));
+}
+
+#[test]
+fn worst_when_error_and_done_children_then_error() {
+    let mut parser = vt100::Parser::new(24, 80, 0);
+    let mut cache = AgentStateCache::default();
+    report(&mut parser, "state=idle");
+    report(&mut parser, "id=a:state=done");
+    report(&mut parser, "id=b:state=error");
+    cache.observe(parser.screen());
+    assert_eq!(label(&cache), "error");
+}
+
+#[test]
+fn observe_when_new_parser_seq_climbs_back_then_state_refreshes() {
+    let mut old = vt100::Parser::new(24, 80, 0);
+    let mut cache = AgentStateCache::default();
+    report(&mut old, "state=working");
+    report(&mut old, "state=working");
+    cache.observe(old.screen());
+    let mut new = vt100::Parser::new(24, 80, 0);
+    cache.parser_replaced();
+    report(&mut new, "state=idle");
+    report(&mut new, "state=idle");
+    assert_eq!(
+        new.screen().program_status_seq(),
+        old.screen().program_status_seq()
+    );
+    let t = cache.observe(new.screen()).expect("transition");
+    assert_eq!(t.new, Some(ProgramState::Idle));
+}
+
+#[test]
+fn parser_replaced_when_working_then_empty_and_transition_to_none() {
+    let mut parser = vt100::Parser::new(24, 80, 0);
+    let mut cache = AgentStateCache::default();
+    report(&mut parser, "state=working");
+    cache.observe(parser.screen());
+    cache.parser_replaced();
+    assert_eq!(label(&cache), "");
+    let fresh = vt100::Parser::new(24, 80, 0);
+    let t = cache.observe(fresh.screen()).expect("transition");
+    assert_eq!(t.old, Some(ProgramState::Working));
+    assert_eq!(t.new, None);
+    assert_eq!(label(&cache), "");
+}
+
+fn exit_and_refresh(parser: &mut vt100::Parser, cache: &mut AgentStateCache) {
+    parser.screen_mut().program_status_on_process_exit();
+    cache.refresh(parser.screen());
+}
+
+#[test]
+fn refresh_when_process_exits_while_working_then_empty() {
+    let mut parser = vt100::Parser::new(24, 80, 0);
+    let mut cache = AgentStateCache::default();
+    report(&mut parser, "state=working:msg=YWI=");
+    cache.observe(parser.screen());
+    exit_and_refresh(&mut parser, &mut cache);
+    assert_eq!(label(&cache), "");
+    assert_eq!(cache.details(), &AgentRecordDetails::default());
+}
+
+#[test]
+fn refresh_when_process_exits_while_blocked_then_empty() {
+    let mut parser = vt100::Parser::new(24, 80, 0);
+    let mut cache = AgentStateCache::default();
+    report(&mut parser, "state=blocked:kind=permission");
+    cache.observe(parser.screen());
+    exit_and_refresh(&mut parser, &mut cache);
+    assert_eq!(label(&cache), "");
+}
+
+#[test]
+fn refresh_when_process_exits_with_done_child_then_done_survives() {
+    let mut parser = vt100::Parser::new(24, 80, 0);
+    let mut cache = AgentStateCache::default();
+    report(&mut parser, "state=working");
+    report(&mut parser, "id=t1:state=done");
+    cache.observe(parser.screen());
+    exit_and_refresh(&mut parser, &mut cache);
+    assert_eq!(label(&cache), "done");
+}
+
+#[test]
+fn observe_after_exit_refresh_then_final_transition_still_reported() {
+    let mut parser = vt100::Parser::new(24, 80, 0);
+    let mut cache = AgentStateCache::default();
+    report(&mut parser, "state=working");
+    cache.observe(parser.screen());
+    exit_and_refresh(&mut parser, &mut cache);
+    let t = cache.observe(parser.screen()).expect("transition");
+    assert_eq!((t.old, t.new), (Some(ProgramState::Working), None));
+}
+
+#[test]
+fn observe_dead_when_report_parsed_after_exit_then_record_dropped_without_event() {
+    let mut parser = vt100::Parser::new(24, 80, 0);
+    let mut cache = AgentStateCache::default();
+    report(&mut parser, "state=working");
+    cache.observe(parser.screen());
+    exit_and_refresh(&mut parser, &mut cache);
+    cache.observe(parser.screen());
+    report(&mut parser, "state=working");
+    assert_eq!(cache.observe_dead(parser.screen_mut()), None);
+    assert_eq!(cache.worst(), None);
+}
+
+#[test]
+fn observe_dead_when_done_parsed_after_exit_then_done_reported() {
+    let mut parser = vt100::Parser::new(24, 80, 0);
+    let mut cache = AgentStateCache::default();
+    report(&mut parser, "state=working");
+    cache.observe(parser.screen());
+    exit_and_refresh(&mut parser, &mut cache);
+    cache.observe(parser.screen());
+    report(&mut parser, "state=done");
+    let t = cache.observe_dead(parser.screen_mut()).expect("transition");
+    assert_eq!((t.old, t.new), (None, Some(ProgramState::Done)));
+}
+
+/// Shape Claude Code 2.1.295 emits (tasklist section 0): root plus one child
+/// per background task.  Synthetic until a live capture replaces it.
+const CC_FIXTURE: &[&str] = &[
+    "state=working:app=claude-code:progress=10:title=UGxhbiByZWFkeQ==",
+    "state=blocked:id=t1:kind=permission:progress=40:title=UGxhbiByZWFkeQ==:msg=QXBwcm92ZSBwbGFuPw==",
+];
+
+#[test]
+fn details_when_cc_child_blocked_then_every_key_decoded() {
+    let mut parser = vt100::Parser::new(24, 80, 0);
+    let mut cache = AgentStateCache::default();
+    CC_FIXTURE.iter().for_each(|body| report(&mut parser, body));
+    let t = cache.observe(parser.screen()).expect("transition");
+    assert_eq!(t.record_id.as_deref(), Some("t1"));
+    let expected = AgentRecordDetails {
+        kind: Some(vt100::BlockedKind::Permission),
+        progress: Some(40),
+        app: "claude-code".into(),
+        title: "Plan ready".into(),
+        msg: "Approve plan?".into(),
+    };
+    assert_eq!(cache.details(), &expected);
+}
+
+#[test]
+fn details_when_cc_root_only_then_root_keys_decoded() {
+    let mut parser = vt100::Parser::new(24, 80, 0);
+    let mut cache = AgentStateCache::default();
+    report(&mut parser, CC_FIXTURE[0]);
+    cache.observe(parser.screen());
+    let d = cache.details();
+    assert_eq!(
+        (
+            d.kind,
+            d.progress,
+            d.app.as_str(),
+            d.title.as_str(),
+            d.msg.as_str()
+        ),
+        (None, Some(10), "claude-code", "Plan ready", "")
+    );
+}
+
+#[test]
+fn details_when_msg_has_rtl_override_then_override_removed() {
+    let mut parser = vt100::Parser::new(24, 80, 0);
+    let mut cache = AgentStateCache::default();
+    // "a\u{202E}b"
+    report(&mut parser, "state=blocked:msg=YeKArmI=");
+    cache.observe(parser.screen());
+    assert_eq!(cache.details().msg, "ab");
+}
+
+#[test]
+fn details_when_msg_longer_than_cap_then_truncated() {
+    let mut parser = vt100::Parser::new(24, 80, 0);
+    let mut cache = AgentStateCache::default();
+    let long = "eHh4".repeat(100); // "xxx" x 100
+    report(&mut parser, &format!("state=working:msg={long}"));
+    cache.observe(parser.screen());
+    assert_eq!(cache.details().msg, "x".repeat(MAX_TEXT_CHARS));
+}
+
+#[test]
+fn sanitize_text_when_hidden_format_chars_then_all_removed() {
+    let hidden = "\u{200B}\u{200F}\u{202A}\u{202E}\u{2066}\u{2069}\u{FEFF}";
+    assert_eq!(sanitize_text(&format!("o{hidden}k")), "ok");
+}
+
+#[test]
+fn parser_replaced_when_details_cached_then_details_empty() {
+    let mut parser = vt100::Parser::new(24, 80, 0);
+    let mut cache = AgentStateCache::default();
+    report(&mut parser, CC_FIXTURE[1]);
+    cache.observe(parser.screen());
+    cache.parser_replaced();
+    assert_eq!(cache.details(), &AgentRecordDetails::default());
+}
+
+/// Orchestrate splits `list-panes -F` output on `:`, so only the state
+/// label (a closed set) may ever be appended there, never msg/title/app.
+#[test]
+fn state_label_when_any_state_then_closed_set_without_colon() {
+    let states = [
+        None,
+        Some(ProgramState::Idle),
+        Some(ProgramState::Working),
+        Some(ProgramState::Done),
+        Some(ProgramState::Blocked),
+        Some(ProgramState::Error),
+    ];
+    for s in states {
+        assert!(!state_label(s).contains(':'));
+    }
+}
+
+const SILENT_NOW: u64 = 10_000 + OUTPUT_STABLE_MS;
+
+#[test]
+fn readiness_when_working_fed_on_silent_pane_then_working_reported() {
+    let mut parser = vt100::Parser::new(24, 80, 0);
+    let mut cache = AgentStateCache::default();
+    report(&mut parser, "state=working");
+    cache.observe(parser.screen());
+    let r = readiness_of(7, 10_000, SILENT_NOW, cache.worst());
+    assert_eq!(r.state, Some(ProgramState::Working));
+    assert_eq!(r.source, ReadinessSource::Reported);
+    assert!(!r.is_ready());
+}
+
+#[test]
+fn readiness_when_silent_and_unreported_then_idle_output_stable() {
+    let r = readiness_of(7, 10_000, SILENT_NOW, None);
+    assert_eq!(r.state, Some(ProgramState::Idle));
+    assert_eq!(r.source, ReadinessSource::OutputStable);
+    assert!(r.is_ready());
+}
+
+#[test]
+fn readiness_when_output_within_threshold_then_working_output_stable() {
+    let r = readiness_of(7, 10_000, SILENT_NOW - 1, None);
+    assert_eq!(r.state, Some(ProgramState::Working));
+    assert_eq!(r.source, ReadinessSource::OutputStable);
+    assert!(!r.is_ready());
+}
+
+#[test]
+fn readiness_when_no_output_yet_then_unknown() {
+    assert_eq!(readiness_of(0, 10_000, SILENT_NOW, None).state, None);
+    assert_eq!(readiness_of(7, 0, SILENT_NOW, None).state, None);
+    assert!(!readiness_of(0, 0, SILENT_NOW, None).is_ready());
+}
+
+#[test]
+fn readiness_when_reported_idle_during_output_then_ready() {
+    let r = readiness_of(7, SILENT_NOW, SILENT_NOW, Some(ProgramState::Idle));
+    assert_eq!(r.source, ReadinessSource::Reported);
+    assert!(r.is_ready());
+}
+
+#[test]
+fn readiness_when_blocked_reported_on_silent_pane_then_not_ready() {
+    let r = readiness_of(7, 10_000, SILENT_NOW, Some(ProgramState::Blocked));
+    assert_eq!(r.state, Some(ProgramState::Blocked));
+    assert_eq!(r.source, ReadinessSource::Reported);
+    assert!(!r.is_ready());
+}
+
+#[test]
+fn readiness_when_stale_done_or_error_on_silent_pane_then_idle_output_stable() {
+    for state in [ProgramState::Done, ProgramState::Error] {
+        let r = readiness_of(7, 10_000, SILENT_NOW, Some(state));
+        assert_eq!(r.state, Some(ProgramState::Idle), "{state:?}");
+        assert_eq!(r.source, ReadinessSource::OutputStable, "{state:?}");
+        assert!(r.is_ready(), "{state:?}");
+    }
+}
+
+#[test]
+fn readiness_when_done_record_and_fresh_output_then_working_output_stable() {
+    let r = readiness_of(7, SILENT_NOW, SILENT_NOW, Some(ProgramState::Done));
+    assert_eq!(r.state, Some(ProgramState::Working));
+    assert_eq!(r.source, ReadinessSource::OutputStable);
+}
+
+#[test]
+fn readiness_when_done_survives_process_exit_then_silence_decides() {
+    let mut parser = vt100::Parser::new(24, 80, 0);
+    let mut cache = AgentStateCache::default();
+    report(&mut parser, "state=done");
+    parser.screen_mut().program_status_on_process_exit();
+    cache.observe(parser.screen());
+    assert_eq!(cache.worst(), Some(ProgramState::Done));
+    assert!(readiness_of(7, 10_000, SILENT_NOW, cache.worst()).is_ready());
+}
+
+#[test]
+fn readiness_when_working_child_under_idle_root_then_not_ready() {
+    let mut parser = vt100::Parser::new(24, 80, 0);
+    let mut cache = AgentStateCache::default();
+    report(&mut parser, "state=idle");
+    report(&mut parser, "state=working:id=task1");
+    cache.observe(parser.screen());
+    assert_eq!(cache.root(), Some(ProgramState::Idle));
+    let r = readiness_of(7, 10_000, SILENT_NOW, cache.worst());
+    assert_eq!(r.state, Some(ProgramState::Working));
+    assert_eq!(r.source, ReadinessSource::Reported);
+    assert!(!r.is_ready());
+}
+
+#[test]
+fn readiness_when_working_root_and_error_child_on_silent_pane_then_working_reported() {
+    let mut parser = vt100::Parser::new(24, 80, 0);
+    let mut cache = AgentStateCache::default();
+    report(&mut parser, "state=working");
+    report(&mut parser, "id=t1:state=error");
+    cache.observe(parser.screen());
+    assert_eq!(cache.worst(), Some(ProgramState::Error));
+    let r = readiness_of(7, 10_000, SILENT_NOW, cache.activity());
+    assert_eq!(r.state, Some(ProgramState::Working));
+    assert_eq!(r.source, ReadinessSource::Reported);
+    assert!(!r.is_ready());
+}
+
+#[test]
+fn readiness_when_idle_root_and_done_child_with_fresh_output_then_idle_reported() {
+    let mut parser = vt100::Parser::new(24, 80, 0);
+    let mut cache = AgentStateCache::default();
+    report(&mut parser, "state=idle");
+    report(&mut parser, "id=t1:state=done");
+    cache.observe(parser.screen());
+    assert_eq!(cache.worst(), Some(ProgramState::Done));
+    let r = readiness_of(7, SILENT_NOW, SILENT_NOW, cache.activity());
+    assert_eq!(r.state, Some(ProgramState::Idle));
+    assert_eq!(r.source, ReadinessSource::Reported);
+    assert!(r.is_ready());
+}
+
+#[test]
+fn parser_replaced_when_activity_cached_then_activity_empty() {
+    let mut parser = vt100::Parser::new(24, 80, 0);
+    let mut cache = AgentStateCache::default();
+    report(&mut parser, "state=working");
+    cache.observe(parser.screen());
+    cache.parser_replaced();
+    assert_eq!(cache.activity(), None);
+}
+
+#[test]
+fn readiness_when_record_cleared_then_falls_back_to_silence() {
+    let mut parser = vt100::Parser::new(24, 80, 0);
+    let mut cache = AgentStateCache::default();
+    report(&mut parser, "state=working");
+    report(&mut parser, "state=clear");
+    cache.observe(parser.screen());
+    assert!(parser.screen().program_status_seen());
+    let r = readiness_of(7, 10_000, SILENT_NOW, cache.worst());
+    assert_eq!(r.source, ReadinessSource::OutputStable);
+    assert!(r.is_ready());
+}
+
+#[test]
+fn source_label_when_each_source_then_closed_set() {
+    assert_eq!(source_label(ReadinessSource::Reported), "reported");
+    assert_eq!(source_label(ReadinessSource::OutputStable), "output_stable");
+}
+
+// ─── 04a: transitions feed the state_changed / psmux/pane/status events ─────
+
+fn transitions(parser: &mut vt100::Parser, bodies: &[&str]) -> Vec<AgentTransition> {
+    let mut cache = AgentStateCache::default();
+    let mut out = Vec::new();
+    for body in bodies {
+        report(parser, body);
+        out.extend(cache.observe(parser.screen()));
+        out.extend(cache.observe(parser.screen()));
+    }
+    out
+}
+
+#[test]
+fn observe_when_working_idle_working_then_exactly_three_transitions() {
+    let mut parser = vt100::Parser::new(24, 80, 0);
+    let seen = transitions(
+        &mut parser,
+        &["state=working", "state=idle", "state=working"],
+    );
+    let states: Vec<_> = seen.iter().map(|t| (t.old, t.new)).collect();
+    assert_eq!(
+        states,
+        vec![
+            (None, Some(ProgramState::Working)),
+            (Some(ProgramState::Working), Some(ProgramState::Idle)),
+            (Some(ProgramState::Idle), Some(ProgramState::Working)),
+        ]
+    );
+}
+
+#[test]
+fn observe_when_plain_output_bursts_then_no_transition() {
+    let mut parser = vt100::Parser::new(24, 80, 0);
+    let mut cache = AgentStateCache::default();
+    for _ in 0..10 {
+        parser.process(b"compiling...\r\n");
+        assert_eq!(cache.observe(parser.screen()), None);
+    }
+}
+
+#[test]
+fn observe_when_child_blocks_then_transition_carries_kind_and_inherited_app() {
+    let mut parser = vt100::Parser::new(24, 80, 0);
+    let seen = transitions(&mut parser, &[CC_FIXTURE[0], CC_FIXTURE[1]]);
+    let last = seen.last().expect("transition");
+    assert_eq!(last.new, Some(ProgramState::Blocked));
+    assert_eq!(last.record_id.as_deref(), Some("t1"));
+    assert_eq!(last.details.kind, Some(vt100::BlockedKind::Permission));
+    assert_eq!(last.details.app, "claude-code");
+}
+
+/// What `tree::end_agent_run` does on exit: the exit rule, a refresh, then
+/// one observe whose result becomes the final event.
+fn exit_and_observe(
+    parser: &mut vt100::Parser,
+    cache: &mut AgentStateCache,
+) -> Option<AgentTransition> {
+    exit_and_refresh(parser, cache);
+    cache.observe(parser.screen())
+}
+
+#[test]
+fn exit_when_done_reported_within_one_tick_then_final_event_is_done() {
+    let mut parser = vt100::Parser::new(24, 80, 0);
+    let mut cache = AgentStateCache::default();
+    report(&mut parser, "state=working");
+    cache.observe(parser.screen());
+    report(&mut parser, "state=done");
+    let t = exit_and_observe(&mut parser, &mut cache).expect("final event");
+    assert_eq!(
+        (t.old, t.new),
+        (Some(ProgramState::Working), Some(ProgramState::Done))
+    );
+    assert_eq!(
+        cache.observe(parser.screen()),
+        None,
+        "next tick repeats nothing"
+    );
+}
+
+#[test]
+fn exit_when_state_already_reported_then_no_duplicate_event() {
+    let mut parser = vt100::Parser::new(24, 80, 0);
+    let mut cache = AgentStateCache::default();
+    report(&mut parser, "state=done");
+    cache.observe(parser.screen());
+    assert_eq!(exit_and_observe(&mut parser, &mut cache), None);
+}
+
+#[test]
+fn exit_when_working_then_final_event_clears_details() {
+    let mut parser = vt100::Parser::new(24, 80, 0);
+    let mut cache = AgentStateCache::default();
+    report(&mut parser, "state=working:app=pi");
+    cache.observe(parser.screen());
+    let t = exit_and_observe(&mut parser, &mut cache).expect("final event");
+    assert_eq!(t.new, None);
+    assert_eq!(t.details, AgentRecordDetails::default());
+}
+
+#[test]
+fn worst_of_when_every_state_present_then_blocked() {
+    use ProgramState::*;
+    let all = [
+        Some(Idle),
+        Some(Done),
+        None,
+        Some(Working),
+        Some(Blocked),
+        Some(Error),
+    ];
+    assert_eq!(worst_of(all), Some(Blocked));
+}
+
+#[test]
+fn worst_of_when_error_and_working_then_error() {
+    use ProgramState::*;
+    assert_eq!(
+        worst_of([Some(Working), Some(Error), Some(Done)]),
+        Some(Error)
+    );
+}
+
+#[test]
+fn worst_of_when_working_and_done_then_working() {
+    use ProgramState::*;
+    assert_eq!(
+        worst_of([Some(Done), Some(Idle), Some(Working)]),
+        Some(Working)
+    );
+}
+
+#[test]
+fn worst_of_when_no_state_then_none() {
+    assert_eq!(worst_of([None, None]), None);
+    assert_eq!(worst_of(std::iter::empty()), None);
+}
+
+#[test]
+fn worst_label_when_unknown_labels_then_ignored() {
+    assert_eq!(worst_label(["", "#{pane_agent_state}", "done"]), "done");
+    assert_eq!(worst_label(["", "bogus"]), "");
+}
+
+#[test]
+fn state_glyph_when_each_state_then_one_distinct_char() {
+    let states = ["idle", "working", "done", "blocked", "error"];
+    let glyphs: Vec<&str> = states.iter().map(|s| state_glyph(parse_state(s))).collect();
+    for g in &glyphs {
+        assert_eq!(g.chars().count(), 1, "glyph {g:?}");
+    }
+    let unique: std::collections::HashSet<_> = glyphs.iter().collect();
+    assert_eq!(unique.len(), glyphs.len());
+    assert_eq!(state_glyph(None), "");
+}

@@ -401,3 +401,70 @@ fn test_appstate_defaults_update_environment() {
         .update_environment
         .contains(&"SSH_AGENT_PID".to_string()));
 }
+
+fn agent_state_after(
+    parser: &mut vt100::Parser,
+    cache: &mut crate::agent_state::AgentStateCache,
+    body: &str,
+) -> &'static str {
+    parser.process(format!("\x1b]7501;{body}\x1b\\").as_bytes());
+    cache.observe(parser.screen());
+    crate::agent_state::state_label(cache.worst())
+}
+
+#[test]
+fn pane_agent_state_when_working_then_idle_then_clear_then_empty() {
+    let mut parser = vt100::Parser::new(24, 80, 0);
+    let mut cache = crate::agent_state::AgentStateCache::default();
+    assert_eq!(
+        agent_state_after(&mut parser, &mut cache, "state=working"),
+        "working"
+    );
+    assert_eq!(
+        agent_state_after(&mut parser, &mut cache, "state=idle"),
+        "idle"
+    );
+    assert_eq!(
+        agent_state_after(&mut parser, &mut cache, "state=clear"),
+        ""
+    );
+}
+
+#[test]
+fn pane_agent_state_when_child_blocked_under_working_root_then_blocked() {
+    let mut parser = vt100::Parser::new(24, 80, 0);
+    let mut cache = crate::agent_state::AgentStateCache::default();
+    agent_state_after(&mut parser, &mut cache, "state=working");
+    assert_eq!(
+        agent_state_after(&mut parser, &mut cache, "id=t1:state=blocked"),
+        "blocked"
+    );
+}
+
+#[test]
+fn pane_agent_state_when_no_pane_then_empty() {
+    let app = mock_app();
+    assert_eq!(expand_expression("pane_agent_state", &app, 0), "");
+}
+
+#[test]
+fn pane_agent_detail_vars_when_no_pane_then_empty() {
+    let app = mock_app();
+    for var in [
+        "pane_agent_kind",
+        "pane_agent_progress",
+        "pane_agent_app",
+        "pane_agent_title",
+        "pane_agent_msg",
+        "pane_agent_source",
+        "pane_agent_readiness",
+    ] {
+        assert_eq!(expand_expression(var, &app, 0), "", "{var}");
+    }
+}
+
+#[test]
+fn window_agent_state_when_no_window_then_empty() {
+    let app = mock_app();
+    assert_eq!(expand_expression("window_agent_state", &app, 0), "");
+}
