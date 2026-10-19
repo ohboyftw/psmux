@@ -1290,6 +1290,11 @@ pub enum CtrlReq {
     /// effect of focusing the pane. `display-message` must not do that: its
     /// `#{pane_active}` has to keep reporting the REAL active pane (#113).
     PaneExists(usize, mpsc::Sender<bool>),
+    /// Resolve a `-t` window to its display index (base-index applied).
+    ///
+    /// The pane id, when the target also gave one (`sess:@2.%7`), must live in
+    /// that window. The error says which half failed, so the reply can name it.
+    ResolveWindow(WindowSpec, Option<usize>, mpsc::Sender<Result<usize, TargetKind>>),
     LastWindow,
     LastPane,
     RotateWindow(bool),
@@ -1778,6 +1783,72 @@ pub struct ParsedTarget {
     pub window_unresolved: bool,
     /// As `window_unresolved`, for the pane part.
     pub pane_unresolved: bool,
+    /// The window slot named a window by name (`sess:w2`). Only the server can
+    /// say whether such a window exists, so this is not an error here.
+    pub window_name: Option<String>,
+}
+
+impl ParsedTarget {
+    /// The window this target names, if it names one at all.
+    ///
+    /// `window` alone cannot answer this: an id and an index are both a
+    /// `usize` in it, and `window_is_id` told them apart only for callers that
+    /// checked it. None did, so `-t @2` was read as window INDEX 2 (#627).
+    pub fn window_spec(&self) -> Option<WindowSpec> {
+        if let Some(name) = &self.window_name {
+            return Some(WindowSpec::Name(name.clone()));
+        }
+        match self.window {
+            Some(id) if self.window_is_id => Some(WindowSpec::Id(id)),
+            Some(idx) => Some(WindowSpec::Index(idx)),
+            None => None,
+        }
+    }
+}
+
+/// How a `-t` names a window: `sess:1`, `sess:@2` or `sess:w2`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum WindowSpec {
+    /// A window index as tmux shows it, counted from `base-index`.
+    Index(usize),
+    /// A window id, the `N` of `@N`.
+    Id(usize),
+    /// A window name, matched exactly.
+    Name(String),
+}
+
+impl WindowSpec {
+    /// Find the window this names, as a position in the server's window list.
+    ///
+    /// `windows` yields `(id, name)` in list order. `None` means no window
+    /// matches, or a name matches more than one: picking one of two windows
+    /// called "sh" would act on a window by luck, and tmux refuses it too.
+    pub fn resolve<'a>(
+        &self,
+        windows: impl IntoIterator<Item = (usize, &'a str)>,
+        base_index: usize,
+    ) -> Option<usize> {
+        let mut windows = windows.into_iter();
+        match self {
+            WindowSpec::Index(idx) => {
+                let pos = idx.checked_sub(base_index)?;
+                windows.nth(pos).map(|_| pos)
+            }
+            WindowSpec::Id(id) => windows.position(|(wid, _)| wid == *id),
+            WindowSpec::Name(name) => {
+                let mut hits = windows
+                    .enumerate()
+                    .filter(|(_, (_, wname))| *wname == name.as_str())
+                    .map(|(pos, _)| pos);
+                let first = hits.next()?;
+                if hits.next().is_some() {
+                    None
+                } else {
+                    Some(first)
+                }
+            }
+        }
+    }
 }
 
 #[cfg(test)]

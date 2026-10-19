@@ -5,7 +5,7 @@ use std::sync::mpsc;
 use std::time::Duration;
 
 use crate::cli::parse_target;
-use crate::types::{CtrlReq, DisplayTarget, LayoutKind, TargetKind, WaitForOp};
+use crate::types::{CtrlReq, DisplayTarget, LayoutKind, TargetKind, WaitForOp, WindowSpec};
 use crate::util::base64_decode;
 
 static NEXT_CLIENT_ID: AtomicU64 = AtomicU64::new(1);
@@ -113,7 +113,8 @@ pub(crate) fn handle_connection(
     // Check for PERSISTENT flag and optional TARGET line
     let mut persistent = false;
     let mut resp_tx_opt: Option<mpsc::Sender<mpsc::Receiver<String>>> = None;
-    let mut global_target_win: Option<usize> = None;
+    let mut global_window_spec: Option<WindowSpec> = None;
+    let mut global_unresolved: Option<TargetKind> = None;
     let mut global_target_pane: Option<usize> = None;
     let mut global_pane_is_id = false;
     let mut line = String::new();
@@ -205,8 +206,13 @@ pub(crate) fn handle_connection(
         let target_spec = line.trim().strip_prefix("TARGET ").unwrap_or("");
         global_raw_target = Some(target_spec.to_string());
         let parsed = parse_target(target_spec);
-        global_target_win = parsed.window;
+        global_window_spec = parsed.window_spec();
         global_target_pane = parsed.pane;
+        if parsed.window_unresolved {
+            global_unresolved = Some(TargetKind::Window);
+        } else if parsed.pane_unresolved {
+            global_unresolved = Some(TargetKind::Pane);
+        }
         global_pane_is_id = parsed.pane_is_id;
         // Now read the actual command line
         line.clear();
@@ -267,7 +273,7 @@ pub(crate) fn handle_connection(
         };
 
         // Parse -t argument from command line (takes precedence over global TARGET)
-        let mut target_win: Option<usize> = global_target_win;
+        let mut window_spec: Option<WindowSpec> = global_window_spec.clone();
         let mut target_pane: Option<usize> = global_target_pane;
         let mut pane_is_id = global_pane_is_id;
         // Save raw -t value for relative pane targets like :.+ or :.-
@@ -275,7 +281,8 @@ pub(crate) fn handle_connection(
         let mut raw_target: Option<String> = global_raw_target.clone();
         // A target part that was GIVEN but does not resolve — as opposed to one
         // that was omitted, which legitimately means "current".
-        let mut unresolved_target: Option<(TargetKind, String)> = None;
+        let mut unresolved_target: Option<(TargetKind, String)> =
+            global_unresolved.map(|k| (k, global_raw_target.clone().unwrap_or_default()));
         // A bare `--` ends flag parsing. A `-t` after it belongs to the operand
         // — a send-keys payload, or the command line behind `exec -t %N --` —
         // and consuming it there silently ate two tokens out of that operand.
@@ -288,18 +295,21 @@ pub(crate) fn handle_connection(
                     raw_target = Some(v.to_string());
                     // Parse the -t value using parse_target for consistent handling
                     let pt = parse_target(v);
-                    if pt.window.is_some() {
-                        target_win = pt.window;
+                    if let Some(spec) = pt.window_spec() {
+                        window_spec = Some(spec);
                     }
                     if pt.pane.is_some() {
                         target_pane = pt.pane;
                         pane_is_id = pt.pane_is_id;
                     }
-                    if pt.window_unresolved {
-                        unresolved_target = Some((TargetKind::Window, v.to_string()));
+                    // This -t replaces the TARGET line's verdict, good or bad.
+                    unresolved_target = if pt.window_unresolved {
+                        Some((TargetKind::Window, v.to_string()))
                     } else if pt.pane_unresolved {
-                        unresolved_target = Some((TargetKind::Pane, v.to_string()));
-                    }
+                        Some((TargetKind::Pane, v.to_string()))
+                    } else {
+                        None
+                    };
                 }
                 i += 2;
                 continue;
@@ -320,6 +330,54 @@ pub(crate) fn handle_connection(
             }
             filtered
         };
+        // detach-client's `-t` names a CLIENT, so pane/window syntax does not
+        // apply to it at all (98a9188).
+        let target_names_a_client = matches!(cmd, "detach-client" | "detach");
+        // switch-client's `-t` names the DESTINATION session, but this
+        // connection is the source session's server (#202), so a window in it
+        // cannot be looked up here.
+        let target_is_not_ours =
+            target_names_a_client || matches!(cmd, "switch-client" | "switchc");
+        // Resolve the window HERE, against the real window list. It used to be
+        // a bare number handed to FocusWindowTemp, which read every number as
+        // an index: `-t @2` meant index 2, and when no such index existed the
+        // focus did nothing and the command ran on the ACTIVE window, exit 0.
+        // A name was never looked up at all (#627).
+        let mut target_win: Option<usize> = None;
+        let resolve_spec = match &window_spec {
+            Some(spec) if unresolved_target.is_none() && !target_is_not_ours => Some(spec.clone()),
+            _ => None,
+        };
+        if let Some(spec) = resolve_spec {
+            // These create or move a window AT an index, so the index need
+            // not exist yet. An id or a name still has to.
+            let index_may_be_new = matches!(
+                cmd,
+                "new-window"
+                    | "neww"
+                    | "move-window"
+                    | "movew"
+                    | "link-window"
+                    | "linkw"
+                    | "break-pane"
+                    | "breakp"
+            );
+            match spec {
+                WindowSpec::Index(idx) if index_may_be_new => target_win = Some(idx),
+                spec => {
+                    let pane_id = if pane_is_id { target_pane } else { None };
+                    let (rtx, rrx) = mpsc::channel();
+                    let _ = tx.send(CtrlReq::ResolveWindow(spec, pane_id, rtx));
+                    let raw = raw_target.clone().unwrap_or_default();
+                    match rrx.recv_timeout(Duration::from_secs(2)) {
+                        Ok(Ok(display_idx)) => target_win = Some(display_idx),
+                        Ok(Err(kind)) => unresolved_target = Some((kind, raw)),
+                        // A server too busy to answer has not resolved it.
+                        Err(_) => unresolved_target = Some((TargetKind::Window, raw)),
+                    }
+                }
+            }
+        }
         // A `-t` that names something which cannot exist is an error, not a
         // reason to fall back. Dropping it is how `-t sess:nosuchwindow` came to
         // run against whatever window was ACTIVE and still exit 0.
@@ -327,7 +385,7 @@ pub(crate) fn handle_connection(
         // detach-client is exempt: its `-t` names a CLIENT, not a pane or a
         // window, so pane/window syntax does not apply to it (98a9188).
         if let Some((kind, raw)) = &unresolved_target {
-            if !matches!(cmd, "detach-client" | "detach") {
+            if !target_names_a_client {
                 let prefix = match *kind {
                     TargetKind::Window => crate::types::UNRESOLVED_WINDOW_PREFIX,
                     TargetKind::Pane => crate::types::UNRESOLVED_PANE_PREFIX,

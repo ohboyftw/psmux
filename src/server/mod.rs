@@ -1165,13 +1165,18 @@ pub fn run_server(
                             | CtrlReq::SendKey(_)
                             | CtrlReq::SendPaste(_)
                             | CtrlReq::SendKeysHex(_)
+                            | CtrlReq::ResolveWindow(..)
                     );
+                    // ResolveWindow is a read-only lookup that precedes a temp
+                    // focus. It must not end one already in flight, or a
+                    // concurrent `-t` command would run on the restored window.
                     let is_temp_focus = matches!(
                         &req,
                         CtrlReq::FocusWindowTemp(_)
                             | CtrlReq::FocusPaneTemp(_)
                             | CtrlReq::FocusPaneTempCheck(..)
                             | CtrlReq::FocusPaneByIndexTemp(_)
+                            | CtrlReq::ResolveWindow(..)
                     );
                     let mut hook_event: Option<&str> = None;
                     // Track active_idx changes for debugging window-switch issues
@@ -3879,6 +3884,22 @@ pub fn run_server(
                         }
                         CtrlReq::PaneExists(pid, resp) => {
                             let _ = resp.send(crate::tree::find_pane_location(&app, pid).is_some());
+                        }
+                        CtrlReq::ResolveWindow(spec, pane_id, resp) => {
+                            let windows = app.windows.iter().map(|w| (w.id, w.name.as_str()));
+                            let result = match spec.resolve(windows, app.window_base_index) {
+                                None => Err(crate::types::TargetKind::Window),
+                                Some(pos) => match pane_id {
+                                    Some(pid) => match crate::tree::find_pane_location(&app, pid) {
+                                        Some((wi, _)) if wi == pos => {
+                                            Ok(pos + app.window_base_index)
+                                        }
+                                        _ => Err(crate::types::TargetKind::Pane),
+                                    },
+                                    None => Ok(pos + app.window_base_index),
+                                },
+                            };
+                            let _ = resp.send(result);
                         }
                         CtrlReq::LastWindow => {
                             if app.windows.len() > 1 && app.last_window_idx < app.windows.len() {
