@@ -3,11 +3,15 @@ name: CI
 on:
   push:
     branches:
+      - ohboy-builds
       - master
   pull_request:
-    branches:
-      - master
   workflow_dispatch:
+
+# A newer push to the same branch or PR replaces the run in progress.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
 
 permissions:
   contents: read
