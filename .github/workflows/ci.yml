@@ -65,6 +65,15 @@ jobs:
         run: cargo test --test control_mode_contracts
       - name: Passthrough tests
         run: cargo test --test passthrough_tests
+      # #(command) tests run Windows PowerShell under psmux's 2 s status timeout;
+      # its first start on a fresh runner can take longer than that.
+      - name: Warm up Windows PowerShell
+        shell: pwsh
+        run: |
+          1..3 | ForEach-Object {
+            $ms = (Measure-Command { powershell -NoProfile -NonInteractive -Command 'echo hello' | Out-Null }).TotalMilliseconds
+            "powershell start $_ : $([int]$ms) ms"
+          }
       - name: Unit tests
         run: cargo test
 
