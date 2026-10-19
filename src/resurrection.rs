@@ -68,16 +68,20 @@ pub fn resurrect_dir(custom: Option<&str>) -> PathBuf {
     PathBuf::from(crate::paths::psmux_dir()).join("resurrect")
 }
 
-/// Atomically save `snap` as `<session_name>.json` inside `dir`.
+/// Atomically save `snap` into `dir` under `stem` (`<stem>.json`).
 ///
 /// The write goes to a `.json.tmp` file first, then is renamed into place.
 /// On `PermissionDenied` the rename is retried once after a short sleep
 /// (Windows antivirus scanners can briefly lock newly-created files).
-pub fn save_snapshot_to(snap: &SessionSnapshot, dir: &Path) -> io::Result<()> {
+///
+/// `stem` is the namespace-qualified base (see [`snapshot_stem`]) — it is
+/// deliberately independent of `snap.session_name` so a server under
+/// `-L ns` can store session `work` as `ns__work.json`.
+pub fn save_snapshot_as(snap: &SessionSnapshot, dir: &Path, stem: &str) -> io::Result<()> {
     fs::create_dir_all(dir)?;
 
-    let final_path = dir.join(format!("{}.json", snap.session_name));
-    let tmp_path = dir.join(format!("{}.json.tmp", snap.session_name));
+    let final_path = dir.join(format!("{}.json", stem));
+    let tmp_path = dir.join(format!("{}.json.tmp", stem));
 
     let json = serde_json::to_string_pretty(snap)
         .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
@@ -92,6 +96,14 @@ pub fn save_snapshot_to(snap: &SessionSnapshot, dir: &Path) -> io::Result<()> {
         }
         Err(e) => Err(e),
     }
+}
+
+/// Atomically save `snap` as `<session_name>.json` inside `dir`.
+///
+/// Legacy entry point: derives the file stem from `snap.session_name`.
+/// The server saves through [`save_snapshot`] which namespaces the stem.
+pub fn save_snapshot_to(snap: &SessionSnapshot, dir: &Path) -> io::Result<()> {
+    save_snapshot_as(snap, dir, &snap.session_name)
 }
 
 /// Load a previously saved snapshot for `session_name` from `dir`.
@@ -153,6 +165,37 @@ pub fn list_resurrectable(dir: &Path) -> Vec<String> {
 pub fn delete_snapshot(session_name: &str, dir: &Path) -> io::Result<()> {
     let path = dir.join(format!("{session_name}.json"));
     fs::remove_file(path)
+}
+
+// ---------------------------------------------------------------------------
+// Namespace stems
+// ---------------------------------------------------------------------------
+
+/// Snapshot file stem for a session under an optional `-L` namespace.
+///
+/// A snapshot must only be visible to the namespace that owns the session:
+/// `list-sessions` on a brand-new isolated `-L` server used to print every
+/// dead session's snapshot from every other server. The stem mirrors
+/// `AppState::port_file_base` (`Some(ns)` → `ns__<name>`, `None` → `<name>`)
+/// so a snapshot is listed, loaded and deleted through the same `-L` that
+/// its port file lives under.
+pub fn snapshot_stem(session_name: &str, namespace: Option<&str>) -> String {
+    match namespace {
+        Some(ns) => format!("{}__{}", ns, session_name),
+        None => session_name.to_string(),
+    }
+}
+
+/// True when a snapshot stem is visible to the given `-L` namespace filter.
+///
+/// Mirrors the port-file filter in `list-sessions`: with a namespace, only
+/// stems carrying that prefix are visible; without one, only stems with no
+/// namespace prefix at all.
+pub fn stem_visible_in_namespace(stem: &str, namespace: Option<&str>) -> bool {
+    match namespace {
+        Some(ns) => stem.starts_with(&format!("{}__", ns)),
+        None => !stem.contains("__"),
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -297,44 +340,112 @@ pub fn apply_snapshot(
 /// small metadata), then sent to a background writer thread.  Rapid
 /// structural changes (split → resize → split) coalesce: the writer uses a
 /// 100ms debounce so at most ~10 writes/sec hit disk.
+///
+/// The file is stored under the session's namespace-qualified stem
+/// (`AppState::port_file_base`) so a snapshot is only ever visible to the
+/// `-L` namespace that owns the session.
 pub fn save_snapshot(app: &AppState) {
     let snap = build_snapshot(app);
     let dir = resurrect_dir(app.resurrect_dir.as_deref());
-    spawn_or_send(snap, dir);
+    let stem = app.port_file_base();
+    spawn_or_send(snap, dir, stem);
+}
+
+/// Message to the background snapshot writer thread.
+enum SnapshotMsg {
+    Save(SessionSnapshot, PathBuf, String),
+    Delete(PathBuf, String, Option<std::sync::mpsc::Sender<()>>),
+}
+
+/// Coalesce queued saves (keep the newest) and collect queued deletions so
+/// they are applied after the write — a save enqueued before a delete can
+/// never resurrect the file.
+fn drain_writes(
+    rx: &std::sync::mpsc::Receiver<SnapshotMsg>,
+    snap: &mut SessionSnapshot,
+    dir: &mut PathBuf,
+    stem: &mut String,
+    deletions: &mut Vec<(PathBuf, String, Option<std::sync::mpsc::Sender<()>>)>,
+) {
+    loop {
+        match rx.try_recv() {
+            Ok(SnapshotMsg::Save(s, d, st)) => {
+                *snap = s;
+                *dir = d;
+                *stem = st;
+            }
+            Ok(SnapshotMsg::Delete(d, st, ack)) => deletions.push((d, st, ack)),
+            Err(_) => break,
+        }
+    }
+}
+
+fn spawn_or_send(snap: SessionSnapshot, dir: PathBuf, stem: String) {
+    let tx = writer_tx();
+    // Best-effort: if the channel is disconnected, silently drop.
+    let _ = tx.send(SnapshotMsg::Save(snap, dir, stem));
 }
 
 /// Lazily initialized channel to the background snapshot writer thread.
-static SNAPSHOT_TX: std::sync::OnceLock<std::sync::mpsc::Sender<(SessionSnapshot, PathBuf)>> =
-    std::sync::OnceLock::new();
-
-fn spawn_or_send(snap: SessionSnapshot, dir: PathBuf) {
-    let tx = SNAPSHOT_TX.get_or_init(|| {
-        let (tx, rx) = std::sync::mpsc::channel::<(SessionSnapshot, PathBuf)>();
+fn writer_tx() -> std::sync::mpsc::Sender<SnapshotMsg> {
+    static SNAPSHOT_TX: std::sync::OnceLock<std::sync::mpsc::Sender<SnapshotMsg>> =
+        std::sync::OnceLock::new();
+    SNAPSHOT_TX.get_or_init(|| {
+        let (tx, rx) = std::sync::mpsc::channel::<SnapshotMsg>();
         thread::Builder::new()
             .name("snapshot-writer".into())
             .spawn(move || {
-                // Debounce: drain all pending snapshots, write only the latest.
-                while let Ok((mut snap, mut dir)) = rx.recv() {
-                    // Drain any queued snapshots (keep the newest)
-                    while let Ok((s, d)) = rx.try_recv() {
-                        snap = s;
-                        dir = d;
+                // Debounce: drain all pending snapshots, write only the newest.
+                while let Ok(msg) = rx.recv() {
+                    match msg {
+                        SnapshotMsg::Save(mut snap, mut dir, mut stem) => {
+                            let mut deletions = Vec::new();
+                            drain_writes(&rx, &mut snap, &mut dir, &mut stem, &mut deletions);
+                            // Small delay to coalesce rapid changes
+                            thread::sleep(Duration::from_millis(100));
+                            // Drain again after the delay
+                            drain_writes(&rx, &mut snap, &mut dir, &mut stem, &mut deletions);
+                            let _ = save_snapshot_as(&snap, &dir, &stem);
+                            for (d, st, ack) in deletions {
+                                let _ = fs::remove_file(d.join(format!("{}.json", st)));
+                                if let Some(ack) = ack {
+                                    let _ = ack.send(());
+                                }
+                            }
+                        }
+                        SnapshotMsg::Delete(dir, stem, ack) => {
+                            // The Save branch has already finished when this
+                            // runs, so this can only remove the file, never
+                            // race a write.
+                            let _ = fs::remove_file(dir.join(format!("{}.json", stem)));
+                            if let Some(ack) = ack {
+                                let _ = ack.send(());
+                            }
+                        }
                     }
-                    // Small delay to coalesce rapid changes
-                    thread::sleep(Duration::from_millis(100));
-                    // Drain again after the delay
-                    while let Ok((s, d)) = rx.try_recv() {
-                        snap = s;
-                        dir = d;
-                    }
-                    let _ = save_snapshot_to(&snap, &dir);
                 }
             })
             .expect("failed to spawn snapshot writer thread");
         tx
-    });
-    // Best-effort: if the channel is disconnected, silently drop.
-    let _ = tx.send((snap, dir));
+    })
+    .clone()
+}
+
+/// Delete a snapshot synchronously, from the server's shutdown paths.
+///
+/// A deliberately ended session (kill-session, kill-server) is not
+/// resurrectable: its snapshot must go, and a save already queued (or in
+/// the writer's debounce window) must not re-create it afterwards. Both
+/// are serialized through the writer thread, so this waits for the
+/// deletion to be applied (bounded — a stuck writer never blocks exit).
+pub fn delete_snapshot_sync(stem: &str, dir: &Path) {
+    let (tx, rx) = std::sync::mpsc::channel::<()>();
+    let _ = writer_tx().send(SnapshotMsg::Delete(
+        dir.to_path_buf(),
+        stem.to_string(),
+        Some(tx),
+    ));
+    let _ = rx.recv_timeout(Duration::from_secs(2));
 }
 
 // ---------------------------------------------------------------------------
@@ -460,5 +571,64 @@ mod test_snapshot_pruning {
 
         assert!(dir.join("notes.txt").exists(), "non-.json must be ignored");
         assert!(list_resurrectable(&dir).is_empty(), "snapshots pruned to 0");
+    }
+}
+
+#[cfg(test)]
+mod test_namespace_hygiene {
+    use super::*;
+
+    #[test]
+    fn snapshot_stems_mirror_port_file_bases() {
+        // The stem must be byte-identical to the session's port-file base so a
+        // snapshot is visible under the same -L that owns the session.
+        assert_eq!(snapshot_stem("work", None), "work");
+        assert_eq!(snapshot_stem("work", Some("bench")), "bench__work");
+    }
+
+    #[test]
+    fn namespace_visibility_mirrors_the_port_file_filter() {
+        // With -L: only that namespace's stems are visible.
+        assert!(stem_visible_in_namespace("bench__work", Some("bench")));
+        assert!(!stem_visible_in_namespace("other__work", Some("bench")));
+        assert!(!stem_visible_in_namespace("work", Some("bench")));
+        // Without -L: only unprefixed stems are visible.
+        assert!(stem_visible_in_namespace("work", None));
+        assert!(!stem_visible_in_namespace("bench__work", None));
+    }
+
+    #[test]
+    fn a_namespaced_snapshot_is_saved_listed_and_loaded_through_its_stem() {
+        let dir = std::env::temp_dir().join("psmux_resurrection_ns_stem_test");
+        if dir.exists() {
+            fs::remove_dir_all(&dir).expect("clean pre-existing temp dir");
+        }
+        fs::create_dir_all(&dir).expect("create temp dir");
+
+        let snap = SessionSnapshot {
+            version: 1,
+            session_name: "work".into(),
+            timestamp: 1,
+            windows: vec![],
+            active_window_idx: 0,
+        };
+        let stem = snapshot_stem(&snap.session_name, Some("bench"));
+        save_snapshot_as(&snap, &dir, &stem).expect("save under namespace stem");
+
+        // Listed under the stem only — a different namespace (or none) must
+        // not see it.
+        assert_eq!(list_resurrectable(&dir), vec!["bench__work".to_string()]);
+        assert!(!stem_visible_in_namespace(
+            &list_resurrectable(&dir)[0],
+            Some("other"),
+        ));
+        // The bare name does not reach a namespaced snapshot.
+        assert!(load_snapshot_from("work", &dir).is_err());
+        let loaded = load_snapshot_from(&stem, &dir).expect("load through stem");
+        assert_eq!(loaded.session_name, "work");
+
+        delete_snapshot(&stem, &dir).expect("delete through stem");
+        assert!(list_resurrectable(&dir).is_empty());
+        fs::remove_dir_all(&dir).ok();
     }
 }

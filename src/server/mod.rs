@@ -413,6 +413,12 @@ fn unregister_and_exit(app: &mut AppState) -> ! {
     let _ = std::fs::remove_file(crate::paths::key_file(&base));
     let _ = std::fs::remove_file(crate::paths::version_file(&base));
     let _ = std::fs::remove_file(crate::paths::pipe_file(&base));
+    // kill-server ends the session deliberately, so like kill-session it
+    // must not strand a `(resurrectable)` snapshot behind.
+    crate::resurrection::delete_snapshot_sync(
+        &base,
+        &crate::resurrection::resurrect_dir(app.resurrect_dir.as_deref()),
+    );
     crate::types::shutdown_persistent_streams();
     tree::kill_all_children_batch(&mut app.windows);
     // process::exit skips Drop, so the warm pane's child is ended by hand.
@@ -3563,6 +3569,17 @@ pub fn run_server(
                             let _ = std::fs::remove_file(&keypath);
                             let _ = std::fs::remove_file(&verpath);
                             let _ = std::fs::remove_file(&pipepath);
+                            // A session the user deliberately ended is not
+                            // resurrectable: remove its snapshot too, so a
+                            // kill-session cannot strand a `(resurrectable)`
+                            // entry behind (every bench run uses a fresh
+                            // session name, so nothing ever reclaimed them).
+                            // Serialized with the debounced snapshot writer so
+                            // a queued save cannot re-create the file.
+                            crate::resurrection::delete_snapshot_sync(
+                                &app.port_file_base(),
+                                &crate::resurrection::resurrect_dir(app.resurrect_dir.as_deref()),
+                            );
                             crate::types::shutdown_persistent_streams();
                             // Kill all child processes using a single process snapshot
                             tree::kill_all_children_batch(&mut app.windows);
