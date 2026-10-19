@@ -2996,6 +2996,23 @@ pub fn send_paste_to_active(app: &mut AppState, text: &str) -> io::Result<()> {
     Ok(())
 }
 
+/// True when the pane should receive the Space+Backspace input primer.
+///
+/// The primer exists to absorb the ConPTY/PSReadLine first-character race of
+/// an interactive default shell (`spawn_command == None`): PSReadLine's
+/// prompt detection can consume the first byte delivered to a newly-ready
+/// shell, and " \x08" is silently absorbed by the shell's line editor.
+///
+/// A pane spawned with a command is a program that may read stdin raw
+/// (vim, nvim, anything crossterm based). There, " \x08" is not absorbed:
+/// 0x20 and 0x08 arrive as real keystrokes and corrupt the program's input
+/// (backspace in vim's normal mode moves the cursor up a line). Skipping the
+/// primer for command panes also removes its up-to-5s readiness wait for
+/// programs that never print before reading.
+pub fn pane_wants_input_primer(spawn_command: Option<&str>) -> bool {
+    spawn_command.is_none()
+}
+
 /// Inject a Space+Backspace primer on the first send-keys to a pane.
 /// This absorbs the ConPTY/PSReadLine race that eats the first character
 /// of programmatic input delivered shortly after the shell prompt appears.
@@ -3767,6 +3784,24 @@ pub fn send_key_to_active(app: &mut AppState, k: &str) -> io::Result<()> {
 mod tests {
     use super::*;
     use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyEventState, KeyModifiers};
+
+    // ── The Space+Backspace input primer must never reach a command pane ──
+
+    #[test]
+    fn the_input_primer_is_only_for_default_shell_panes() {
+        // The primer exists to absorb the ConPTY/PSReadLine first-character
+        // race of an interactive default shell. A pane spawned with a command
+        // is a program that may read stdin raw (vim, nvim, anything crossterm
+        // based); " \x08" delivered there is not absorbed — it arrives as real
+        // keystrokes (0x20 0x08) and corrupts the program's input.
+        assert!(
+            pane_wants_input_primer(None),
+            "default-shell panes keep the primer workaround"
+        );
+        assert!(!pane_wants_input_primer(Some("vim")));
+        assert!(!pane_wants_input_primer(Some("nvim --clean")));
+        assert!(!pane_wants_input_primer(Some("pwsh -NoProfile -File probe.ps1")));
+    }
 
     /// Helper: build a KeyEvent with the given code and modifiers.
     fn key(code: KeyCode, modifiers: KeyModifiers) -> KeyEvent {

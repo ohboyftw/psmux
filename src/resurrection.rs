@@ -68,16 +68,20 @@ pub fn resurrect_dir(custom: Option<&str>) -> PathBuf {
     PathBuf::from(crate::paths::psmux_dir()).join("resurrect")
 }
 
-/// Atomically save `snap` as `<session_name>.json` inside `dir`.
+/// Atomically save `snap` into `dir` under `stem` (`<stem>.json`).
 ///
 /// The write goes to a `.json.tmp` file first, then is renamed into place.
 /// On `PermissionDenied` the rename is retried once after a short sleep
 /// (Windows antivirus scanners can briefly lock newly-created files).
-pub fn save_snapshot_to(snap: &SessionSnapshot, dir: &Path) -> io::Result<()> {
+///
+/// `stem` is the namespace-qualified base (see [`snapshot_stem`]) — it is
+/// deliberately independent of `snap.session_name` so a server under
+/// `-L ns` can store session `work` as `ns__work.json`.
+pub fn save_snapshot_as(snap: &SessionSnapshot, dir: &Path, stem: &str) -> io::Result<()> {
     fs::create_dir_all(dir)?;
 
-    let final_path = dir.join(format!("{}.json", snap.session_name));
-    let tmp_path = dir.join(format!("{}.json.tmp", snap.session_name));
+    let final_path = dir.join(format!("{}.json", stem));
+    let tmp_path = dir.join(format!("{}.json.tmp", stem));
 
     let json = serde_json::to_string_pretty(snap)
         .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
@@ -92,6 +96,14 @@ pub fn save_snapshot_to(snap: &SessionSnapshot, dir: &Path) -> io::Result<()> {
         }
         Err(e) => Err(e),
     }
+}
+
+/// Atomically save `snap` as `<session_name>.json` inside `dir`.
+///
+/// Legacy entry point: derives the file stem from `snap.session_name`.
+/// The server saves through [`save_snapshot`] which namespaces the stem.
+pub fn save_snapshot_to(snap: &SessionSnapshot, dir: &Path) -> io::Result<()> {
+    save_snapshot_as(snap, dir, &snap.session_name)
 }
 
 /// Load a previously saved snapshot for `session_name` from `dir`.
@@ -153,6 +165,37 @@ pub fn list_resurrectable(dir: &Path) -> Vec<String> {
 pub fn delete_snapshot(session_name: &str, dir: &Path) -> io::Result<()> {
     let path = dir.join(format!("{session_name}.json"));
     fs::remove_file(path)
+}
+
+// ---------------------------------------------------------------------------
+// Namespace stems
+// ---------------------------------------------------------------------------
+
+/// Snapshot file stem for a session under an optional `-L` namespace.
+///
+/// A snapshot must only be visible to the namespace that owns the session:
+/// `list-sessions` on a brand-new isolated `-L` server used to print every
+/// dead session's snapshot from every other server. The stem mirrors
+/// `AppState::port_file_base` (`Some(ns)` → `ns__<name>`, `None` → `<name>`)
+/// so a snapshot is listed, loaded and deleted through the same `-L` that
+/// its port file lives under.
+pub fn snapshot_stem(session_name: &str, namespace: Option<&str>) -> String {
+    match namespace {
+        Some(ns) => format!("{}__{}", ns, session_name),
+        None => session_name.to_string(),
+    }
+}
+
+/// True when a snapshot stem is visible to the given `-L` namespace filter.
+///
+/// Mirrors the port-file filter in `list-sessions`: with a namespace, only
+/// stems carrying that prefix are visible; without one, only stems with no
+/// namespace prefix at all.
+pub fn stem_visible_in_namespace(stem: &str, namespace: Option<&str>) -> bool {
+    match namespace {
+        Some(ns) => stem.starts_with(&format!("{}__", ns)),
+        None => !stem.contains("__"),
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -404,6 +447,65 @@ mod tests {
         assert!(list_resurrectable(&tmp).is_empty());
 
         fs::remove_dir_all(&tmp).ok();
+    }
+}
+
+#[cfg(test)]
+mod test_namespace_hygiene {
+    use super::*;
+
+    #[test]
+    fn snapshot_stems_mirror_port_file_bases() {
+        // The stem must be byte-identical to the session's port-file base so a
+        // snapshot is visible under the same -L that owns the session.
+        assert_eq!(snapshot_stem("work", None), "work");
+        assert_eq!(snapshot_stem("work", Some("bench")), "bench__work");
+    }
+
+    #[test]
+    fn namespace_visibility_mirrors_the_port_file_filter() {
+        // With -L: only that namespace's stems are visible.
+        assert!(stem_visible_in_namespace("bench__work", Some("bench")));
+        assert!(!stem_visible_in_namespace("other__work", Some("bench")));
+        assert!(!stem_visible_in_namespace("work", Some("bench")));
+        // Without -L: only unprefixed stems are visible.
+        assert!(stem_visible_in_namespace("work", None));
+        assert!(!stem_visible_in_namespace("bench__work", None));
+    }
+
+    #[test]
+    fn a_namespaced_snapshot_is_saved_listed_and_loaded_through_its_stem() {
+        let dir = std::env::temp_dir().join("psmux_resurrection_ns_stem_test");
+        if dir.exists() {
+            fs::remove_dir_all(&dir).expect("clean pre-existing temp dir");
+        }
+        fs::create_dir_all(&dir).expect("create temp dir");
+
+        let snap = SessionSnapshot {
+            version: 1,
+            session_name: "work".into(),
+            timestamp: 1,
+            windows: vec![],
+            active_window_idx: 0,
+        };
+        let stem = snapshot_stem(&snap.session_name, Some("bench"));
+        save_snapshot_as(&snap, &dir, &stem).expect("save under namespace stem");
+
+        // Listed under the stem only — a different namespace (or none) must
+        // not see it.
+        assert_eq!(list_resurrectable(&dir), vec!["bench__work".to_string()]);
+        assert!(!stem_visible_in_namespace(
+            &list_resurrectable(&dir)[0],
+            Some("other"),
+        ));
+        // The bare name does not reach a namespaced snapshot.
+        assert!(load_snapshot_from("work", &dir).is_err());
+        let loaded = load_snapshot_from(&stem, &dir).expect("load through stem");
+        assert_eq!(loaded.session_name, "work");
+
+        delete_snapshot(&stem, &dir).expect("delete through stem");
+        assert!(list_resurrectable(&dir).is_empty());
+        fs::remove_dir_all(&dir).ok();
     }
 }
 
