@@ -79,6 +79,7 @@ jobs:
 
   rails-bench:
     name: Rails Bench (ps1)
+    timeout-minutes: 45
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
