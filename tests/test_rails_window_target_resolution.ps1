@@ -118,13 +118,20 @@ Test-Case "split-window -d -t <session>:<name> splits that window and no other" 
     $rc -eq 0 -and $after1 -eq $before1 -and $after2 -eq $before2 + 1
 }
 
+# Targets w1, the single-pane window: w2 already holds three panes by now, and
+# a fourth split there can be refused as too small, which is not under test.
+# An id read as an index would land elsewhere (@1 as index 1 is w2), so the
+# case also asserts that w2 is left alone.
 Test-Case "split-window -d -t <session>:@id splits that window and no other" {
     $before1 = Get-PaneCount $w1.Id
     $before2 = Get-PaneCount $w2.Id
-    $null = psmux split-window -d -t "${S}:$($w2.Id)" 2>&1
+    $out = psmux split-window -d -t "${S}:$($w1.Id)" 2>&1 | Out-String
     $rc = $LASTEXITCODE
     Start-Sleep -Milliseconds 400
-    $rc -eq 0 -and (Get-PaneCount $w1.Id) -eq $before1 -and (Get-PaneCount $w2.Id) -eq $before2 + 1
+    $after1 = Get-PaneCount $w1.Id
+    $after2 = Get-PaneCount $w2.Id
+    if ($after1 -ne $before1 + 1) { Write-Host "    w1 $before1->$after1  w2 $before2->$after2 rc=$rc out=$($out.Trim())" -ForegroundColor DarkYellow }
+    $rc -eq 0 -and $after1 -eq $before1 + 1 -and $after2 -eq $before2
 }
 
 Test-Case "split-window -t <session>:<unknown name> exits non-zero and splits nothing" {
