@@ -3017,6 +3017,10 @@ pub fn pane_wants_input_primer(spawn_command: Option<&str>) -> bool {
 /// This absorbs the ConPTY/PSReadLine race that eats the first character
 /// of programmatic input delivered shortly after the shell prompt appears.
 ///
+/// Deliberate workaround, kept for default-shell panes only
+/// ([`pane_wants_input_primer`] says which): the race is real on Windows
+/// ConPTY, but the primer must never reach a raw-mode program.
+///
 /// The primer is readiness-gated: it waits until the pane has produced
 /// output (data_version > 0) AND the output has stabilized (no new output
 /// for 300ms). This ensures the shell prompt is actually displayed before
@@ -3024,6 +3028,12 @@ pub fn pane_wants_input_primer(spawn_command: Option<&str>) -> bool {
 /// PTY layer that adds startup latency.
 fn prime_pane_input(pane: &mut Pane) {
     if pane.input_primed {
+        return;
+    }
+    // Raw-mode programs (panes spawned with a command) must not see the
+    // primer bytes; leave input_primed unset so the cheap check re-runs,
+    // and skip the readiness wait those panes would never satisfy anyway.
+    if !pane_wants_input_primer(pane.spawn_command.as_deref()) {
         return;
     }
     pane.input_primed = true;

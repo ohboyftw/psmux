@@ -340,44 +340,112 @@ pub fn apply_snapshot(
 /// small metadata), then sent to a background writer thread.  Rapid
 /// structural changes (split → resize → split) coalesce: the writer uses a
 /// 100ms debounce so at most ~10 writes/sec hit disk.
+///
+/// The file is stored under the session's namespace-qualified stem
+/// (`AppState::port_file_base`) so a snapshot is only ever visible to the
+/// `-L` namespace that owns the session.
 pub fn save_snapshot(app: &AppState) {
     let snap = build_snapshot(app);
     let dir = resurrect_dir(app.resurrect_dir.as_deref());
-    spawn_or_send(snap, dir);
+    let stem = app.port_file_base();
+    spawn_or_send(snap, dir, stem);
+}
+
+/// Message to the background snapshot writer thread.
+enum SnapshotMsg {
+    Save(SessionSnapshot, PathBuf, String),
+    Delete(PathBuf, String, Option<std::sync::mpsc::Sender<()>>),
+}
+
+/// Coalesce queued saves (keep the newest) and collect queued deletions so
+/// they are applied after the write — a save enqueued before a delete can
+/// never resurrect the file.
+fn drain_writes(
+    rx: &std::sync::mpsc::Receiver<SnapshotMsg>,
+    snap: &mut SessionSnapshot,
+    dir: &mut PathBuf,
+    stem: &mut String,
+    deletions: &mut Vec<(PathBuf, String, Option<std::sync::mpsc::Sender<()>>)>,
+) {
+    loop {
+        match rx.try_recv() {
+            Ok(SnapshotMsg::Save(s, d, st)) => {
+                *snap = s;
+                *dir = d;
+                *stem = st;
+            }
+            Ok(SnapshotMsg::Delete(d, st, ack)) => deletions.push((d, st, ack)),
+            Err(_) => break,
+        }
+    }
+}
+
+fn spawn_or_send(snap: SessionSnapshot, dir: PathBuf, stem: String) {
+    let tx = writer_tx();
+    // Best-effort: if the channel is disconnected, silently drop.
+    let _ = tx.send(SnapshotMsg::Save(snap, dir, stem));
 }
 
 /// Lazily initialized channel to the background snapshot writer thread.
-static SNAPSHOT_TX: std::sync::OnceLock<std::sync::mpsc::Sender<(SessionSnapshot, PathBuf)>> =
-    std::sync::OnceLock::new();
-
-fn spawn_or_send(snap: SessionSnapshot, dir: PathBuf) {
-    let tx = SNAPSHOT_TX.get_or_init(|| {
-        let (tx, rx) = std::sync::mpsc::channel::<(SessionSnapshot, PathBuf)>();
+fn writer_tx() -> std::sync::mpsc::Sender<SnapshotMsg> {
+    static SNAPSHOT_TX: std::sync::OnceLock<std::sync::mpsc::Sender<SnapshotMsg>> =
+        std::sync::OnceLock::new();
+    SNAPSHOT_TX.get_or_init(|| {
+        let (tx, rx) = std::sync::mpsc::channel::<SnapshotMsg>();
         thread::Builder::new()
             .name("snapshot-writer".into())
             .spawn(move || {
-                // Debounce: drain all pending snapshots, write only the latest.
-                while let Ok((mut snap, mut dir)) = rx.recv() {
-                    // Drain any queued snapshots (keep the newest)
-                    while let Ok((s, d)) = rx.try_recv() {
-                        snap = s;
-                        dir = d;
+                // Debounce: drain all pending snapshots, write only the newest.
+                while let Ok(msg) = rx.recv() {
+                    match msg {
+                        SnapshotMsg::Save(mut snap, mut dir, mut stem) => {
+                            let mut deletions = Vec::new();
+                            drain_writes(&rx, &mut snap, &mut dir, &mut stem, &mut deletions);
+                            // Small delay to coalesce rapid changes
+                            thread::sleep(Duration::from_millis(100));
+                            // Drain again after the delay
+                            drain_writes(&rx, &mut snap, &mut dir, &mut stem, &mut deletions);
+                            let _ = save_snapshot_as(&snap, &dir, &stem);
+                            for (d, st, ack) in deletions {
+                                let _ = fs::remove_file(d.join(format!("{}.json", st)));
+                                if let Some(ack) = ack {
+                                    let _ = ack.send(());
+                                }
+                            }
+                        }
+                        SnapshotMsg::Delete(dir, stem, ack) => {
+                            // The Save branch has already finished when this
+                            // runs, so this can only remove the file, never
+                            // race a write.
+                            let _ = fs::remove_file(dir.join(format!("{}.json", stem)));
+                            if let Some(ack) = ack {
+                                let _ = ack.send(());
+                            }
+                        }
                     }
-                    // Small delay to coalesce rapid changes
-                    thread::sleep(Duration::from_millis(100));
-                    // Drain again after the delay
-                    while let Ok((s, d)) = rx.try_recv() {
-                        snap = s;
-                        dir = d;
-                    }
-                    let _ = save_snapshot_to(&snap, &dir);
                 }
             })
             .expect("failed to spawn snapshot writer thread");
         tx
-    });
-    // Best-effort: if the channel is disconnected, silently drop.
-    let _ = tx.send((snap, dir));
+    })
+    .clone()
+}
+
+/// Delete a snapshot synchronously, from the server's shutdown paths.
+///
+/// A deliberately ended session (kill-session, kill-server) is not
+/// resurrectable: its snapshot must go, and a save already queued (or in
+/// the writer's debounce window) must not re-create it afterwards. Both
+/// are serialized through the writer thread, so this waits for the
+/// deletion to be applied (bounded — a stuck writer never blocks exit).
+pub fn delete_snapshot_sync(stem: &str, dir: &Path) {
+    let (tx, rx) = std::sync::mpsc::channel::<()>();
+    let _ = writer_tx().send(SnapshotMsg::Delete(
+        dir.to_path_buf(),
+        stem.to_string(),
+        Some(tx),
+    ));
+    let _ = rx.recv_timeout(Duration::from_secs(2));
 }
 
 // ---------------------------------------------------------------------------
@@ -451,6 +519,62 @@ mod tests {
 }
 
 #[cfg(test)]
+mod test_snapshot_pruning {
+    use super::*;
+
+    fn fresh_dir(name: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(name);
+        if dir.exists() {
+            fs::remove_dir_all(&dir).expect("clean pre-existing temp dir");
+        }
+        fs::create_dir_all(&dir).expect("create temp dir");
+        dir
+    }
+
+    /// Writes `names` in order, oldest first, with distinct modified times.
+    fn write_snapshots(dir: &Path, names: &[&str]) {
+        for name in names {
+            fs::write(dir.join(format!("{}.json", name)), "{}").expect("write snapshot");
+            thread::sleep(Duration::from_millis(20));
+        }
+    }
+
+    #[test]
+    fn keeps_the_newest_snapshots_up_to_the_limit() {
+        let dir = fresh_dir("psmux_prune_keeps_newest");
+        write_snapshots(&dir, &["oldest", "middle", "newest"]);
+
+        prune_snapshots_in(&dir, 2);
+
+        let mut kept = list_resurrectable(&dir);
+        kept.sort();
+        assert_eq!(kept, vec!["middle".to_string(), "newest".to_string()]);
+    }
+
+    #[test]
+    fn keeps_everything_when_under_the_limit() {
+        let dir = fresh_dir("psmux_prune_under_limit");
+        write_snapshots(&dir, &["a", "b"]);
+
+        prune_snapshots_in(&dir, 50);
+
+        assert_eq!(list_resurrectable(&dir).len(), 2);
+    }
+
+    #[test]
+    fn ignores_files_that_are_not_snapshots() {
+        let dir = fresh_dir("psmux_prune_ignores_non_json");
+        fs::write(dir.join("notes.txt"), "keep me").expect("write");
+        write_snapshots(&dir, &["only"]);
+
+        prune_snapshots_in(&dir, 0);
+
+        assert!(dir.join("notes.txt").exists(), "non-.json must be ignored");
+        assert!(list_resurrectable(&dir).is_empty(), "snapshots pruned to 0");
+    }
+}
+
+#[cfg(test)]
 mod test_namespace_hygiene {
     use super::*;
 
@@ -506,61 +630,5 @@ mod test_namespace_hygiene {
         delete_snapshot(&stem, &dir).expect("delete through stem");
         assert!(list_resurrectable(&dir).is_empty());
         fs::remove_dir_all(&dir).ok();
-    }
-}
-
-#[cfg(test)]
-mod test_snapshot_pruning {
-    use super::*;
-
-    fn fresh_dir(name: &str) -> PathBuf {
-        let dir = std::env::temp_dir().join(name);
-        if dir.exists() {
-            fs::remove_dir_all(&dir).expect("clean pre-existing temp dir");
-        }
-        fs::create_dir_all(&dir).expect("create temp dir");
-        dir
-    }
-
-    /// Writes `names` in order, oldest first, with distinct modified times.
-    fn write_snapshots(dir: &Path, names: &[&str]) {
-        for name in names {
-            fs::write(dir.join(format!("{}.json", name)), "{}").expect("write snapshot");
-            thread::sleep(Duration::from_millis(20));
-        }
-    }
-
-    #[test]
-    fn keeps_the_newest_snapshots_up_to_the_limit() {
-        let dir = fresh_dir("psmux_prune_keeps_newest");
-        write_snapshots(&dir, &["oldest", "middle", "newest"]);
-
-        prune_snapshots_in(&dir, 2);
-
-        let mut kept = list_resurrectable(&dir);
-        kept.sort();
-        assert_eq!(kept, vec!["middle".to_string(), "newest".to_string()]);
-    }
-
-    #[test]
-    fn keeps_everything_when_under_the_limit() {
-        let dir = fresh_dir("psmux_prune_under_limit");
-        write_snapshots(&dir, &["a", "b"]);
-
-        prune_snapshots_in(&dir, 50);
-
-        assert_eq!(list_resurrectable(&dir).len(), 2);
-    }
-
-    #[test]
-    fn ignores_files_that_are_not_snapshots() {
-        let dir = fresh_dir("psmux_prune_ignores_non_json");
-        fs::write(dir.join("notes.txt"), "keep me").expect("write");
-        write_snapshots(&dir, &["only"]);
-
-        prune_snapshots_in(&dir, 0);
-
-        assert!(dir.join("notes.txt").exists(), "non-.json must be ignored");
-        assert!(list_resurrectable(&dir).is_empty(), "snapshots pruned to 0");
     }
 }
