@@ -18,8 +18,12 @@ pub enum WaitCondition {
     File { path: PathBuf },
     /// Wait for a regex pattern to match the pane's live screen buffer.
     Output { pattern: regex::Regex },
-    /// Wait for the pane to reach idle prompt (reuses `context_ready` signal).
+    /// Wait for the pane to be idle (`#{pane_ready}`): its reported OSC 7501
+    /// state, else at least one byte of output then 500 ms of silence.  This
+    /// is not prompt detection.
     Ready,
+    /// Wait for the pane's agent state; see [`crate::wait_until`] for the rule.
+    State { state: vt100::ProgramState },
 }
 
 /// The result of a `wait-for` operation.
@@ -39,8 +43,9 @@ pub enum WaitOutcome {
 impl WaitCondition {
     /// Parse a wait condition from CLI/RPC arguments.
     ///
-    /// - `kind`: one of `"exit"`, `"file"`, `"output"`, `"ready"`
-    /// - `arg`: the kind-specific argument (PID, path, or regex pattern)
+    /// - `kind`: one of `"exit"`, `"file"`, `"output"`, `"ready"`, `"state"`
+    /// - `arg`: the kind-specific argument (PID, path, regex pattern, or a
+    ///   state name `idle|working|blocked|done|error`)
     /// - `_opts`: reserved for future per-kind options
     pub fn parse(kind: &str, arg: Option<&str>, _opts: Option<&str>) -> Result<Self, String> {
         match kind {
@@ -63,6 +68,13 @@ impl WaitCondition {
                 Ok(Self::Output { pattern: re })
             }
             "ready" => Ok(Self::Ready),
+            "state" => {
+                let name = arg.ok_or("state requires idle|working|blocked|done|error")?;
+                let state = crate::agent_state::parse_state(name).ok_or_else(|| {
+                    format!("unknown state: {name} (expected idle|working|blocked|done|error)")
+                })?;
+                Ok(Self::State { state })
+            }
             other => Err(format!("unknown wait condition: {other}")),
         }
     }
@@ -75,6 +87,13 @@ impl fmt::Display for WaitCondition {
             Self::File { path } => write!(f, "file({})", path.display()),
             Self::Output { pattern } => write!(f, "output(/{}/)", pattern.as_str()),
             Self::Ready => write!(f, "ready"),
+            Self::State { state } => {
+                write!(
+                    f,
+                    "state({})",
+                    crate::agent_state::state_label(Some(*state))
+                )
+            }
         }
     }
 }
@@ -248,25 +267,6 @@ where
     }
 }
 
-/// Wait for a pane readiness signal delivered via a one-shot channel.
-///
-/// The caller hooks up `sender` to the `context_ready` push event stream
-/// for the target pane. This function just blocks on the receiver.
-pub fn wait_ready(receiver: std::sync::mpsc::Receiver<()>, timeout_ms: u64) -> WaitOutcome {
-    let start = Instant::now();
-    match receiver.recv_timeout(std::time::Duration::from_millis(timeout_ms)) {
-        Ok(()) => WaitOutcome::Success {
-            elapsed_ms: start.elapsed().as_millis() as u64,
-        },
-        Err(std::sync::mpsc::RecvTimeoutError::Timeout) => WaitOutcome::Timeout {
-            elapsed_ms: start.elapsed().as_millis() as u64,
-        },
-        Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => WaitOutcome::Error {
-            reason: "sender dropped".into(),
-        },
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -375,46 +375,5 @@ mod tests {
         let re = regex::Regex::new(r"(?m)^\$ $").unwrap();
         let result = wait_output(&re, || "output line\n$ \n".to_string(), 1000, 10);
         assert!(matches!(result, WaitOutcome::Success { .. }));
-    }
-
-    #[test]
-    fn wait_ready_returns_success_when_signaled() {
-        let (tx, rx) = std::sync::mpsc::channel();
-        std::thread::spawn(move || {
-            std::thread::sleep(std::time::Duration::from_millis(50));
-            tx.send(()).unwrap();
-        });
-        let result = wait_ready(rx, 5000);
-        assert!(matches!(result, WaitOutcome::Success { .. }));
-    }
-
-    #[test]
-    fn wait_ready_returns_timeout_when_not_signaled() {
-        let (_tx, rx) = std::sync::mpsc::channel();
-        let result = wait_ready(rx, 200);
-        assert!(matches!(result, WaitOutcome::Timeout { .. }));
-    }
-
-    #[test]
-    fn wait_ready_returns_error_when_sender_dropped() {
-        let (tx, rx) = std::sync::mpsc::channel::<()>();
-        drop(tx);
-        let result = wait_ready(rx, 5000);
-        assert!(matches!(result, WaitOutcome::Error { .. }));
-    }
-
-    #[test]
-    fn wait_ready_elapsed_is_reasonable() {
-        let (tx, rx) = std::sync::mpsc::channel();
-        std::thread::spawn(move || {
-            std::thread::sleep(std::time::Duration::from_millis(100));
-            tx.send(()).unwrap();
-        });
-        let result = wait_ready(rx, 5000);
-        if let WaitOutcome::Success { elapsed_ms } = result {
-            assert!((50..500).contains(&elapsed_ms), "elapsed={elapsed_ms}ms");
-        } else {
-            panic!("expected Success");
-        }
     }
 }

@@ -14,6 +14,25 @@ param(
     [switch]$Verbose
 )
 
+# Keep tests off the user's mycel bus: start none and find none. Port 0
+# never connects, and the discovery file below never exists.
+$env:PSMUX_BUS = '0'
+$env:PSMUX_BUS_PORT = '0'
+$env:PSMUX_BUS_DISCOVERY = Join-Path $env:TEMP 'psmux-test-no-bus\server'
+
+# This test needs the warm pool, so it runs in a scratch data directory
+# instead of turning the pool off: it can only claim, spawn and delete the
+# standbys and port files there, never the user's.
+$env:PSMUX_NO_WARM = $null
+$env:PSMUX_DATA_DIR = Join-Path $env:TEMP "psmux-warm-test-$PID"
+New-Item -ItemType Directory -Path $env:PSMUX_DATA_DIR -Force | Out-Null
+
+# Everything this test starts lives in its own -L namespace, so cleanup can
+# end exactly its own servers: `kill-server -L` never sweeps other psmux
+# processes, and the fallback below matches only command lines naming this
+# namespace. No bare kill-server and no Stop-Process on every psmux image.
+$L = "warmtest$PID"
+
 $ErrorActionPreference = "Continue"
 $PSMUX = Join-Path $PSScriptRoot "..\target\release\psmux.exe"
 if (-not (Test-Path $PSMUX)) {
@@ -29,8 +48,7 @@ if (-not (Test-Path $PSMUX)) {
 }
 $PSMUX = (Resolve-Path $PSMUX).Path
 
-$HOME_DIR = $env:USERPROFILE
-$PSMUX_DIR = "$HOME_DIR\.psmux"
+$PSMUX_DIR = $env:PSMUX_DATA_DIR
 $pass = 0
 $fail = 0
 $total = 0
@@ -47,18 +65,20 @@ function Write-TestResult {
     }
 }
 
-function Kill-All-Psmux {
-    Get-Process psmux, pmux, tmux -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+function Stop-ScratchPsmux {
+    & $PSMUX -L $L kill-server 2>$null
     Start-Sleep -Milliseconds 500
-    if (Test-Path $PSMUX_DIR) {
-        Get-ChildItem "$PSMUX_DIR\*.port" -ErrorAction SilentlyContinue | Remove-Item -Force -ErrorAction SilentlyContinue
-        Get-ChildItem "$PSMUX_DIR\*.key" -ErrorAction SilentlyContinue | Remove-Item -Force -ErrorAction SilentlyContinue
-    }
+    $ours = "(^|\s)-L\s+" + [regex]::Escape($L) + "(\s|$)"
+    Get-CimInstance Win32_Process -Filter "Name='psmux.exe' OR Name='pmux.exe' OR Name='tmux.exe'" -ErrorAction SilentlyContinue |
+        Where-Object { $_.CommandLine -match $ours } |
+        ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
+    Get-ChildItem "$PSMUX_DIR\${L}__*.port", "$PSMUX_DIR\${L}__*.key" -ErrorAction SilentlyContinue |
+        Remove-Item -Force -ErrorAction SilentlyContinue
 }
 
 function Wait-PortFile {
     param([string]$SessionName, [int]$TimeoutMs = 15000)
-    $pf = "$PSMUX_DIR\${SessionName}.port"
+    $pf = "$PSMUX_DIR\${L}__${SessionName}.port"
     $sw = [System.Diagnostics.Stopwatch]::StartNew()
     while ($sw.ElapsedMilliseconds -lt $TimeoutMs) {
         if (Test-Path $pf) {
@@ -74,7 +94,7 @@ function Wait-PortFile {
 
 function Test-SessionAlive {
     param([string]$SessionName)
-    $pf = "$PSMUX_DIR\${SessionName}.port"
+    $pf = "$PSMUX_DIR\${L}__${SessionName}.port"
     if (-not (Test-Path $pf)) { return $false }
     $port = (Get-Content $pf -Raw).Trim()
     if ($port -notmatch '^\d+$') { return $false }
@@ -96,9 +116,9 @@ Write-Host ("=" * 76) -ForegroundColor Cyan
 Write-Host ""
 Write-Host "--- Test 1: Warm server auto-spawn ---" -ForegroundColor Yellow
 
-Kill-All-Psmux
+Stop-ScratchPsmux
 $env:PSMUX_CONFIG_FILE = "NUL"
-& $PSMUX new-session -s test_base -d 2>&1 | Out-Null
+& $PSMUX -L $L new-session -s test_base -d 2>&1 | Out-Null
 $env:PSMUX_CONFIG_FILE = $null
 
 $baseInfo = Wait-PortFile -SessionName "test_base" -TimeoutMs 15000
@@ -122,7 +142,7 @@ Write-Host "--- Test 2: Warm server claiming ---" -ForegroundColor Yellow
 if ($null -ne $warmInfo) {
     $sw = [System.Diagnostics.Stopwatch]::StartNew()
     $env:PSMUX_CONFIG_FILE = "NUL"
-    & $PSMUX new-session -s test_claimed -d 2>&1 | Out-Null
+    & $PSMUX -L $L new-session -s test_claimed -d 2>&1 | Out-Null
     $env:PSMUX_CONFIG_FILE = $null
     $sw.Stop()
     $claimMs = $sw.ElapsedMilliseconds
@@ -133,15 +153,13 @@ if ($null -ne $warmInfo) {
     
     # The __warm__ port file should be gone (it was renamed)
     Start-Sleep -Milliseconds 200
-    $warmGone = -not (Test-Path "$PSMUX_DIR\__warm__.port")
+    $warmGone = -not (Test-Path "$PSMUX_DIR\${L}____warm__.port")
     # Actually warm port file might be replenished quickly, so check if claimed session exists
     Write-TestResult "Warm claim completed" $claimedAlive
     Write-Host "    Claim time: $claimMs ms" -ForegroundColor $(if ($claimMs -lt 500) { "Green" } else { "Yellow" })
     
     # Verify the session responds to commands
-    $env:PSMUX_TARGET_SESSION = "test_claimed"
-    $output = & $PSMUX display-message -p "#{session_name}" 2>&1
-    $env:PSMUX_TARGET_SESSION = $null
+    $output = & $PSMUX -L $L display-message -t test_claimed -p "#{session_name}" 2>&1
     $nameCorrect = ($output -match "test_claimed")
     Write-TestResult "Session name correctly set after claim" $nameCorrect "got: $output"
 } else {
@@ -174,7 +192,7 @@ if ($null -ne $warmBefore) {
     
     # new-session with a custom command should NOT claim warm server
     $env:PSMUX_CONFIG_FILE = "NUL"
-    & $PSMUX new-session -s test_custom -d -- cmd.exe /k "title custom_test" 2>&1 | Out-Null
+    & $PSMUX -L $L new-session -s test_custom -d -- cmd.exe /k "title custom_test" 2>&1 | Out-Null
     $env:PSMUX_CONFIG_FILE = $null
     Start-Sleep -Milliseconds 1500
     
@@ -194,7 +212,7 @@ if ($null -ne $warmBefore) {
 Write-Host ""
 Write-Host "--- Test 5: Performance benchmark (warm vs cold) ---" -ForegroundColor Yellow
 
-Kill-All-Psmux
+Stop-ScratchPsmux
 Start-Sleep -Milliseconds 500
 
 $coldTimes = @()
@@ -202,11 +220,11 @@ $warmTimes = @()
 
 for ($i = 0; $i -lt $Iterations; $i++) {
     # Cold start: no warm server, measure full startup (with real config loading)
-    Kill-All-Psmux
+    Stop-ScratchPsmux
     Start-Sleep -Milliseconds 300
     
     $sw = [System.Diagnostics.Stopwatch]::StartNew()
-    & $PSMUX new-session -s "bench_cold_$i" -d 2>&1 | Out-Null
+    & $PSMUX -L $L new-session -s "bench_cold_$i" -d 2>&1 | Out-Null
     $sw.Stop()
     $coldTimes += $sw.ElapsedMilliseconds
     Write-Host "    Cold start #$($i+1): $($sw.ElapsedMilliseconds) ms" -ForegroundColor $(if ($sw.ElapsedMilliseconds -lt 1000) { "Green" } else { "Yellow" })
@@ -222,7 +240,7 @@ for ($i = 0; $i -lt $Iterations; $i++) {
     
     # Warm claim: measure claiming the pre-spawned server
     $sw2 = [System.Diagnostics.Stopwatch]::StartNew()
-    & $PSMUX new-session -s "bench_warm_$i" -d 2>&1 | Out-Null
+    & $PSMUX -L $L new-session -s "bench_warm_$i" -d 2>&1 | Out-Null
     $sw2.Stop()
     $warmTimes += $sw2.ElapsedMilliseconds
     Write-Host "    Warm claim #$($i+1): $($sw2.ElapsedMilliseconds) ms" -ForegroundColor $(if ($sw2.ElapsedMilliseconds -lt 500) { "Green" } else { "Yellow" })
@@ -267,7 +285,7 @@ if ($coldTimes.Count -gt 0 -and $warmTimes.Count -gt 0) {
 # ── Cleanup ──
 Write-Host ""
 Write-Host "--- Cleanup ---" -ForegroundColor Yellow
-Kill-All-Psmux
+Stop-ScratchPsmux
 
 # ── Final Summary ──
 Write-Host ""

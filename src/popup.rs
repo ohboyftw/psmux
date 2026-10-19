@@ -120,6 +120,7 @@ pub fn create_popup_pane(
         exit_code: None,
         dead_time: None,
         readiness_notified: false,
+        agent_state: Default::default(),
         spawn_time: std::time::Instant::now(),
         vt_bridge_cache: None,
         vti_mode_cache: None,

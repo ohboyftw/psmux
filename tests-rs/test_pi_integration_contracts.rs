@@ -28,6 +28,7 @@ mod context_info_schema {
             cwd: None,
             title: None,
             shell_name: None,
+            program_status: None,
             metadata: None,
         };
         let json = serde_json::to_value(&info).expect("ContextInfo should serialize");
@@ -47,6 +48,7 @@ mod context_info_schema {
             cwd: None,
             title: None,
             shell_name: None,
+            program_status: None,
             metadata: None,
         };
         let json = serde_json::to_value(&info).expect("ContextInfo should serialize");
@@ -66,6 +68,7 @@ mod context_info_schema {
             cwd: Some("D:\\Projects\\myapp".to_string()),
             title: None,
             shell_name: None,
+            program_status: None,
             metadata: None,
         };
         let json = serde_json::to_value(&info).expect("ContextInfo should serialize");
@@ -84,6 +87,7 @@ mod context_info_schema {
             cwd: None,
             title: None,
             shell_name: None,
+            program_status: None,
             metadata: None,
         };
         let json = serde_json::to_value(&info).expect("ContextInfo should serialize");
@@ -103,6 +107,7 @@ mod context_info_schema {
             cwd: None,
             title: Some("vim main.rs".to_string()),
             shell_name: None,
+            program_status: None,
             metadata: None,
         };
         let json = serde_json::to_value(&info).expect("ContextInfo should serialize");
@@ -118,6 +123,7 @@ mod context_info_schema {
             cwd: None,
             title: None,
             shell_name: None,
+            program_status: None,
             metadata: None,
         };
         let json = serde_json::to_value(&info).expect("ContextInfo should serialize");
@@ -137,6 +143,7 @@ mod context_info_schema {
             cwd: None,
             title: None,
             shell_name: Some("pwsh".to_string()),
+            program_status: None,
             metadata: None,
         };
         let json = serde_json::to_value(&info).expect("ContextInfo should serialize");
@@ -152,6 +159,7 @@ mod context_info_schema {
             cwd: None,
             title: None,
             shell_name: None,
+            program_status: None,
             metadata: None,
         };
         let json = serde_json::to_value(&info).expect("ContextInfo should serialize");
@@ -170,6 +178,7 @@ mod context_info_schema {
             cwd: None,
             title: None,
             shell_name: None,
+            program_status: None,
             metadata: None,
         };
         let json = serde_json::to_value(&info).expect("ContextInfo should serialize");
@@ -198,6 +207,7 @@ mod context_info_schema {
             cwd: Some("C:\\Users\\test".to_string()),
             title: Some("working".to_string()),
             shell_name: Some("bash".to_string()),
+            program_status: None,
             metadata: Some(meta),
         };
         let json = serde_json::to_value(&info).expect("ContextInfo should serialize");
@@ -227,6 +237,7 @@ mod list_result_schema {
                     cwd: Some("D:\\Work".to_string()),
                     title: Some("main".to_string()),
                     shell_name: Some("pwsh".to_string()),
+                    program_status: None,
                     metadata: None,
                 },
                 psmux::backend::protocol::ContextInfo {
@@ -235,6 +246,7 @@ mod list_result_schema {
                     cwd: None,
                     title: None,
                     shell_name: None,
+                    program_status: None,
                     metadata: None,
                 },
             ],
@@ -279,6 +291,7 @@ mod context_info_roundtrip {
             cwd: Some("C:\\Projects".to_string()),
             title: Some("editor".to_string()),
             shell_name: Some("bash".to_string()),
+            program_status: None,
             metadata: None,
         };
         let serialized = serde_json::to_string(&info).expect("serialize");
@@ -300,6 +313,7 @@ mod context_info_roundtrip {
             cwd: None,
             title: None,
             shell_name: None,
+            program_status: None,
             metadata: None,
         };
         let serialized = serde_json::to_string(&info).expect("serialize");
@@ -512,6 +526,7 @@ mod boundary_edge_cases {
             cwd: Some("C:\\Very\\Long\\Path\\That\\Goes\\On\\And\\On".to_string()),
             title: Some("title with spaces and 'quotes' and \"double quotes\"".to_string()),
             shell_name: Some("powershell.exe".to_string()),
+            program_status: None,
             metadata: Some(meta),
         };
         let json = serde_json::to_value(&info).expect("maximal ContextInfo should serialize");
@@ -534,6 +549,7 @@ mod boundary_edge_cases {
             cwd: None,
             title: None,
             shell_name: None,
+            program_status: None,
             metadata: None,
         };
         let json = serde_json::to_value(&info).expect("minimal ContextInfo should serialize");
@@ -551,6 +567,10 @@ mod boundary_edge_cases {
             !obj.contains_key("shell_name"),
             "shell_name should be absent when None"
         );
+        assert!(
+            !obj.contains_key("program_status"),
+            "program_status should be absent, never null, when nothing is reported"
+        );
     }
 
     /// Edge case: Unicode in title and cwd.
@@ -562,6 +582,7 @@ mod boundary_edge_cases {
             cwd: Some("D:\\Home\\projet-cafe".to_string()),
             title: Some("vim README.md".to_string()),
             shell_name: None,
+            program_status: None,
             metadata: None,
         };
         let serialized = serde_json::to_string(&info).expect("unicode should serialize");
@@ -591,6 +612,7 @@ mod boundary_edge_cases {
                 cwd: Some(format!("C:\\pane-{}", i)),
                 title: None,
                 shell_name: Some("pwsh".to_string()),
+                program_status: None,
                 metadata: None,
             })
             .collect();
@@ -614,6 +636,7 @@ mod rpc_response_with_list {
                 cwd: Some("D:\\Work".to_string()),
                 title: None,
                 shell_name: Some("bash".to_string()),
+                program_status: None,
                 metadata: None,
             }],
         };

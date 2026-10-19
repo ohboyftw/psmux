@@ -379,15 +379,88 @@ pub fn send_auth_cmd_response(addr: &str, key: &str, cmd: &[u8]) -> io::Result<S
 /// Parse `-t <target>` from a control command line.
 /// Handles `-t FOO`, `-t "FOO"`, and targets with `:window[.pane]` suffix.
 fn parse_target_from_line(line: &str) -> Option<String> {
-    let mut iter = line.split_whitespace();
-    while let Some(tok) = iter.next() {
+    // Tokenized like the server, so a quoted cwd, command or window name
+    // holding ` -t <name>` is one value and never routes the line.
+    let mut iter = split_wire_line(line).into_iter();
+    while let Some((tok, quoted)) = iter.next() {
+        if quoted {
+            continue;
+        }
+        if tok == "--" {
+            break;
+        }
         if tok == "-t" {
-            if let Some(val) = iter.next() {
-                return Some(val.trim_matches('"').to_string());
-            }
+            return iter.next().map(|(val, _)| val);
         }
     }
     None
+}
+
+/// Split a control line into arguments the way the server reads it, with
+/// whether each argument was written quoted.  Only an unquoted argument can
+/// be a flag: a quoted one is a value, whatever it contains.
+pub fn split_wire_line(line: &str) -> Vec<(String, bool)> {
+    let mut args = Vec::new();
+    let mut current = String::new();
+    let mut in_double_quotes = false;
+    let mut in_single_quotes = false;
+    // An empty token exists only if it was written as `""` or `''`. Dropping
+    // it along with the whitespace runs cost the caller a real argument:
+    // `set -g @foo ""` — how tmux clears an option — arrived one positional
+    // short, so the server read it as a name with no value and kept the old
+    // value (#535).
+    let mut token_was_quoted = false;
+    let chars: Vec<char> = line.chars().collect();
+    let mut i = 0;
+
+    while i < chars.len() {
+        let c = chars[i];
+        if in_single_quotes {
+            // Inside single quotes: everything is literal (no escape processing)
+            if c == '\'' {
+                in_single_quotes = false;
+            } else {
+                current.push(c);
+            }
+        } else if c == '\\' && in_double_quotes {
+            // Inside double quotes, recognise two escape sequences:
+            //   \"  → literal double-quote
+            //   \\  → literal backslash
+            // All other backslashes are kept literal because psmux is a
+            // Windows-native tool where backslash is the normal path
+            // separator (e.g. "C:\Program Files\Git\bin\bash.exe").
+            if i + 1 < chars.len() && chars[i + 1] == '"' {
+                current.push('"');
+                i += 1; // skip the quote
+            } else if i + 1 < chars.len() && chars[i + 1] == '\\' {
+                current.push('\\');
+                i += 1; // skip the second backslash
+            } else {
+                current.push(c); // literal backslash
+            }
+        } else if c == '"' {
+            in_double_quotes = !in_double_quotes;
+            token_was_quoted = true;
+        } else if c == '\'' && !in_double_quotes {
+            in_single_quotes = true;
+            token_was_quoted = true;
+        } else if c.is_whitespace() && !in_double_quotes {
+            if !current.is_empty() || token_was_quoted {
+                args.push((current.clone(), token_was_quoted));
+                current.clear();
+            }
+            token_was_quoted = false;
+        } else {
+            current.push(c);
+        }
+        i += 1;
+    }
+
+    if !current.is_empty() || token_was_quoted {
+        args.push((current, token_was_quoted));
+    }
+
+    args
 }
 
 /// Ask a server whether it owns the pane-id or window-id. Returns true on match.
@@ -992,13 +1065,32 @@ pub struct TreeEntry {
     pub window_size: String,
     pub is_current_session: bool,
     pub is_active_window: bool,
+    /// Worst-of OSC 7501 state: of the window's panes on a window row, of
+    /// the session's windows on a header.  Empty when nothing is reported.
+    pub agent_state: &'static str,
+}
+
+/// A window row as `list_all_sessions_tree` takes it for the current
+/// session.
+#[derive(Clone, Debug)]
+pub struct CurrentWindow {
+    /// Window name.
+    pub name: String,
+    /// Number of panes in the window.
+    pub panes: usize,
+    /// Size as `WIDTHxHEIGHT`.
+    pub size: String,
+    /// True for the session's active window.
+    pub active: bool,
+    /// Worst-of agent state of the window's panes; empty when none reports.
+    pub agent: &'static str,
 }
 
 /// List all running sessions and their windows for choose-tree display.
 /// Queries each running server via its TCP port for window list info.
 pub fn list_all_sessions_tree(
     current_session: &str,
-    current_windows: &[(String, usize, String, bool)],
+    current_windows: &[CurrentWindow],
 ) -> Vec<TreeEntry> {
     // No data directory (no home) means there is nothing to read; the same
     // early exit the home lookup used to provide.
@@ -1036,7 +1128,7 @@ pub fn list_all_sessions_tree(
     let mut tree = Vec::new();
     for (name, port, _) in &sessions {
         let is_current = name == current_session;
-        // Session header
+        let header = tree.len();
         tree.push(TreeEntry {
             session_name: name.clone(),
             session_port: *port,
@@ -1047,55 +1139,94 @@ pub fn list_all_sessions_tree(
             window_size: String::new(),
             is_current_session: is_current,
             is_active_window: false,
+            agent_state: "",
         });
-
         if is_current {
             // Use local data for the current session (fast, no IPC)
-            for (i, (wname, panes, size, is_active)) in current_windows.iter().enumerate() {
+            for (i, w) in current_windows.iter().enumerate() {
                 tree.push(TreeEntry {
                     session_name: name.clone(),
                     session_port: *port,
                     is_session_header: false,
                     window_index: Some(i),
-                    window_name: wname.clone(),
-                    window_panes: *panes,
-                    window_size: size.clone(),
+                    window_name: w.name.clone(),
+                    window_panes: w.panes,
+                    window_size: w.size.clone(),
                     is_current_session: true,
-                    is_active_window: *is_active,
+                    is_active_window: w.active,
+                    agent_state: w.agent,
                 });
             }
         } else {
-            // Query remote session for its window list
-            let key = read_session_key(name).unwrap_or_default();
-            let addr = format!("127.0.0.1:{}", port);
-            if let Ok(resp) = send_auth_cmd_response(&addr, &key, b"list-windows -F \"#{window_index}:#{window_name}:#{window_panes}:#{window_width}x#{window_height}:#{window_active}\"\n") {
-                for line in resp.lines() {
-                    let line = line.trim();
-                    if line.is_empty() { continue; }
-                    let parts: Vec<&str> = line.splitn(5, ':').collect();
-                    if parts.len() >= 5 {
-                        let wi = parts[0].parse::<usize>().unwrap_or(0);
-                        let wn = parts[1].to_string();
-                        let wp = parts[2].parse::<usize>().unwrap_or(1);
-                        let ws = parts[3].to_string();
-                        let wa = parts[4] == "1";
-                        tree.push(TreeEntry {
-                            session_name: name.clone(),
-                            session_port: *port,
-                            is_session_header: false,
-                            window_index: Some(wi),
-                            window_name: wn,
-                            window_panes: wp,
-                            window_size: ws,
-                            is_current_session: false,
-                            is_active_window: wa,
-                        });
-                    }
-                }
-            }
+            tree.extend(query_session_windows(name, *port));
         }
+        tree[header].agent_state =
+            crate::agent_state::worst_label(tree[header + 1..].iter().map(|e| e.agent_state));
     }
     tree
+}
+
+/// Window rows of another session, asked over its TCP port.
+fn query_session_windows(name: &str, port: u16) -> Vec<TreeEntry> {
+    let key = read_session_key(name).unwrap_or_default();
+    let addr = format!("127.0.0.1:{}", port);
+    let Ok(resp) = send_auth_cmd_response(&addr, &key, b"list-windows -F \"#{window_index}:#{window_name}:#{window_panes}:#{window_width}x#{window_height}:#{window_active}:#{window_agent_state}\"\n") else {
+        return Vec::new();
+    };
+    resp.lines()
+        .filter_map(|line| parse_window_line(line.trim()))
+        .map(|(wi, wn, wp, ws, wa, agent)| TreeEntry {
+            session_name: name.to_string(),
+            session_port: port,
+            is_session_header: false,
+            window_index: Some(wi),
+            window_name: wn,
+            window_panes: wp,
+            window_size: ws,
+            is_current_session: false,
+            is_active_window: wa,
+            agent_state: agent,
+        })
+        .collect()
+}
+
+/// Parses one `index:name:panes:size:active[:agent_state]` line.  The state
+/// is missing or empty from an older server; anything outside the closed set
+/// reads as no record.
+fn parse_window_line(line: &str) -> Option<(usize, String, usize, String, bool, &'static str)> {
+    let parts: Vec<&str> = line.splitn(6, ':').collect();
+    if parts.len() < 5 {
+        return None;
+    }
+    Some((
+        parts[0].parse::<usize>().unwrap_or(0),
+        parts[1].to_string(),
+        parts[2].parse::<usize>().unwrap_or(1),
+        parts[3].to_string(),
+        parts[4] == "1",
+        crate::agent_state::worst_label(parts.get(5).copied()),
+    ))
+}
+
+/// Whether kill-server's sweep ends process `pid`, whose image is `exe`: a
+/// psmux, pmux or tmux image other than this process, unless its command
+/// line runs `bus`. A bus is shared by every server and mycel client on the
+/// desktop, whatever discovery file the caller's environment names, so a
+/// process whose command line cannot be read is spared too.
+fn is_sweep_target(
+    exe: &str,
+    pid: u32,
+    my_pid: u32,
+    command_line: impl FnOnce() -> Option<String>,
+) -> bool {
+    let exe = exe.to_lowercase();
+    let psmux_image = ["psmux.exe", "pmux.exe", "tmux.exe"]
+        .iter()
+        .any(|t| exe == *t || exe.ends_with(&format!("\\{t}")));
+    if pid == my_pid || !psmux_image {
+        return false;
+    }
+    command_line().is_some_and(|c| !crate::bus::host::is_bus_command_line(&c))
 }
 
 /// Force-kill any remaining psmux/pmux/tmux server processes that didn't
@@ -1103,7 +1234,8 @@ pub fn list_all_sessions_tree(
 /// guarantees kill-server always succeeds.
 ///
 /// On Windows, uses CreateToolhelp32Snapshot to enumerate processes and
-/// TerminateProcess to kill them.  Skips the current process.
+/// TerminateProcess to kill them.  Skips the current process and every
+/// `psmux bus` process (see `is_sweep_target`).
 #[cfg(windows)]
 pub fn kill_remaining_server_processes() {
     const TH32CS_SNAPPROCESS: u32 = 0x00000002;
@@ -1146,23 +1278,17 @@ pub fn kill_remaining_server_processes() {
         let mut pe: PROCESSENTRY32W = std::mem::zeroed();
         pe.dw_size = std::mem::size_of::<PROCESSENTRY32W>() as u32;
 
-        let target_names: &[&str] = &["psmux.exe", "pmux.exe", "tmux.exe"];
         let mut pids_to_kill: Vec<u32> = Vec::new();
 
         if Process32FirstW(snap, &mut pe) != 0 {
             loop {
                 let pid = pe.th32_process_id;
-                if pid != my_pid {
-                    // Extract exe name from wide string
-                    let len = pe.sz_exe_file.iter().position(|&c| c == 0).unwrap_or(260);
-                    let name = String::from_utf16_lossy(&pe.sz_exe_file[..len]);
-                    let name_lower = name.to_lowercase();
-                    for target in target_names {
-                        if name_lower == *target || name_lower.ends_with(&format!("\\{}", target)) {
-                            pids_to_kill.push(pid);
-                            break;
-                        }
-                    }
+                // Extract exe name from wide string
+                let len = pe.sz_exe_file.iter().position(|&c| c == 0).unwrap_or(260);
+                let name = String::from_utf16_lossy(&pe.sz_exe_file[..len]);
+                let command_line = || crate::warm_reap::process_command_line(pid);
+                if is_sweep_target(&name, pid, my_pid, command_line) {
+                    pids_to_kill.push(pid);
                 }
                 if Process32NextW(snap, &mut pe) == 0 {
                     break;
@@ -1732,3 +1858,11 @@ mod tests_warm_target_routing;
 #[cfg(test)]
 #[path = "../tests-rs/test_issue622_hassession_reap.rs"]
 mod test_issue622_hassession_reap;
+
+#[cfg(test)]
+#[path = "../tests-rs/test_tree_entry_rollup.rs"]
+mod tree_entry_rollup_tests;
+
+#[cfg(test)]
+#[path = "../tests-rs/test_kill_server_spares_bus.rs"]
+mod test_kill_server_spares_bus;
