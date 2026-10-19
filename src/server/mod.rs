@@ -651,6 +651,10 @@ pub fn run_server(
     window_name: Option<String>,
     init_size: Option<(u16, u16)>,
 ) -> io::Result<()> {
+    // Create the crash directory up front so the panic hook only has to write a file.
+    if let Err(e) = std::fs::create_dir_all(crate::crash::crash_directory()) {
+        eprintln!("psmux: failed to create crash dir: {e}");
+    }
     // Keep only the newest 20 crash reports across runs.
     crate::crash::prune_crashes(20);
     // Same for resurrection snapshots, which are otherwise unbounded.

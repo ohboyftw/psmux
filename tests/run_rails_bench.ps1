@@ -8,7 +8,8 @@
 
 param(
     [string]$Filter = "*",
-    [switch]$StopOnFailure
+    [switch]$StopOnFailure,
+    [int]$FileTimeoutSec = 300
 )
 
 $ErrorActionPreference = 'Continue'
@@ -33,8 +34,16 @@ Write-Host ""
 foreach ($f in $files) {
     Write-Host "--- $($f.Name) ---" -ForegroundColor Magenta
     $pre = Get-Date
-    & pwsh -NoProfile -File $f.FullName
-    $exit = $LASTEXITCODE
+    # A hung file must fail by name instead of stalling the whole bench (and
+    # the CI job, whose log is lost when it is cancelled).
+    $proc = Start-Process pwsh -ArgumentList '-NoProfile', '-File', "`"$($f.FullName)`"" -NoNewWindow -PassThru
+    if ($proc.WaitForExit($FileTimeoutSec * 1000)) {
+        $exit = $proc.ExitCode
+    } else {
+        Write-Host "  X TIMEOUT: $($f.Name) still running after $FileTimeoutSec s, killing its process tree" -ForegroundColor Red
+        taskkill /T /F /PID $proc.Id | Out-Null
+        $exit = -1
+    }
     $elapsed = [int]((Get-Date) - $pre).TotalMilliseconds
     $fileResults += [PSCustomObject]@{
         File = $f.Name
