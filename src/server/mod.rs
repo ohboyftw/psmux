@@ -1164,6 +1164,7 @@ pub fn run_server(
                             | CtrlReq::SendText(_)
                             | CtrlReq::SendKey(_)
                             | CtrlReq::SendPaste(_)
+                            | CtrlReq::PasteBuffer { .. }
                             | CtrlReq::SendKeysHex(_)
                     );
                     let is_temp_focus = matches!(
@@ -2229,6 +2230,17 @@ pub fn run_server(
                         CtrlReq::SendPaste(s) => {
                             send_paste_to_active(&mut app, &s)?;
                             echo_pending_until = Some(Instant::now());
+                        }
+                        CtrlReq::PasteBuffer { idx, bracket, delete } => {
+                            let idx = idx.unwrap_or(0);
+                            if let Some(text) = app.paste_buffers.get(idx).cloned() {
+                                app.status_message = None;
+                                crate::input::paste_buffer_to_active(&mut app, &text, bracket);
+                                if delete {
+                                    app.paste_buffers.remove(idx);
+                                }
+                                echo_pending_until = Some(Instant::now());
+                            }
                         }
                         CtrlReq::ZoomPane => {
                             toggle_zoom(&mut app);
@@ -3826,10 +3838,6 @@ pub fn run_server(
                         }
                         CtrlReq::ShowBuffer(resp) => {
                             let content = app.paste_buffers.first().cloned().unwrap_or_default();
-                            let _ = resp.send(content);
-                        }
-                        CtrlReq::ShowBufferAt(resp, idx) => {
-                            let content = app.paste_buffers.get(idx).cloned().unwrap_or_default();
                             let _ = resp.send(content);
                         }
                         CtrlReq::DeleteBuffer => {
