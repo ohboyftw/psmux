@@ -36,6 +36,9 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
+      # Cargo.toml has a path dependency on ../mycel/clients/rust (optional, but cargo still reads it).
+      - name: Check out mycel beside psmux
+        run: git clone --depth 1 https://github.com/ohboyftw/mycel.git ../mycel
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
@@ -50,6 +53,9 @@ jobs:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
+      # Cargo.toml has a path dependency on ../mycel/clients/rust (optional, but cargo still reads it).
+      - name: Check out mycel beside psmux
+        run: git clone --depth 1 https://github.com/ohboyftw/mycel.git ../mycel
       - uses: dtolnay/rust-toolchain@stable
       - name: Backend contract tests
         run: cargo test --test backend_contracts
@@ -67,6 +73,9 @@ jobs:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
+      # Cargo.toml has a path dependency on ../mycel/clients/rust (optional, but cargo still reads it).
+      - name: Check out mycel beside psmux
+        run: git clone --depth 1 https://github.com/ohboyftw/mycel.git ../mycel
       - uses: dtolnay/rust-toolchain@stable
       - name: Build release binary
         run: cargo build --release
