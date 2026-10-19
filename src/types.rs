@@ -1210,6 +1210,18 @@ pub enum CtrlReq {
     SendText(String),
     SendKey(String),
     SendPaste(String),
+    /// `paste-buffer`: look up a buffer AND deliver it to the active pane in
+    /// one request. Two requests (ShowBuffer, then SendText) split the `-t`
+    /// temp focus: it was restored after the lookup, so the text landed in
+    /// whichever pane was active before.
+    PasteBuffer {
+        /// Buffer index (`-b N`); `None` is the newest buffer.
+        idx: Option<usize>,
+        /// `-p`: wrap in bracketed paste markers if the pane asked for them.
+        bracket: bool,
+        /// `-d`: delete the buffer after pasting.
+        delete: bool,
+    },
     ZoomPane,
     PrefixBegin,
     PrefixEnd,
@@ -1281,7 +1293,6 @@ pub enum CtrlReq {
     ListBuffers(mpsc::Sender<String>),
     ListBuffersFormat(mpsc::Sender<String>, String),
     ShowBuffer(mpsc::Sender<String>),
-    ShowBufferAt(mpsc::Sender<String>, usize),
     DeleteBuffer,
     DisplayMessage(mpsc::Sender<String>, String, DisplayTarget, bool), // resp, format, target, set_status_bar
     /// Does this pane id exist? Answers without moving focus.
