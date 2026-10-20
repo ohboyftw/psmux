@@ -9,7 +9,8 @@
 param(
     [string]$Filter = "*",
     [switch]$StopOnFailure,
-    [int]$FileTimeoutSec = 300
+    [int]$FileTimeoutSec = 300,
+    [string]$LogDir = (Join-Path $PSScriptRoot "bench-logs")
 )
 
 $ErrorActionPreference = 'Continue'
@@ -23,6 +24,7 @@ if (-not $files) {
     exit 0
 }
 
+New-Item -ItemType Directory -Path $LogDir -Force | Out-Null
 $startedAt = Get-Date
 $totalPass = 0
 $totalFail = 0
@@ -36,7 +38,12 @@ foreach ($f in $files) {
     $pre = Get-Date
     # A hung file must fail by name instead of stalling the whole bench (and
     # the CI job, whose log is lost when it is cancelled).
-    $proc = Start-Process pwsh -ArgumentList '-NoProfile', '-File', "`"$($f.FullName)`"" -NoNewWindow -PassThru
+    # Output goes to files, not the CI step's pipe: a psmux server a test leaves
+    # running would otherwise inherit the pipe and keep the step open forever.
+    $out = Join-Path $LogDir "$($f.BaseName).out.log"
+    $err = Join-Path $LogDir "$($f.BaseName).err.log"
+    $proc = Start-Process pwsh -ArgumentList '-NoProfile', '-File', "`"$($f.FullName)`"" -NoNewWindow -PassThru `
+        -RedirectStandardOutput $out -RedirectStandardError $err
     if ($proc.WaitForExit($FileTimeoutSec * 1000)) {
         $exit = $proc.ExitCode
     } else {
@@ -44,6 +51,7 @@ foreach ($f in $files) {
         taskkill /T /F /PID $proc.Id | Out-Null
         $exit = -1
     }
+    Get-Content $out, $err -ErrorAction SilentlyContinue | Out-Host
     $elapsed = [int]((Get-Date) - $pre).TotalMilliseconds
     $fileResults += [PSCustomObject]@{
         File = $f.Name
@@ -63,6 +71,12 @@ foreach ($f in $files) {
 }
 
 $duration = [int]((Get-Date) - $startedAt).TotalSeconds
+
+# Report and stop any psmux process the tests left behind, so it cannot hold the step open.
+$leftover = @(Get-Process -Name psmux* -ErrorAction SilentlyContinue)
+Write-Host "Leftover psmux processes after the bench: $($leftover.Count)"
+$leftover | Format-Table Id, ProcessName, StartTime -AutoSize | Out-Host
+$leftover | Stop-Process -Force -ErrorAction SilentlyContinue
 
 Write-Host "=== rails-bench summary ===" -ForegroundColor Cyan
 $fileResults | Format-Table File, Fail, Ms -AutoSize | Out-Host
