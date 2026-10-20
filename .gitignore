@@ -100,3 +100,6 @@ test-reports/
 # every worktree spawn). Keep them out of the tree to avoid the
 # tracked-file vs harness-written collision that aborted Stage 1B.
 .claude/settings.local.json
+
+# Per-file output from tests/run_rails_bench.ps1
+tests/bench-logs/
