@@ -30,11 +30,18 @@ when the server restarts.
 | Variable | Value |
 |---|---|
 | `#{sessiond_summary}` | non-zero counts, most urgent first, e.g. `B1 W2 D3` (blocked, error, working, done, idle) |
+| `#{sessiond_attention}` | the blocked, then failed, sessions as `project: title`, joined by ` \| `; titles cut to 32 characters |
+| `#{sessiond_sessions}` | every session, one per line: state letter, then `project: title` (for `display-message -p` or a popup) |
 | `#{sessiond_blocked}`, `#{sessiond_error}`, `#{sessiond_working}`, `#{sessiond_done}`, `#{sessiond_idle}` | sessions in that state |
 | `#{sessiond_total}` | sessions known |
-| `#{sessiond_feed}` | `off` (option unset), `live` (command running), `down` (command exited, waiting to restart) |
+| `#{sessiond_feed}` | `off` (option unset), `down` (command exited, waiting to restart), `stale` (no `started` or heartbeat for 90 s), `live` |
 
-All are empty while the feed is off. The status line picks up changes on its
+A session without a title shows its session id; one without a project shows
+the title alone. All but `#{sessiond_feed}` are empty while the feed is off.
+
+A `sessiond/sidecar/started` message clears the board, so sessions removed
+while the sidecar was down do not linger. Heartbeats on `sessiond/sidecar/alive`
+keep the feed `live`. The status line picks up changes on its
 next refresh (`status-interval`).
 
 ## Input format
