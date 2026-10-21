@@ -4046,9 +4046,16 @@ pub fn run_server(
                                 Ok(()) => {
                                     hook_event = Some("after-respawn-pane");
                                     // Spawning only proves the wrapper shell
-                                    // started. Hold the verdict for a short
-                                    // grace period so a payload that dies on
-                                    // startup is reported as a failure.
+                                    // started. Hold the verdict long enough for
+                                    // a payload that dies on startup to be
+                                    // reported as a failure. The payload runs
+                                    // under `pwsh -Command`, which takes about
+                                    // 0.7s to start (1.4-1.8s with a profile),
+                                    // so 600ms called a missing binary success
+                                    // whenever pwsh was slow. Keep this under
+                                    // the CLI's CONTROL_READ_TIMEOUT (3s), or a
+                                    // command that does start reads as a
+                                    // timeout instead of OK.
                                     let pane_id = {
                                         let win = &app.windows[app.active_idx];
                                         crate::tree::active_pane(&win.root, &win.active_path)
@@ -4058,7 +4065,7 @@ pub fn run_server(
                                         Some(id) => app.pending_respawn_replies.push((
                                             id,
                                             std::time::Instant::now()
-                                                + std::time::Duration::from_millis(600),
+                                                + std::time::Duration::from_millis(2000),
                                             reply,
                                         )),
                                         None => {
