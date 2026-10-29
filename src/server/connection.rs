@@ -1376,19 +1376,15 @@ pub(crate) fn handle_connection(
                 let _ = tx.send(CtrlReq::SetBuffer(content));
             }
             "paste-buffer" | "pasteb" => {
-                let buf_idx: Option<usize> = args
+                let idx: Option<usize> = args
                     .windows(2)
                     .find(|w| w[0] == "-b")
-                    .and_then(|w| w[1].parse().ok());
-                let (rtx, rrx) = mpsc::channel::<String>();
-                if let Some(idx) = buf_idx {
-                    let _ = tx.send(CtrlReq::ShowBufferAt(rtx, idx));
-                } else {
-                    let _ = tx.send(CtrlReq::ShowBuffer(rtx));
-                }
-                if let Ok(text) = rrx.recv() {
-                    let _ = tx.send(CtrlReq::SendText(text));
-                }
+                    .and_then(|w| w[1].trim_start_matches("buffer").parse().ok());
+                let _ = tx.send(CtrlReq::PasteBuffer {
+                    idx,
+                    bracket: args.contains(&"-p"),
+                    delete: args.contains(&"-d"),
+                });
             }
             "list-buffers" | "lsb" => {
                 let fmt = args
