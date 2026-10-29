@@ -382,9 +382,24 @@ fn run_main() -> io::Result<()> {
                     }
                 }
             }
-            // Show resurrectable sessions (dead but have snapshots)
+            // Show resurrectable sessions (dead but have snapshots), under
+            // the SAME -L namespace filter as the live sessions above: a
+            // snapshot belongs to the server/namespace that wrote it, so a
+            // brand-new isolated -L server must not list other servers'
+            // (or other test runs') snapshots. Stems are namespace-qualified
+            // (`ns__name`) so the filter mirrors the port-file scan.
             let resurrect_dir = crate::resurrection::resurrect_dir(None);
             for name in crate::resurrection::list_resurrectable(&resurrect_dir) {
+                // Warm standby snapshots are internal, never resurrectable.
+                if crate::session::is_warm_session(&name) {
+                    continue;
+                }
+                if !crate::resurrection::stem_visible_in_namespace(
+                    &name,
+                    l_socket_name.as_deref(),
+                ) {
+                    continue;
+                }
                 // Skip if a live session with this name was already printed
                 let port_file = crate::paths::port_file(&name);
                 if std::path::Path::new(&port_file).exists() {
@@ -403,7 +418,12 @@ fn run_main() -> io::Result<()> {
                 .map(|s| s.to_string())
                 .unwrap_or_else(|| "default".to_string());
             let dir = crate::resurrection::resurrect_dir(None);
-            match crate::resurrection::load_snapshot_from(&session_name, &dir) {
+            // Snapshots are stored under the namespace-qualified stem, so a
+            // `psmux -L ns resurrect work` finds `ns__work.json`, and the
+            // session it recreates is plain `work` inside the same -L.
+            let stem =
+                crate::resurrection::snapshot_stem(&session_name, l_socket_name.as_deref());
+            match crate::resurrection::load_snapshot_from(&stem, &dir) {
                 Ok(snap) => {
                     let win_count = snap.windows.len();
                     let pane_count: usize =
@@ -413,7 +433,7 @@ fn run_main() -> io::Result<()> {
                         snap.session_name, win_count, pane_count
                     );
                     // Delete the snapshot now — it'll be re-created by the new server
-                    let _ = crate::resurrection::delete_snapshot(&session_name, &dir);
+                    let _ = crate::resurrection::delete_snapshot(&stem, &dir);
 
                     // Build a new-session equivalent that applies the snapshot.
                     // We serialize the snapshot path as an env var so the server
@@ -496,7 +516,16 @@ fn run_main() -> io::Result<()> {
                     // and source the config file through the control port after startup.
                     // For MVP: create the session, then source.
                     let exe = std::env::current_exe().unwrap_or_else(|_| "psmux".into());
+                    // The recreated session must live in the SAME -L namespace
+                    // the snapshot was loaded from, so the namespace flag is
+                    // threaded through every spawned invocation.
+                    let mut ns_args: Vec<String> = Vec::new();
+                    if let Some(ref l) = l_socket_name {
+                        ns_args.push("-L".to_string());
+                        ns_args.push(l.clone());
+                    }
                     let status = std::process::Command::new(&exe)
+                        .args(&ns_args)
                         .args(["new-session", "-d", "-s", &session_name])
                         .args(first_cwd.iter().flat_map(|c| vec!["-c", c.as_str()]))
                         .args(first_cmd.iter().flat_map(|c| vec!["--", c.as_str()]))
@@ -509,6 +538,7 @@ fn run_main() -> io::Result<()> {
                             // Source the config to create remaining panes
                             if !cmds.is_empty() {
                                 let source_status = std::process::Command::new(&exe)
+                                    .args(&ns_args)
                                     .args(["source-file", tmp_config.to_str().unwrap_or("")])
                                     .status();
                                 if let Ok(ss) = source_status {
@@ -526,6 +556,7 @@ fn run_main() -> io::Result<()> {
                             // Now attach to the session
                             eprintln!("Attaching to resurrected session '{}'...", session_name);
                             let _ = std::process::Command::new(&exe)
+                                .args(&ns_args)
                                 .args(["attach", "-t", &session_name])
                                 .status();
                         }
@@ -545,12 +576,26 @@ fn run_main() -> io::Result<()> {
             // executable path in as the session name.
             let arg = cmd_args.get(1).map(|s| s.as_str());
             if arg == Some("--all") {
+                // Same visibility rule as list-sessions: `--all` clears the
+                // current namespace's snapshots (with -L: that namespace's;
+                // without: the un-namespaced ones). Other namespaces' files
+                // are not this invocation's to delete.
                 for name in crate::resurrection::list_resurrectable(&dir) {
+                    if !crate::resurrection::stem_visible_in_namespace(
+                        &name,
+                        l_socket_name.as_deref(),
+                    ) {
+                        continue;
+                    }
                     let _ = crate::resurrection::delete_snapshot(&name, &dir);
                 }
                 eprintln!("All resurrection snapshots deleted.");
             } else if let Some(name) = arg {
-                match crate::resurrection::delete_snapshot(name, &dir) {
+                // A single name is namespaced like the resurrect lookup, so
+                // `psmux -L ns delete-resurrect work` removes ns__work.json.
+                let stem =
+                    crate::resurrection::snapshot_stem(name, l_socket_name.as_deref());
+                match crate::resurrection::delete_snapshot(&stem, &dir) {
                     Ok(()) => eprintln!("Deleted resurrection snapshot for '{}'.", name),
                     Err(e) => {
                         eprintln!("Failed to delete snapshot for '{}': {}", name, e);
