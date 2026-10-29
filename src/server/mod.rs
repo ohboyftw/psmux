@@ -742,6 +742,10 @@ pub fn run_server(
     // server loop gets it.
     #[cfg(windows)]
     crate::platform::mouse_inject::SERVER_PROCESS.store(true, std::sync::atomic::Ordering::Relaxed);
+    // Create the crash directory up front so the panic hook only has to write a file.
+    if let Err(e) = std::fs::create_dir_all(crate::crash::crash_directory()) {
+        eprintln!("psmux: failed to create crash dir: {e}");
+    }
     // Keep only the newest 20 crash reports across runs.
     crate::crash::prune_crashes(20);
     // Same for resurrection snapshots, which are otherwise unbounded.
@@ -1264,14 +1268,20 @@ pub fn run_server(
                             | CtrlReq::SendText(_)
                             | CtrlReq::SendKey(_)
                             | CtrlReq::SendPaste(_)
+                            | CtrlReq::PasteBuffer { .. }
                             | CtrlReq::SendKeysHex(_)
+                            | CtrlReq::ResolveWindow(..)
                     );
+                    // ResolveWindow is a read-only lookup that precedes a temp
+                    // focus. It must not end one already in flight, or a
+                    // concurrent `-t` command would run on the restored window.
                     let is_temp_focus = matches!(
                         &req,
                         CtrlReq::FocusWindowTemp(_)
                             | CtrlReq::FocusPaneTemp(_)
                             | CtrlReq::FocusPaneTempCheck(..)
                             | CtrlReq::FocusPaneByIndexTemp(_)
+                            | CtrlReq::ResolveWindow(..)
                     );
                     let mut hook_event: Option<&str> = None;
                     // Track active_idx changes for debugging window-switch issues
@@ -2336,6 +2346,17 @@ pub fn run_server(
                         CtrlReq::SendPaste(s) => {
                             send_paste_to_active(&mut app, &s)?;
                             echo_pending_until = Some(Instant::now());
+                        }
+                        CtrlReq::PasteBuffer { idx, bracket, delete } => {
+                            let idx = idx.unwrap_or(0);
+                            if let Some(text) = app.paste_buffers.get(idx).cloned() {
+                                app.status_message = None;
+                                crate::input::paste_buffer_to_active(&mut app, &text, bracket);
+                                if delete {
+                                    app.paste_buffers.remove(idx);
+                                }
+                                echo_pending_until = Some(Instant::now());
+                            }
                         }
                         CtrlReq::ZoomPane => {
                             toggle_zoom(&mut app);
@@ -3937,10 +3958,6 @@ pub fn run_server(
                             let content = app.paste_buffers.first().cloned().unwrap_or_default();
                             let _ = resp.send(content);
                         }
-                        CtrlReq::ShowBufferAt(resp, idx) => {
-                            let content = app.paste_buffers.get(idx).cloned().unwrap_or_default();
-                            let _ = resp.send(content);
-                        }
                         CtrlReq::DeleteBuffer => {
                             if !app.paste_buffers.is_empty() {
                                 app.paste_buffers.remove(0);
@@ -3988,6 +4005,22 @@ pub fn run_server(
                         }
                         CtrlReq::PaneExists(pid, resp) => {
                             let _ = resp.send(crate::tree::find_pane_location(&app, pid).is_some());
+                        }
+                        CtrlReq::ResolveWindow(spec, pane_id, resp) => {
+                            let windows = app.windows.iter().map(|w| (w.id, w.name.as_str()));
+                            let result = match spec.resolve(windows, app.window_base_index) {
+                                None => Err(crate::types::TargetKind::Window),
+                                Some(pos) => match pane_id {
+                                    Some(pid) => match crate::tree::find_pane_location(&app, pid) {
+                                        Some((wi, _)) if wi == pos => {
+                                            Ok(pos + app.window_base_index)
+                                        }
+                                        _ => Err(crate::types::TargetKind::Pane),
+                                    },
+                                    None => Ok(pos + app.window_base_index),
+                                },
+                            };
+                            let _ = resp.send(result);
                         }
                         CtrlReq::LastWindow => {
                             if app.windows.len() > 1 && app.last_window_idx < app.windows.len() {
@@ -4130,9 +4163,16 @@ pub fn run_server(
                                 Ok(()) => {
                                     hook_event = Some("after-respawn-pane");
                                     // Spawning only proves the wrapper shell
-                                    // started. Hold the verdict for a short
-                                    // grace period so a payload that dies on
-                                    // startup is reported as a failure.
+                                    // started. Hold the verdict long enough for
+                                    // a payload that dies on startup to be
+                                    // reported as a failure. The payload runs
+                                    // under `pwsh -Command`, which takes about
+                                    // 0.7s to start (1.4-1.8s with a profile),
+                                    // so 600ms called a missing binary success
+                                    // whenever pwsh was slow. Keep this under
+                                    // the CLI's CONTROL_READ_TIMEOUT (3s), or a
+                                    // command that does start reads as a
+                                    // timeout instead of OK.
                                     let pane_id = {
                                         let win = &app.windows[app.active_idx];
                                         crate::tree::active_pane(&win.root, &win.active_path)
@@ -4142,7 +4182,7 @@ pub fn run_server(
                                         Some(id) => app.pending_respawn_replies.push((
                                             id,
                                             std::time::Instant::now()
-                                                + std::time::Duration::from_millis(600),
+                                                + std::time::Duration::from_millis(2000),
                                             reply,
                                         )),
                                         None => {

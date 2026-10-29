@@ -2996,6 +2996,35 @@ pub fn send_paste_to_active(app: &mut AppState, text: &str) -> io::Result<()> {
     Ok(())
 }
 
+/// Deliver a paste buffer to the active pane, as `paste-buffer` does.
+///
+/// Unlike [`send_paste_to_active`] (a terminal paste event, which brackets
+/// whenever the child asked for it), tmux brackets a `paste-buffer` only when
+/// `-p` is given AND the pane has enabled bracketed paste (`?2004h`). The text
+/// goes to the target pane only, regardless of `synchronize-panes`, and
+/// regardless of overlay modes, so a script's paste is never swallowed by a
+/// copy-mode or menu the user happens to have open.
+pub fn paste_buffer_to_active(app: &mut AppState, text: &str, bracket_requested: bool) {
+    let win = &mut app.windows[app.active_idx];
+    if let Some(p) = active_pane_mut(&mut win.root, &win.active_path) {
+        let bracket = bracket_requested
+            && p.term
+                .lock()
+                .map(|t| t.screen().bracketed_paste())
+                .unwrap_or(false);
+        crate::debug_log::input_log(
+            "paste",
+            &format!(
+                "paste-buffer pane=%{} bracket={} text_len={}",
+                p.id,
+                bracket,
+                text.len()
+            ),
+        );
+        write_paste_chunked(&mut p.writer, text.as_bytes(), bracket);
+    }
+}
+
 /// Inject a Space+Backspace primer on the first send-keys to a pane.
 /// This absorbs the ConPTY/PSReadLine race that eats the first character
 /// of programmatic input delivered shortly after the shell prompt appears.

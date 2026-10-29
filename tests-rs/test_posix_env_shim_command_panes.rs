@@ -82,6 +82,21 @@ fn command_pane_omits_env_shim_when_env_shim_off() {
     );
 }
 
+#[test]
+#[cfg(windows)]
+fn command_pane_starts_pwsh_without_profile() {
+    // A command pane runs one command, like tmux's `sh -c`, so it must not
+    // pay for loading the user's profile first.
+    let b = build_command(Some("echo hi"), Some("pwsh"), true, false, "sess");
+    let argv = argv_of(&b);
+    let command_at = argv.iter().position(|a| a == "-Command");
+    let no_profile_at = argv.iter().position(|a| a == "-NoProfile");
+    assert!(
+        matches!((no_profile_at, command_at), (Some(n), Some(c)) if n < c),
+        "pwsh must get -NoProfile before -Command, got argv: {argv:?}"
+    );
+}
+
 /// Fix B: `--shell` / `default-shell` were resolved and then discarded for
 /// panes spawned with a command, which always fell back to `cached_shell()`
 /// (hardcoded pwsh → cmd).  A POSIX shell must reach the `-c` branch.

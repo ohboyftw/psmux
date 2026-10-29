@@ -544,17 +544,10 @@ pub fn parse_target(target: &str) -> ParsedTarget {
         }
         return result;
     }
-    if let Some(rest) = target.strip_prefix('@') {
-        if let Ok(wid) = rest.parse::<usize>() {
-            result.window = Some(wid);
-            result.window_is_id = true;
-        } else {
-            result.window_unresolved = true;
-        }
-        return result;
-    }
-
-    let (session_part, window_pane_part) = if let Some(colon_pos) = target.find(':') {
+    let (session_part, window_pane_part) = if target.starts_with('@') {
+        // A bare window id, which may carry a pane slot: "@2" or "@2.%7".
+        (None, Some(target))
+    } else if let Some(colon_pos) = target.find(':') {
         let session = if colon_pos == 0 {
             None
         } else {
@@ -591,51 +584,65 @@ pub fn parse_target(target: &str) -> ParsedTarget {
             } else {
                 result.pane_unresolved = true;
             }
-        } else if let Some(rest) = wp.strip_prefix('@') {
-            if let Ok(wid) = rest.parse::<usize>() {
-                result.window = Some(wid);
-                result.window_is_id = true;
-            } else {
-                result.window_unresolved = true;
-            }
-        } else if let Some(dot_pos) = wp.find('.') {
-            if dot_pos > 0 {
-                if let Ok(w) = wp[..dot_pos].parse::<usize>() {
-                    result.window = Some(w);
-                } else {
-                    result.window_unresolved = true;
+        } else {
+            let (window_str, pane_str) = match wp.find('.') {
+                Some(dot_pos) => (&wp[..dot_pos], Some(&wp[dot_pos + 1..])),
+                None => (wp, None),
+            };
+            parse_window_part(window_str, &mut result);
+            // The pane slot accepts a %id as well as an index, exactly as the
+            // "%pane" branch above already does. Parsing it with a bare
+            // parse::<usize>() silently failed on the '%', leaving pane = None,
+            // and every caller then fell through to the ACTIVE pane:
+            // "kill-pane -t sess:.%4" killed a different pane in a different
+            // window and still exited 0. A bare number must stay an index, or
+            // "sess:0.1" would start meaning pane %1.
+            if let Some(pane_str) = pane_str {
+                if let Some(pid) = pane_str
+                    .strip_prefix('%')
+                    .and_then(|s| s.parse::<usize>().ok())
+                {
+                    result.pane = Some(pid);
+                    result.pane_is_id = true;
+                } else if let Ok(p) = pane_str.parse::<usize>() {
+                    result.pane = Some(p);
+                } else if !pane_str.is_empty() {
+                    // An EMPTY pane slot ("sess:0.") means the current pane and
+                    // is legitimate; a non-empty one that will not parse is a typo.
+                    result.pane_unresolved = true;
                 }
             }
-            // The pane slot accepts a %id as well as an index, exactly as the
-            // "%pane" and "@window" branches above already do. Parsing it with a
-            // bare parse::<usize>() silently failed on the '%', leaving
-            // pane = None, and every caller then fell through to the ACTIVE
-            // pane: "kill-pane -t sess:.%4" killed a different pane in a
-            // different window and still exited 0. A bare number must stay an
-            // index, or "sess:0.1" would start meaning pane %1.
-            let pane_str = &wp[dot_pos + 1..];
-            if let Some(pid) = pane_str
-                .strip_prefix('%')
-                .and_then(|s| s.parse::<usize>().ok())
-            {
-                result.pane = Some(pid);
-                result.pane_is_id = true;
-            } else if let Ok(p) = pane_str.parse::<usize>() {
-                result.pane = Some(p);
-            } else if !pane_str.is_empty() {
-                // An EMPTY pane slot ("sess:0.") means the current pane and is
-                // legitimate; a non-empty one that will not parse is a typo.
-                result.pane_unresolved = true;
-            }
-        } else if let Ok(w) = wp.parse::<usize>() {
-            result.window = Some(w);
-        } else if !wp.is_empty() {
-            // psmux has no window-name resolution, so a name here names nothing.
-            result.window_unresolved = true;
         }
     }
 
     result
+}
+
+/// Parse the window slot of a target: an index (`1`), an id (`@2`) or a name
+/// (`w2`). An empty slot means the current window and sets nothing.
+///
+/// A name is kept for the server to look up, because only the server knows
+/// its window names. The server rejects a name that matches no window.
+fn parse_window_part(w: &str, result: &mut ParsedTarget) {
+    if w.is_empty() {
+        return;
+    }
+    if let Some(rest) = w.strip_prefix('@') {
+        if let Ok(wid) = rest.parse::<usize>() {
+            result.window = Some(wid);
+            result.window_is_id = true;
+        } else {
+            result.window_unresolved = true;
+        }
+    } else if let Ok(idx) = w.parse::<usize>() {
+        result.window = Some(idx);
+    } else if w.bytes().all(|b| b.is_ascii_digit()) {
+        // All digits but too large for usize: an index nothing can have, not a
+        // name. Wrapping or truncating it would select a real window by accident.
+        result.window_unresolved = true;
+    } else {
+        result.window_name = Some(w.to_string());
+    }
 }
 
 /// Extract the session name from a target string (for port file lookup)
@@ -655,3 +662,7 @@ mod tests_pane_target_forms;
 #[cfg(test)]
 #[path = "../tests-rs/test_target_validation.rs"]
 mod tests_target_validation;
+
+#[cfg(test)]
+#[path = "../tests-rs/test_window_target_resolution.rs"]
+mod tests_window_target_resolution;

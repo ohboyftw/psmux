@@ -352,9 +352,12 @@ fn run_shell_command(cmd: &str, app: &AppState) -> String {
     let output = match child {
         Ok(child) => {
             crate::proc_stats::record_spawn(crate::proc_stats::SpawnKind::Status);
-            // Wait with a 2-second timeout using a helper thread.
-            let timeout = Duration::from_secs(2);
-            wait_with_timeout(child, timeout)
+            match wait_with_timeout(child, Duration::from_secs(2)) {
+                Some(output) => output,
+                // Not cached: a slow first start (cold PowerShell) would otherwise
+                // blank the value for a whole status interval.
+                None => return String::new(),
+            }
         }
         Err(_) => String::new(),
     };
@@ -368,21 +371,37 @@ fn run_shell_command(cmd: &str, app: &AppState) -> String {
 }
 
 /// Wait for a child process with a timeout.  Returns trimmed stdout on
-/// success, empty string on failure or timeout.
-fn wait_with_timeout(child: std::process::Child, timeout: std::time::Duration) -> String {
+/// success, an empty string on failure, and `None` on timeout, after killing
+/// the child so a hung command does not outlive the call.
+fn wait_with_timeout(
+    mut child: std::process::Child,
+    timeout: std::time::Duration,
+) -> Option<String> {
+    use std::io::Read;
     use std::sync::mpsc;
 
+    let mut stdout = child.stdout.take();
     let (tx, rx) = mpsc::channel();
     std::thread::spawn(move || {
-        let result = child.wait_with_output();
-        let _ = tx.send(result);
+        let mut buf = Vec::new();
+        if let Some(out) = stdout.as_mut() {
+            let _ = out.read_to_end(&mut buf);
+        }
+        let _ = tx.send(buf);
     });
 
     match rx.recv_timeout(timeout) {
-        Ok(Ok(output)) if output.status.success() => {
-            String::from_utf8_lossy(&output.stdout).trim().to_string()
+        Ok(buf) => match child.wait() {
+            Ok(status) if status.success() => {
+                Some(String::from_utf8_lossy(&buf).trim().to_string())
+            }
+            _ => Some(String::new()),
+        },
+        Err(_) => {
+            let _ = child.kill();
+            let _ = child.wait();
+            None
         }
-        _ => String::new(),
     }
 }
 
@@ -1309,6 +1328,9 @@ fn find_comparison_in_cond(cond: &str) -> Option<(&str, &str, &str)> {
 /// Expand a named variable.
 pub fn expand_var(var: &str, app: &AppState, win_idx: usize) -> String {
     if let Some(v) = proc_stat_var(var, app) {
+        return v;
+    }
+    if let Some(v) = crate::sessiond_state::format_var(var, &app.user_options) {
         return v;
     }
     let win = match app.windows.get(win_idx) {
@@ -2543,6 +2565,14 @@ mod tests {
         // A command that will fail (non-existent executable)
         let result = run_shell_command("__nonexistent_command_12345__", &app);
         assert!(result.is_empty());
+    }
+
+    #[test]
+    fn test_shell_command_timeout_is_not_cached() {
+        let app = mock_app();
+        let cmd = if cfg!(windows) { "Start-Sleep -Seconds 5" } else { "sleep 5" };
+        assert!(run_shell_command(cmd, &app).is_empty());
+        assert!(!app.shell_cmd_cache.lock().unwrap().contains_key(cmd));
     }
 
     #[test]
