@@ -1325,6 +1325,9 @@ pub fn expand_var(var: &str, app: &AppState, win_idx: usize) -> String {
     if let Some(v) = proc_stat_var(var, app) {
         return v;
     }
+    if let Some(v) = crate::sessiond_state::format_var(var, &app.user_options) {
+        return v;
+    }
     let win = match app.windows.get(win_idx) {
         Some(w) => w,
         None => {

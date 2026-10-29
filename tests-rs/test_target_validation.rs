@@ -56,16 +56,14 @@ fn a_non_numeric_window_id_is_marked_unresolved() {
 }
 
 #[test]
-fn a_named_window_is_marked_unresolved() {
-    // psmux has no window-name resolution at all, so a name in the window slot
-    // is not "a window we might find later" — it is unresolvable, today.
+fn a_named_window_is_left_for_the_server_to_resolve() {
+    // Only the server knows its window names (#627), so a name is carried as a
+    // name. The server rejects one that matches no window; the client cannot.
     let pt = parse_target("sess:nosuchwindow");
 
     assert_eq!(pt.window, None);
-    assert!(
-        pt.window_unresolved,
-        "`sess:nosuchwindow` silently hit the ACTIVE window before this fix",
-    );
+    assert_eq!(pt.window_name.as_deref(), Some("nosuchwindow"));
+    assert!(!pt.window_unresolved);
 }
 
 #[test]

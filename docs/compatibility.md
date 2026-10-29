@@ -15,7 +15,7 @@ psmux is the most tmux-compatible terminal multiplexer on Windows.
 | Themes | 14 style options, 24-bit color, text attributes |
 | Layouts | 5 layouts (even-h, even-v, main-h, main-v, tiled) |
 | Copy mode | 53 vim keybindings, search, registers |
-| Targets | `session:window.pane`, `%id`, `@id` syntax |
+| Targets | `session:window.pane` (window by index, `@id` or name), `%id`, `@id`, `@id.%pane` syntax |
 | `if-shell` / `run-shell` | ✅ Conditional config logic |
 | Paste buffers | ✅ Full buffer management |
 

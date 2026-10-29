@@ -99,6 +99,15 @@ jobs:
       - name: Verify static parity
         shell: pwsh
         run: pwsh tests/verify_parity.ps1
+      # A step timeout fails the job and keeps its log; the job timeout cancels it and the log is lost.
       - name: Run rails bench
+        timeout-minutes: 20
         shell: pwsh
         run: pwsh tests/run_rails_bench.ps1
+      - name: Upload bench logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: rails-bench-logs
+          path: tests/bench-logs/
+          if-no-files-found: warn

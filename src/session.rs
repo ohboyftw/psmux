@@ -632,8 +632,13 @@ fn env_route_target(r: &RouteEnv) -> io::Result<String> {
 /// session name (minus `:window.pane`) to its `.port`. `None` falls through to
 /// the env route; a warm name always does, so it is never guessed at.
 fn route_by_target(raw: &str, dir: &std::path::Path) -> Option<(String, u16, String)> {
-    if raw.starts_with('%') || raw.starts_with('@') {
+    if raw.starts_with('%') {
         return scan_servers_for_id(raw);
+    }
+    if raw.starts_with('@') {
+        // Servers list window ids alone, so "@2.%7" has to be looked up as "@2".
+        let window_id = raw.split('.').next().unwrap_or(raw);
+        return scan_servers_for_id(window_id);
     }
     let name = raw.split(':').next().unwrap_or(raw);
     if name.is_empty() || is_warm_session(name) {
@@ -676,6 +681,21 @@ pub fn send_control(line: String) -> io::Result<()> {
     let addr: std::net::SocketAddr = format!("127.0.0.1:{}", port).parse().unwrap();
     let mut stream = std::net::TcpStream::connect_timeout(&addr, Duration::from_millis(100))?;
     let _ = stream.set_nodelay(true);
+    // Only the server knows its windows, so only its reply can say a `-t`
+    // window does not exist. Reading 64 bytes and leaving dropped that reply,
+    // and `select-window -t sess:nosuchwindow` exited 0 (#627). With a target
+    // in play, read the reply to its end and fail on an unresolved target.
+    if full_target.is_some() || parse_target_from_line(&line).is_some() {
+        let _ = stream.set_read_timeout(Some(CONTROL_READ_TIMEOUT));
+        return match exchange_one_shot(&mut stream, &session_key, full_target.as_deref(), &line) {
+            // A target error is written before the command runs, so a reply
+            // still open at the timeout is a command still running (e.g.
+            // `send-keys --wait-ready`), not a failure.
+            Err(e) if e.kind() == io::ErrorKind::TimedOut => Ok(()),
+            Err(e) => Err(e),
+            Ok(_) => Ok(()),
+        };
+    }
     let _ = stream.set_read_timeout(Some(Duration::from_millis(50)));
     let _ = writeln!(stream, "AUTH {}", session_key);
     if let Some(ref ft) = full_target {
