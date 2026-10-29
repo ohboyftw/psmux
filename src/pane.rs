@@ -1416,7 +1416,15 @@ pub fn build_command(
                     .unwrap_or("")
                     .to_lowercase();
                 if stem == "pwsh" || stem == "powershell" {
-                    builder.args(["-NoLogo", "-Command", &prepend_env_shim(cmd, env_shim)]);
+                    // -NoProfile, as tmux's `sh -c` reads no rc file. Loading the
+                    // profile cost 0.7-1.1 s per command pane, and respawn-pane
+                    // judges a command dead or alive inside a fixed grace window.
+                    builder.args([
+                        "-NoLogo",
+                        "-NoProfile",
+                        "-Command",
+                        &prepend_env_shim(cmd, env_shim),
+                    ]);
                 } else if matches!(
                     stem.as_str(),
                     "bash" | "sh" | "zsh" | "fish" | "dash" | "ash"
@@ -1436,7 +1444,12 @@ pub fn build_command(
                 builder.env("COLORTERM", "truecolor");
                 builder.env("PSMUX_SESSION", session_name);
                 builder.env("PSMUX", "1");
-                builder.args(["-NoLogo", "-Command", &prepend_env_shim(cmd, env_shim)]);
+                builder.args([
+                    "-NoLogo",
+                    "-NoProfile",
+                    "-Command",
+                    &prepend_env_shim(cmd, env_shim),
+                ]);
                 builder
             }
         }
