@@ -82,12 +82,11 @@ fn main() {
     }
 }
 
-/// Reject a `-t` that names a window or pane which cannot exist.
+/// Reject a `-t` that cannot parse into a window or pane at all.
 ///
-/// select-pane and select-window are fire-and-forget: nothing reads the
-/// server's reply, so a server-side "can't find window" is written into a
-/// socket no one is listening on and the client still exits 0. For the exit
-/// code to mean anything, the check has to happen on this side too.
+/// This catches malformed targets (`@xyz`, `sess:0.abc`) before any server is
+/// contacted. Whether a well-formed target names a window that EXISTS only the
+/// server can say; `send_control` reads its reply for that (#627).
 fn check_target_resolvable(target: &str) -> io::Result<()> {
     let pt = crate::cli::parse_target(target);
     let prefix = if pt.window_unresolved {
