@@ -27,6 +27,7 @@ mod rendering;
 mod resurrection;
 mod server;
 mod session;
+mod sessiond_state;
 mod ssh_input;
 mod style;
 mod tree;
