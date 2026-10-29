@@ -286,9 +286,11 @@ pub struct Pane {
     /// Filled by the PTY reader thread's vt100 callback, drained by the
     /// client render loop when `allow_passthrough` is "on" or "all".
     pub passthrough_queue: PassthroughQueue,
-    /// True after the first send-keys input has been delivered to this pane.
-    /// On the first write, psmux injects a Space+Backspace primer to absorb
-    /// the ConPTY/PSReadLine first-character truncation race.
+    /// True after the Space+Backspace primer has been delivered to this pane.
+    /// On the first write, psmux injects ` \x08` to absorb the ConPTY/PSReadLine
+    /// first-character truncation race — but only for default-shell panes; a
+    /// pane spawned with a command never receives the primer (see
+    /// `input.rs::pane_wants_input_primer`).
     pub input_primed: bool,
     /// Working directory at pane spawn time. Used by run_shell to inherit context.
     pub spawn_cwd: Option<std::path::PathBuf>,

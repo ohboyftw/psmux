@@ -382,7 +382,7 @@ fn resurrect_when_session_starts_then_snapshot_is_kept_for_a_retry() {
     let snap = snapshot_with_first_pane(pane(None, "claude-code", None));
     save_snapshot_to(&snap, &dir).expect("save");
 
-    resurrect("s", &snap, &dir, Duration::ZERO, &mut |_| true).expect("resurrect");
+    resurrect("s", "s", &snap, &dir, Duration::ZERO, &mut |_| true).expect("resurrect");
 
     assert_eq!(load_snapshot_from("s", &dir).expect("still there"), snap);
     fs::remove_dir_all(&dir).ok();
@@ -407,11 +407,35 @@ fn resurrect_when_new_server_rewrites_snapshot_then_backup_keeps_the_original() 
         true
     };
 
-    resurrect("s", &snap, &dir, Duration::ZERO, &mut run).expect("resurrect");
+    resurrect("s", "s", &snap, &dir, Duration::ZERO, &mut run).expect("resurrect");
 
     let backup = fs::read_to_string(backup_path("s", &dir)).expect("backup");
     let kept: SessionSnapshot = serde_json::from_str(&backup).expect("backup parses");
     assert_eq!(kept, snap);
+    fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn resurrect_when_namespaced_then_reads_the_stem_and_targets_the_plain_name() {
+    let dir = fresh_dir("psmux_resurrect_namespaced_stem");
+    let snap = snapshot_of(vec![
+        window("", vec![pane(None, "", None)]),
+        window("", vec![pane(None, "", None)]),
+    ]);
+    save_snapshot_to(&snap, &dir).expect("save");
+    fs::rename(dir.join("s.json"), dir.join("ns__s.json")).expect("namespace it");
+    let mut targets = Vec::new();
+    let mut run = |args: &[String]| {
+        if args.first().map(String::as_str) == Some("-t") {
+            targets.push(args[1].clone());
+        }
+        true
+    };
+
+    resurrect("s", "ns__s", &snap, &dir, Duration::ZERO, &mut run).expect("resurrect");
+
+    assert_eq!(targets, vec!["s".to_string()]);
+    assert!(backup_path("ns__s", &dir).exists());
     fs::remove_dir_all(&dir).ok();
 }
 
@@ -447,7 +471,7 @@ fn resurrect_when_new_session_fails_then_error_and_no_steps() {
     save_snapshot_to(&snap, &dir).expect("save");
     let mut calls = 0;
 
-    let result = resurrect("s", &snap, &dir, Duration::ZERO, &mut |_| {
+    let result = resurrect("s", "s", &snap, &dir, Duration::ZERO, &mut |_| {
         calls += 1;
         false
     });
@@ -511,7 +535,7 @@ fn resurrect_when_name_reads_as_session_and_pane_then_refused_before_anything_ru
         fs::write(dir.join(format!("{name}.json")), json).expect("write");
         let mut calls = 0;
 
-        let result = resurrect(name, &snap, &dir, Duration::ZERO, &mut |_| {
+        let result = resurrect(name, name, &snap, &dir, Duration::ZERO, &mut |_| {
             calls += 1;
             true
         });
@@ -529,7 +553,15 @@ fn resurrect_when_name_has_a_non_numeric_dot_then_restored() {
     let path = dir.join("my.proj.json");
     fs::write(&path, serde_json::to_string(&snap).unwrap()).expect("write");
 
-    resurrect("my.proj", &snap, &dir, Duration::ZERO, &mut |_| true).expect("resurrect");
+    resurrect(
+        "my.proj",
+        "my.proj",
+        &snap,
+        &dir,
+        Duration::ZERO,
+        &mut |_| true,
+    )
+    .expect("resurrect");
     fs::remove_dir_all(&dir).ok();
 }
 
@@ -554,7 +586,7 @@ fn resurrect_when_snapshot_is_the_oldest_then_the_new_servers_prune_keeps_it_and
         age(&other, 3_600);
     }
 
-    resurrect("s", &snap, &dir, Duration::ZERO, &mut |_| true).expect("resurrect");
+    resurrect("s", "s", &snap, &dir, Duration::ZERO, &mut |_| true).expect("resurrect");
     // What the restored server does at startup.
     prune_snapshots_in(&dir, 50);
 
