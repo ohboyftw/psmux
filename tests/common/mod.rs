@@ -40,6 +40,12 @@ pub fn make_mock_server() -> mpsc::Sender<psmux::types::CtrlReq> {
                     // Return a stable, ready-looking version: dv=1, lot=1 (epoch ms)
                     let _ = resp.send((1, 1));
                 }
+                psmux::types::CtrlReq::QueryPaneState(_, resp) => {
+                    // A ready pane: dv=1, silent since epoch ms 1.
+                    let now = 1 + psmux::agent_state::OUTPUT_STABLE_MS;
+                    let readiness = psmux::agent_state::readiness_of(1, 1, now, None);
+                    let _ = resp.send((1, readiness));
+                }
                 _ => {}
             }
         }

@@ -2,10 +2,14 @@
 // primary binary entry-point in main.rs.
 #![allow(dead_code)]
 
+pub mod agent_state;
+pub mod agent_toast;
 pub mod backend;
+pub mod bus;
 pub mod control;
 pub mod crash;
 pub mod debug_log;
+pub mod detached;
 pub mod hints;
 #[cfg(feature = "mycel")]
 pub mod mycel;
@@ -17,4 +21,5 @@ pub mod remote;
 pub mod session;
 pub mod types;
 pub mod wait_for;
+pub mod wait_until;
 pub mod warm_reap;

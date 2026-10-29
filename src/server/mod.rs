@@ -1,6 +1,7 @@
 mod connection;
 pub(crate) mod helpers;
 mod options;
+mod spawn_args;
 
 use std::env;
 use std::io::{self, Write};
@@ -232,6 +233,30 @@ fn is_warm_server(app: &AppState) -> bool {
     crate::session::is_warm_session(&app.port_file_base())
 }
 
+/// Rename this server's session: move its port and key files to the new
+/// name and announce `SessionRenamed` to control clients and the mycel bus.
+/// A claimed warm standby is renamed here too, so a subscriber that saw
+/// `__warm__` created learns the name it was claimed under. Returns the old
+/// name.
+fn rename_server_session(app: &mut AppState, name: String) -> String {
+    let new_base = match app.socket_name {
+        Some(ref sn) => format!("{}__{}", sn, name),
+        None => name.clone(),
+    };
+    if let Some(port) = app.control_port {
+        crate::session::migrate_server_state(&app.port_file_base(), &new_base, port);
+    }
+    let old_name = std::mem::replace(&mut app.session_name, name);
+    crate::control::emit_lifecycle(
+        &app.control_clients,
+        &crate::control::LifecycleEvent::SessionRenamed {
+            new_name: &app.session_name,
+            old_name: &old_name,
+        },
+    );
+    old_name
+}
+
 /// Returns true when every pane across all windows has exited (is dead).
 /// This is needed for warm server cleanup when `remain-on-exit` is on:
 /// `remain-on-exit` keeps dead panes in the tree (preventing window
@@ -332,6 +357,71 @@ fn drain_wait_pane_queue(app: &mut AppState) {
         }
         true // keep waiting
     });
+}
+
+fn until_view(app: &AppState, pane_id: usize, now_ms: u64) -> Option<crate::wait_until::UntilView> {
+    app.windows.iter().find_map(|win| {
+        let path = crate::tree::find_path_by_id(&win.root, pane_id)?;
+        let p = crate::tree::active_pane(&win.root, &path)?;
+        Some(crate::wait_until::UntilView {
+            dead: p.dead,
+            readiness: p.readiness(now_ms).state,
+            worst: p.agent_state.worst(),
+        })
+    })
+}
+
+/// Sends the waiter its verdict if it has one; true when answered.
+fn answer_until(app: &AppState, w: &crate::wait_until::UntilWaiter) -> bool {
+    let view = until_view(app, w.pane_id, crate::agent_state::now_ms());
+    match crate::wait_until::until_verdict(w.want, view, Instant::now(), w.deadline) {
+        Some(code) => {
+            let _ = w.resp.send(code);
+            true
+        }
+        None => false,
+    }
+}
+
+/// Answer `--until` waiters.  Runs after reap_children, so a pane that
+/// exited this tick is already dead or pruned and its exit rule applied.
+fn drain_wait_until_queue(app: &mut AppState) {
+    let queue = std::mem::take(&mut app.wait_until_queue);
+    let pending: Vec<_> = queue
+        .into_iter()
+        .filter(|w| !answer_until(app, w))
+        .collect();
+    app.wait_until_queue = pending;
+}
+
+/// Answer a new `--until` waiter at once if it can be, else queue it.
+fn enqueue_wait_until(app: &mut AppState, req: CtrlReq) {
+    let CtrlReq::WaitPaneUntil {
+        pane_id,
+        want,
+        deadline,
+        resp,
+    } = req
+    else {
+        return;
+    };
+    let active = || {
+        let win = app.windows.get(app.active_idx)?;
+        crate::tree::active_pane(&win.root, &win.active_path).map(|p| p.id)
+    };
+    let Some(pane_id) = pane_id.or_else(active) else {
+        let _ = resp.send(crate::wait_until::UNTIL_GONE);
+        return;
+    };
+    let waiter = crate::wait_until::UntilWaiter {
+        pane_id,
+        want,
+        deadline,
+        resp,
+    };
+    if !answer_until(app, &waiter) {
+        app.wait_until_queue.push(waiter);
+    }
 }
 
 /// Spawn a single warm server process with the given session name.
@@ -651,6 +741,13 @@ pub fn run_server(
     window_name: Option<String>,
     init_size: Option<(u16, u16)>,
 ) -> io::Result<()> {
+    // From here on this process is the server: a console injection must leave
+    // it detached rather than move it into its parent's console, which for a
+    // cold start is the console of the client that spawned it (issue #761).
+    // Set here and not in the `server` argument dispatch so every way into the
+    // server loop gets it.
+    #[cfg(windows)]
+    crate::platform::mouse_inject::SERVER_PROCESS.store(true, std::sync::atomic::Ordering::Relaxed);
     // Create the crash directory up front so the panic hook only has to write a file.
     if let Err(e) = std::fs::create_dir_all(crate::crash::crash_directory()) {
         eprintln!("psmux: failed to create crash dir: {e}");
@@ -757,7 +854,8 @@ pub fn run_server(
     > = std::sync::Arc::new(std::sync::RwLock::new(std::collections::HashMap::new()));
     let shared_aliases_main = shared_aliases.clone();
 
-    // Initialize mycel event bus (optional — only when built with --features mycel)
+    // Initialize the mycel publisher (the default-on `mycel` feature). The
+    // first publish finds or starts a bus; PSMUX_BUS=0 turns publishing off.
     #[cfg(feature = "mycel")]
     {
         let hostname = std::env::var("COMPUTERNAME")
@@ -1017,10 +1115,12 @@ pub fn run_server(
     if let Some(prev) = saved_dir {
         env::set_current_dir(prev).ok();
     }
-    // Apply window name if specified via -n
+    // Apply window name if specified via -n. A given name turns automatic
+    // rename off for the window, as tmux does and as new-window -n does.
     if let Some(n) = window_name {
         if let Some(w) = app.windows.last_mut() {
             w.name = n;
+            w.manual_rename = true;
         }
     }
     // Replenish: spawn a warm pane for the NEXT new-window / split.
@@ -1878,7 +1978,8 @@ pub fn run_server(
                             crate::tree::focus_pane_by_id_no_mru(&mut app, pid);
                         }
                         CtrlReq::FocusPaneTempCheck(pid, resp) => {
-                            if temp_focus_restore.is_none() {
+                            let took_restore_point = temp_focus_restore.is_none();
+                            if took_restore_point {
                                 let pane_id = crate::tree::get_active_pane_id(
                                     &app.windows[app.active_idx].root,
                                     &app.windows[app.active_idx].active_path,
@@ -1896,6 +1997,12 @@ pub fn run_server(
                                     &app.windows[app.active_idx].root,
                                     &app.windows[app.active_idx].active_path,
                                 ) == Some(pid);
+                            // A miss moved nothing, and the caller sends no
+                            // command after it. A restore point left here
+                            // would revert the next client's focus change.
+                            if !found && took_restore_point {
+                                temp_focus_restore = None;
+                            }
                             let _ = resp.send(found);
                         }
                         CtrlReq::FocusPaneByIndexTemp(idx) => {
@@ -3565,12 +3672,25 @@ pub fn run_server(
                         CtrlReq::KillWindow => {
                             if app.windows.len() > 1 {
                                 let mut win = app.windows.remove(app.active_idx);
+                                // A dead remain-on-exit pane kept its toast as exited;
+                                // the reaper never sees these panes again.
+                                for id in tree::collect_pane_ids(&win.root) {
+                                    app.agent_toasts.forget(id);
+                                }
                                 kill_all_children(&mut win.root);
                                 if app.active_idx >= app.windows.len() {
                                     app.active_idx = app.windows.len() - 1;
                                 }
                             } else {
-                                // Last window: kill all children; reaper will detect empty session and exit
+                                // Last window: kill all children; reaper will detect empty session and exit.
+                                // Marked killed so the reaper drops toasts they offer at
+                                // exit; dead panes it skips are forgotten here.
+                                tree::visit_leaves_mut(&mut app.windows[0].root, &mut |p| {
+                                    p.killed = true;
+                                });
+                                for id in tree::collect_pane_ids(&app.windows[0].root) {
+                                    app.agent_toasts.forget(id);
+                                }
                                 kill_all_children(&mut app.windows[0].root);
                             }
                             hook_event = Some("window-closed");
@@ -3658,6 +3778,9 @@ pub fn run_server(
                                 app.wait_pane_queue.push((pane_id, resp));
                             }
                         }
+                        req @ CtrlReq::WaitPaneUntil { .. } => {
+                            enqueue_wait_until(&mut app, req);
+                        }
                         CtrlReq::QueryPaneReady(pane_id, resp) => {
                             let mut dv = 0u64;
                             let mut lot = 0u64;
@@ -3677,29 +3800,27 @@ pub fn run_server(
                             }
                             let _ = resp.send((dv, lot));
                         }
-                        CtrlReq::RenameSession(name) => {
-                            let _old_session_name = app.session_name.clone();
-                            // Compute new port file base with socket_name prefix
-                            let new_base = if let Some(ref sn) = app.socket_name {
-                                format!("{}__{}", sn, name)
-                            } else {
-                                name.clone()
-                            };
-                            if let Some(port) = app.control_port {
-                                crate::session::migrate_server_state(
-                                    &app.port_file_base(),
-                                    &new_base,
-                                    port,
-                                );
+                        CtrlReq::QueryPaneState(pane_id, resp) => {
+                            let now_ms = crate::agent_state::now_ms();
+                            let mut reply =
+                                (0, crate::agent_state::readiness_of(0, 0, now_ms, None));
+                            for win in app.windows.iter() {
+                                if let Some(path) = crate::tree::find_path_by_id(&win.root, pane_id)
+                                {
+                                    if let Some(p) = crate::tree::active_pane(&win.root, &path) {
+                                        reply = (
+                                            p.data_version
+                                                .load(std::sync::atomic::Ordering::Acquire),
+                                            p.readiness(now_ms),
+                                        );
+                                    }
+                                    break;
+                                }
                             }
-                            app.session_name = name;
-                            crate::control::emit_lifecycle(
-                                &app.control_clients,
-                                &crate::control::LifecycleEvent::SessionRenamed {
-                                    new_name: &app.session_name,
-                                    old_name: &_old_session_name,
-                                },
-                            );
+                            let _ = resp.send(reply);
+                        }
+                        CtrlReq::RenameSession(name) => {
+                            rename_server_session(&mut app, name);
                             // Update env so run-shell/hooks from this server target the new name
                             crate::util::set_env("PSMUX_TARGET_SESSION", app.port_file_base());
                             hook_event = Some("after-rename-session");
@@ -3707,19 +3828,7 @@ pub fn run_server(
                         CtrlReq::ClaimSession(name, client_cwd, client_size, resp) => {
                             // Same as RenameSession but with a synchronous response
                             // so the CLI knows the rename completed before attaching.
-                            let new_base = if let Some(ref sn) = app.socket_name {
-                                format!("{}__{}", sn, name)
-                            } else {
-                                name.clone()
-                            };
-                            if let Some(port) = app.control_port {
-                                crate::session::migrate_server_state(
-                                    &app.port_file_base(),
-                                    &new_base,
-                                    port,
-                                );
-                            }
-                            app.session_name = name;
+                            rename_server_session(&mut app, name);
                             // Update env so run-shell/hooks from this server target the new name
                             crate::util::set_env("PSMUX_TARGET_SESSION", app.port_file_base());
                             // Re-load user config so the claimed session reflects the
@@ -4840,6 +4949,7 @@ pub fn run_server(
                                         app.history_limit,
                                     );
                                 }
+                                p.agent_state.parser_replaced();
                             }
                         }
                         CtrlReq::SaveBuffer(path) => {
@@ -4936,7 +5046,21 @@ pub fn run_server(
                         CtrlReq::RemoveHook(hook) => {
                             app.hooks.remove(&hook);
                         }
-                        CtrlReq::KillServer => unregister_and_exit(&mut app),
+                        CtrlReq::KillServer => {
+                            // Write the snapshot synchronously: the debounced writer
+                            // thread would not run before unregister_and_exit ends the
+                            // process, and resurrect after kill-server needs each pane's
+                            // agent app. Warm standby servers have nothing to resurrect.
+                            if !crate::session::is_warm_session(&app.session_name) {
+                                let _ = crate::resurrection::save_snapshot_to(
+                                    &crate::resurrection::build_snapshot(&app),
+                                    &crate::resurrection::resurrect_dir(
+                                        app.resurrect_dir.as_deref(),
+                                    ),
+                                );
+                            }
+                            unregister_and_exit(&mut app)
+                        }
                         CtrlReq::WaitFor(channel, op) => match op {
                             WaitForOp::Lock => {
                                 let entry = app.wait_channels.entry(channel).or_insert_with(|| {
@@ -5573,6 +5697,7 @@ pub fn run_server(
                                                 },
                                                 shell_name: p.shell_name.clone(),
                                                 metadata: meta,
+                                                program_status: crate::backend::protocol::ProgramStatusInfo::from_cache(&p.agent_state),
                                             });
                                         }
                                         Node::Split { children, .. } => {
@@ -6272,11 +6397,28 @@ pub fn run_server(
                 unregister_and_exit(&mut app);
             }
         }
-        // Check if all windows/panes have exited (throttled to every 250ms)
+        // Check if all windows/panes have exited (throttled to every 100ms)
         if last_reap.elapsed() >= Duration::from_millis(100) {
             last_reap = Instant::now();
-            // Drain OSC 99/777 desktop notifications from panes
-            helpers::drain_notifications(&mut app);
+            // Read OSC 99/777 desktop notifications before the reap; they
+            // are shown after the agent toasts below.
+            let notifs = helpers::take_notifications(&mut app);
+            // Sample OSC 7501 state before reap_children prunes exited panes,
+            // push each reported transition and offer it as a toast.
+            let transitions = helpers::collect_program_status(&mut app);
+            // An agent appearing or leaving changes what resurrect resumes;
+            // state flips between records do not, so they never write.
+            if transitions
+                .iter()
+                .any(|(_, t)| crate::resurrection::changes_resume_source(t))
+            {
+                crate::resurrection::save_snapshot(&app);
+            }
+            for (pane_id, t) in transitions {
+                helpers::emit_status_transition(&app.control_clients, pane_id, &t);
+                app.agent_toasts
+                    .offer(pane_id, &t, &app.session_name, last_reap);
+            }
             // Check wait-pane waiters before reaping (so we can capture exit codes)
             if !app.wait_pane_queue.is_empty() {
                 drain_wait_pane_queue(&mut app);
@@ -6297,27 +6439,30 @@ pub fn run_server(
                     drain_wait_pane_queue(&mut app);
                 }
             }
+            if !app.wait_until_queue.is_empty() {
+                drain_wait_until_queue(&mut app);
+            }
+            // After reap_children, so a pane's final state at exit toasts
+            // in the same tick.
+            helpers::flush_agent_toasts(&mut app, last_reap);
+            helpers::fire_notifications(notifs);
             // Fire context_ready push events for newly-ready panes
-            let now_ms = std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap_or_default()
-                .as_millis() as u64;
+            let now_ms = crate::agent_state::now_ms();
             for win in &mut app.windows {
                 tree::visit_leaves_mut(&mut win.root, &mut |p| {
                     if p.dead || p.readiness_notified {
                         return;
                     }
-                    let dv = p.data_version.load(std::sync::atomic::Ordering::Acquire);
-                    let lot = p
-                        .last_output_time
-                        .load(std::sync::atomic::Ordering::Acquire);
-                    if dv > 0 && lot > 0 && now_ms.saturating_sub(lot) >= 500 {
+                    let readiness = p.readiness(now_ms);
+                    if readiness.is_ready() {
                         p.readiness_notified = true;
+                        let dv = p.data_version.load(std::sync::atomic::Ordering::Acquire);
                         let event = crate::backend::protocol::ContextReadyEvent {
                             method: "context_ready".into(),
                             params: crate::backend::protocol::ContextReadyParams {
                                 context_id: format!("%{}", p.id),
-                                ready_signal: "output_stable".into(),
+                                ready_signal: crate::agent_state::source_label(readiness.source)
+                                    .into(),
                                 data_version: dv,
                             },
                         };
@@ -6365,6 +6510,7 @@ pub fn run_server(
                     let ns = app.socket_name.as_deref().map(|l| format!("{l}__"));
                     crate::session::kill_warm_servers(ns.as_deref());
                 }
+                helpers::fire_last_agent_toast(&mut app);
                 std::thread::sleep(std::time::Duration::from_millis(10));
                 std::process::exit(0);
             }
@@ -6422,3 +6568,15 @@ mod tests {
 #[cfg(test)]
 #[path = "../../tests-rs/test_issue169_manual_rename.rs"]
 mod test_issue169;
+
+#[cfg(test)]
+#[path = "../../tests-rs/test_issue761_server_console_detach.rs"]
+mod test_issue761;
+
+#[cfg(test)]
+#[path = "../../tests-rs/test_wait_until_queue.rs"]
+mod test_wait_until_queue;
+
+#[cfg(test)]
+#[path = "../../tests-rs/test_warm_claim_announce.rs"]
+mod test_warm_claim_announce;

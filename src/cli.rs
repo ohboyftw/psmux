@@ -299,6 +299,7 @@ SET OPTIONS (use with: set -g <option> <value>):
     cursor-blink        Bool Cursor blinking (default: off)
     bell-action         Str  Bell handling: any, none, current, other
     visual-bell         Bool Visual bell indicator (default: off)
+    agent-toasts        Bool Toast when an OSC 7501 agent blocks, finishes or fails (default: on)
 
     STATUS / STYLE OPTIONS:
     status-left         Str  Left status content (default: "[#S] ")

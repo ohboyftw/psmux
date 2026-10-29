@@ -280,6 +280,34 @@ mod ffi {
             kernel: *mut FileTime,
             user: *mut FileTime,
         ) -> i32;
+        pub fn QueryFullProcessImageNameW(
+            h_process: isize,
+            flags: u32,
+            name: *mut u16,
+            size: *mut u32,
+        ) -> i32;
+    }
+
+    /// `ProcessCommandLineInformation`: a `UNICODE_STRING` followed by its
+    /// characters (Windows 8.1 and later).
+    pub const PROCESS_COMMAND_LINE_INFORMATION: u32 = 60;
+
+    #[repr(C)]
+    pub struct UnicodeString {
+        pub length: u16,
+        pub maximum_length: u16,
+        pub buffer: *const u16,
+    }
+
+    #[link(name = "ntdll")]
+    extern "system" {
+        pub fn NtQueryInformationProcess(
+            process_handle: isize,
+            information_class: u32,
+            information: *mut u8,
+            information_length: u32,
+            return_length: *mut u32,
+        ) -> i32;
     }
 
     /// Run `f` with a query handle on `pid`, closing it afterwards.
@@ -321,6 +349,89 @@ pub fn process_is_alive(pid: u32) -> bool {
         (ok != 0).then_some(code == ffi::STILL_ACTIVE)
     })
     .unwrap_or(false)
+}
+
+/// The file stem of process `pid`'s image (e.g. `psmux`), while it runs.
+#[cfg(windows)]
+pub fn running_image_stem(pid: u32) -> Option<String> {
+    if !process_is_alive(pid) {
+        return None;
+    }
+    ffi::with_process(pid, |h| {
+        let mut buf = [0u16; 1024];
+        let mut size = buf.len() as u32;
+        // SAFETY: `h` is a live query handle; `buf` holds `size` u16s and
+        // `size` is a valid in/out pointer for the call.
+        let ok = unsafe { ffi::QueryFullProcessImageNameW(h, 0, buf.as_mut_ptr(), &mut size) };
+        if ok == 0 {
+            return None;
+        }
+        let path = PathBuf::from(String::from_utf16_lossy(&buf[..size as usize]));
+        Some(path.file_stem()?.to_string_lossy().into_owned())
+    })
+}
+
+/// The full command line of process `pid`. `None` when it cannot be read
+/// (gone, or no access).
+#[cfg(windows)]
+pub fn process_command_line(pid: u32) -> Option<String> {
+    use ffi::{NtQueryInformationProcess, UnicodeString, PROCESS_COMMAND_LINE_INFORMATION};
+    ffi::with_process(pid, |h| {
+        let mut len: u32 = 0;
+        // SAFETY: a zero-length query with a null buffer only reports the
+        // size needed into `len`, a valid out-pointer.
+        unsafe {
+            NtQueryInformationProcess(
+                h,
+                PROCESS_COMMAND_LINE_INFORMATION,
+                std::ptr::null_mut(),
+                0,
+                &mut len,
+            )
+        };
+        if (len as usize) < std::mem::size_of::<UnicodeString>() {
+            return None;
+        }
+        // u64 elements keep the buffer aligned for the UNICODE_STRING header.
+        let mut buf = vec![0u64; (len as usize).div_ceil(8)];
+        // SAFETY: `buf` holds at least `len` writable bytes and `len` is a
+        // valid out-pointer.
+        let status = unsafe {
+            NtQueryInformationProcess(
+                h,
+                PROCESS_COMMAND_LINE_INFORMATION,
+                buf.as_mut_ptr().cast(),
+                len,
+                &mut len,
+            )
+        };
+        if status < 0 {
+            return None;
+        }
+        // SAFETY: on success the buffer starts with a UNICODE_STRING whose
+        // `buffer` points at `length` bytes of UTF-16 inside `buf`, which is
+        // still alive here.
+        let chars = unsafe {
+            let us = &*buf.as_ptr().cast::<UnicodeString>();
+            if us.buffer.is_null() {
+                return None;
+            }
+            std::slice::from_raw_parts(us.buffer, usize::from(us.length) / 2)
+        };
+        Some(String::from_utf16_lossy(chars))
+    })
+}
+
+/// Command lines are not read off Windows.
+#[cfg(not(windows))]
+pub fn process_command_line(_pid: u32) -> Option<String> {
+    None
+}
+
+/// Process images are not looked up off Windows.
+#[cfg(not(windows))]
+pub fn running_image_stem(_pid: u32) -> Option<String> {
+    None
 }
 
 /// Creation times are not available off Windows; an unknown never makes a

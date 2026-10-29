@@ -21,8 +21,19 @@ const STRESS_DURATION_SECS: u64 = 15;
 
 // ─── Helpers ───────────────────────────────────────────────────────────────
 
+/// The installed `psmux`, kept off the user's mycel bus (no publish, no
+/// autostart) and off the warm pool, whose standby would carry the user's
+/// environment instead of this one.
+fn psmux_cmd() -> Command {
+    let mut cmd = Command::new("psmux");
+    cmd.env("PSMUX_BUS", "0")
+        .env("PSMUX_BUS_PORT", "0")
+        .env("PSMUX_NO_WARM", "1");
+    cmd
+}
+
 fn psmux(args: &[&str]) -> bool {
-    Command::new("psmux")
+    psmux_cmd()
         .args(args)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
@@ -33,7 +44,7 @@ fn psmux(args: &[&str]) -> bool {
 }
 
 fn cleanup() {
-    let _ = Command::new("psmux")
+    let _ = psmux_cmd()
         .args(["kill-server"])
         .stdin(Stdio::null())
         .output();
@@ -370,7 +381,7 @@ fn cpu_test_session_discovery_malformed_port() {
     // Instead, we test the attach timeout behavior:
     // Try to attach to a non-existent session — client should timeout gracefully
     let start = Instant::now();
-    let output = Command::new("psmux")
+    let output = psmux_cmd()
         .args(["attach", "-t", "nonexistent-session-xyz"])
         .stdin(Stdio::null())
         .stdout(Stdio::piped())

@@ -46,120 +46,7 @@ impl HideWindowCommandExt for std::process::Command {
 /// `Start-Process -WindowStyle Hidden` in PowerShell.
 #[cfg(windows)]
 pub fn spawn_server_hidden(exe: &std::path::Path, args: &[String]) -> std::io::Result<()> {
-    #[repr(C)]
-    #[allow(non_snake_case, clippy::upper_case_acronyms)]
-    struct STARTUPINFOW {
-        cb: u32,
-        lpReserved: *mut u16,
-        lpDesktop: *mut u16,
-        lpTitle: *mut u16,
-        dwX: u32,
-        dwY: u32,
-        dwXSize: u32,
-        dwYSize: u32,
-        dwXCountChars: u32,
-        dwYCountChars: u32,
-        dwFillAttribute: u32,
-        dwFlags: u32,
-        wShowWindow: u16,
-        cbReserved2: u16,
-        lpReserved2: *mut u8,
-        hStdInput: isize,
-        hStdOutput: isize,
-        hStdError: isize,
-    }
-
-    #[repr(C)]
-    #[allow(non_snake_case)]
-    struct PROCESS_INFORMATION {
-        hProcess: isize,
-        hThread: isize,
-        dwProcessId: u32,
-        dwThreadId: u32,
-    }
-
-    #[link(name = "kernel32")]
-    extern "system" {
-        fn CreateProcessW(
-            lpApplicationName: *const u16,
-            lpCommandLine: *mut u16,
-            lpProcessAttributes: *const std::ffi::c_void,
-            lpThreadAttributes: *const std::ffi::c_void,
-            bInheritHandles: i32,
-            dwCreationFlags: u32,
-            lpEnvironment: *const std::ffi::c_void,
-            lpCurrentDirectory: *const u16,
-            lpStartupInfo: *const STARTUPINFOW,
-            lpProcessInformation: *mut PROCESS_INFORMATION,
-        ) -> i32;
-        fn CloseHandle(handle: isize) -> i32;
-    }
-
-    const STARTF_USESHOWWINDOW: u32 = 0x00000001;
-    const SW_HIDE: u16 = 0;
-    const CREATE_NEW_CONSOLE: u32 = 0x00000010;
-    const CREATE_NEW_PROCESS_GROUP: u32 = 0x00000200;
-    const CREATE_BREAKAWAY_FROM_JOB: u32 = 0x01000000;
-
-    // Build command line: "exe" arg1 arg2 ...
-    // Each argument is quoted to handle spaces.
-    let mut cmdline = format!("\"{}\"", exe.display());
-    for arg in args {
-        if arg.contains(' ') || arg.contains('"') {
-            cmdline.push_str(&format!(" \"{}\"", arg.replace('"', "\\\"")));
-        } else {
-            cmdline.push(' ');
-            cmdline.push_str(arg);
-        }
-    }
-    let mut si: STARTUPINFOW = unsafe { std::mem::zeroed() };
-    si.cb = std::mem::size_of::<STARTUPINFOW>() as u32;
-    si.dwFlags = STARTF_USESHOWWINDOW;
-    si.wShowWindow = SW_HIDE;
-
-    let mut pi: PROCESS_INFORMATION = unsafe { std::mem::zeroed() };
-
-    // Leave the caller's job first: a server started from inside a pane must
-    // outlive that pane's kill-on-close job, as `tmux new -d` inside tmux
-    // does.  A job that forbids breakaway fails the call with
-    // ERROR_ACCESS_DENIED, and the server then starts inside it, as before.
-    let base_flags = CREATE_NEW_CONSOLE | CREATE_NEW_PROCESS_GROUP;
-    let mut ok = 0;
-    for flags in [base_flags | CREATE_BREAKAWAY_FROM_JOB, base_flags] {
-        // A fresh buffer per attempt: CreateProcessW may write into it.
-        let mut cmdline_wide: Vec<u16> = cmdline.encode_utf16().chain(std::iter::once(0)).collect();
-        // SAFETY: the command line is a NUL terminated buffer we own, `si`
-        // and `pi` are valid for the call, and no handles are inherited.
-        ok = unsafe {
-            CreateProcessW(
-                std::ptr::null(),
-                cmdline_wide.as_mut_ptr(),
-                std::ptr::null(),
-                std::ptr::null(),
-                0, // don't inherit handles
-                flags,
-                std::ptr::null(),
-                std::ptr::null(),
-                &si,
-                &mut pi,
-            )
-        };
-        if ok != 0 {
-            break;
-        }
-    }
-
-    if ok == 0 {
-        return Err(std::io::Error::last_os_error());
-    }
-
-    // Close handles – we don't need to wait for the child.
-    unsafe {
-        CloseHandle(pi.hProcess);
-        CloseHandle(pi.hThread);
-    }
-
-    Ok(())
+    crate::detached::spawn_detached(exe, args, crate::detached::Console::NewHidden, None)
 }
 
 /// Enable virtual terminal processing on Windows Console Host.
@@ -317,6 +204,23 @@ pub mod mouse_inject {
     const MOUSE_EVENT: u16 = 0x0002;
     const ATTACH_PARENT_PROCESS: u32 = 0xFFFFFFFF;
 
+    /// Set once on entry to `server::run_server`. The server must not re-attach
+    /// to its parent's console after an injection: for a cold server the parent
+    /// is the client that spawned it, and over ssh that console is the ssh
+    /// channel's, so when the client disconnects the server is torn down with
+    /// it (issue #761). `spawn_server_hidden` gives the server a hidden console
+    /// of its own, so `had_console` is true in the server too.
+    pub static SERVER_PROCESS: std::sync::atomic::AtomicBool =
+        std::sync::atomic::AtomicBool::new(false);
+
+    /// Re-attach to the parent's console after an injection, except in the
+    /// server, which stays detached.
+    unsafe fn reattach_parent_console() {
+        if !SERVER_PROCESS.load(std::sync::atomic::Ordering::Relaxed) {
+            AttachConsole(ATTACH_PARENT_PROCESS);
+        }
+    }
+
     // dwButtonState flags
     pub const FROM_LEFT_1ST_BUTTON_PRESSED: u32 = 0x0001;
     pub const RIGHTMOST_BUTTON_PRESSED: u32 = 0x0002;
@@ -439,7 +343,7 @@ pub mod mouse_inject {
                     child_pid
                 ));
                 if had_console {
-                    AttachConsole(ATTACH_PARENT_PROCESS);
+                    reattach_parent_console();
                 }
                 return None;
             }
@@ -461,7 +365,7 @@ pub mod mouse_inject {
                 debug_log("query_vti_enabled: CreateFileW(CONIN$) FAILED");
                 FreeConsole();
                 if had_console {
-                    AttachConsole(ATTACH_PARENT_PROCESS);
+                    reattach_parent_console();
                 }
                 return None;
             }
@@ -476,7 +380,7 @@ pub mod mouse_inject {
             CloseHandle(handle);
             FreeConsole();
             if had_console {
-                AttachConsole(ATTACH_PARENT_PROCESS);
+                reattach_parent_console();
             }
 
             if ok == 0 {
@@ -539,7 +443,7 @@ pub mod mouse_inject {
                     child_pid, err
                 ));
                 if had_console {
-                    AttachConsole(ATTACH_PARENT_PROCESS);
+                    reattach_parent_console();
                 }
                 return false;
             }
@@ -566,7 +470,7 @@ pub mod mouse_inject {
                 ));
                 FreeConsole();
                 if had_console {
-                    AttachConsole(ATTACH_PARENT_PROCESS);
+                    reattach_parent_console();
                 }
                 return false;
             }
@@ -618,7 +522,7 @@ pub mod mouse_inject {
             // Only re-attach if we had our own console (app/standalone mode)
             // Server mode: leave detached to avoid conhost cycling
             if had_console {
-                AttachConsole(ATTACH_PARENT_PROCESS);
+                reattach_parent_console();
             }
 
             result != 0
@@ -643,7 +547,7 @@ pub mod mouse_inject {
                     child_pid
                 ));
                 if had_console {
-                    AttachConsole(ATTACH_PARENT_PROCESS);
+                    reattach_parent_console();
                 }
                 return None;
             }
@@ -665,7 +569,7 @@ pub mod mouse_inject {
                 debug_log("query_mouse_input_enabled: CreateFileW(CONIN$) FAILED");
                 FreeConsole();
                 if had_console {
-                    AttachConsole(ATTACH_PARENT_PROCESS);
+                    reattach_parent_console();
                 }
                 return None;
             }
@@ -680,7 +584,7 @@ pub mod mouse_inject {
             CloseHandle(handle);
             FreeConsole();
             if had_console {
-                AttachConsole(ATTACH_PARENT_PROCESS);
+                reattach_parent_console();
             }
 
             if ok == 0 {
@@ -716,7 +620,7 @@ pub mod mouse_inject {
 
             if AttachConsole(child_pid) == 0 {
                 if had_console {
-                    AttachConsole(ATTACH_PARENT_PROCESS);
+                    reattach_parent_console();
                 }
                 return false;
             }
@@ -737,7 +641,7 @@ pub mod mouse_inject {
             if handle == INVALID_HANDLE || handle == 0 {
                 FreeConsole();
                 if had_console {
-                    AttachConsole(ATTACH_PARENT_PROCESS);
+                    reattach_parent_console();
                 }
                 return false;
             }
@@ -817,7 +721,7 @@ pub mod mouse_inject {
             CloseHandle(handle);
             FreeConsole();
             if had_console {
-                AttachConsole(ATTACH_PARENT_PROCESS);
+                reattach_parent_console();
             }
 
             result != 0
@@ -845,7 +749,7 @@ pub mod mouse_inject {
                     child_pid, err
                 ));
                 if had_console {
-                    AttachConsole(ATTACH_PARENT_PROCESS);
+                    reattach_parent_console();
                 }
                 return false;
             }
@@ -871,7 +775,7 @@ pub mod mouse_inject {
                 ));
                 FreeConsole();
                 if had_console {
-                    AttachConsole(ATTACH_PARENT_PROCESS);
+                    reattach_parent_console();
                 }
                 return false;
             }
@@ -1006,7 +910,7 @@ pub mod mouse_inject {
             CloseHandle(handle);
             FreeConsole();
             if had_console {
-                AttachConsole(ATTACH_PARENT_PROCESS);
+                reattach_parent_console();
             }
 
             last_result != 0 && offset == records.len()
@@ -1061,7 +965,7 @@ pub mod mouse_inject {
                 let err = GetLastError();
                 log(&format!("AttachConsole({}) FAILED err={}", child_pid, err));
                 if had_console {
-                    AttachConsole(ATTACH_PARENT_PROCESS);
+                    reattach_parent_console();
                 }
                 return false;
             }
@@ -1128,7 +1032,7 @@ pub mod mouse_inject {
             SetConsoleCtrlHandler(None, 0);
 
             if had_console {
-                AttachConsole(ATTACH_PARENT_PROCESS);
+                reattach_parent_console();
             }
 
             ok != 0
@@ -1185,7 +1089,7 @@ pub mod mouse_inject {
                     child_pid
                 ));
                 if had_console {
-                    AttachConsole(ATTACH_PARENT_PROCESS);
+                    reattach_parent_console();
                 }
                 return false;
             }
@@ -1207,7 +1111,7 @@ pub mod mouse_inject {
                 debug_log("send_modified_key_event: CreateFileW(CONIN$) FAILED");
                 FreeConsole();
                 if had_console {
-                    AttachConsole(ATTACH_PARENT_PROCESS);
+                    reattach_parent_console();
                 }
                 return false;
             }
@@ -1327,7 +1231,7 @@ pub mod mouse_inject {
             CloseHandle(handle);
             FreeConsole();
             if had_console {
-                AttachConsole(ATTACH_PARENT_PROCESS);
+                reattach_parent_console();
             }
 
             result != 0 && written >= 1
@@ -1356,7 +1260,7 @@ pub mod mouse_inject {
                     child_pid
                 ));
                 if had_console {
-                    AttachConsole(ATTACH_PARENT_PROCESS);
+                    reattach_parent_console();
                 }
                 return false;
             }
@@ -1378,7 +1282,7 @@ pub mod mouse_inject {
                 debug_log("send_modified_enter_event: CreateFileW(CONIN$) FAILED");
                 FreeConsole();
                 if had_console {
-                    AttachConsole(ATTACH_PARENT_PROCESS);
+                    reattach_parent_console();
                 }
                 return false;
             }
@@ -1467,7 +1371,7 @@ pub mod mouse_inject {
             CloseHandle(handle);
             FreeConsole();
             if had_console {
-                AttachConsole(ATTACH_PARENT_PROCESS);
+                reattach_parent_console();
             }
 
             result != 0 && written >= 1
@@ -2122,6 +2026,30 @@ pub mod process_info {
         }
     }
 
+    /// Every process on the machine as (pid, parent pid, lowercased image
+    /// name), from one toolhelp snapshot; empty if the snapshot fails.
+    pub fn process_table() -> Vec<(u32, u32, String)> {
+        let mut entries = Vec::with_capacity(512);
+        // SAFETY: the snapshot handle is checked before use and closed once;
+        // `pe` is a zeroed POD struct whose dw_size is set as the API requires.
+        unsafe {
+            let snap = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
+            if snap == INVALID_HANDLE || snap == 0 {
+                return entries;
+            }
+            let mut pe: PROCESSENTRY32W = std::mem::zeroed();
+            pe.dw_size = std::mem::size_of::<PROCESSENTRY32W>() as u32;
+            let mut ok = Process32FirstW(snap, &mut pe) != 0;
+            while ok {
+                let name = exe_name_from_entry(&pe);
+                entries.push((pe.th32_process_id, pe.th32_parent_process_id, name));
+                ok = Process32NextW(snap, &mut pe) != 0;
+            }
+            CloseHandle(snap);
+        }
+        entries
+    }
+
     /// Extract the lowercased executable name from a PROCESSENTRY32W.
     fn exe_name_from_entry(pe: &PROCESSENTRY32W) -> String {
         let nul = pe
@@ -2208,6 +2136,9 @@ pub mod process_info {
     }
     pub fn get_foreground_cwd(_pid: u32) -> Option<String> {
         None
+    }
+    pub fn process_table() -> Vec<(u32, u32, String)> {
+        Vec::new()
     }
     pub fn has_vt_bridge_descendant(_root_pid: u32) -> bool {
         false

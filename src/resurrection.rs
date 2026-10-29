@@ -51,6 +51,281 @@ pub struct PaneCommand {
     pub command: Option<String>,
     pub cwd: String,
     pub env: Vec<(String, String)>,
+    /// OSC 7501 `app` of the agent running in the pane, kept only when it is
+    /// a key of [`resume_command_for`]; empty otherwise.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub app: String,
+    /// The command resurrect will run for `app`, written for readers of the
+    /// file.  Restore recomputes it from `app` and never runs this string.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resume_command: Option<String>,
+}
+
+/// The command that resumes an agent, keyed by its OSC 7501 `app` name.
+///
+/// Both agents resume the most recent conversation of the current directory,
+/// so the pane is restored in the agent's cwd.  `app` comes from the pane
+/// and only selects a row here; a pane can never supply the command.
+pub fn resume_command_for(app: &str) -> Option<&'static str> {
+    match app {
+        "claude-code" => Some("claude --continue"),
+        "pi" => Some("pi --continue"),
+        _ => None,
+    }
+}
+
+/// Whether a saved pane directory still exists, as resurrect checks it.
+pub type DirExists<'a> = &'a dyn Fn(&str) -> bool;
+
+/// The command resurrect runs for `pc`: the agent's resume command when the
+/// pane ran a known agent and its directory still exists, else the pane's
+/// original command.  `--continue` is keyed on the directory, so anywhere
+/// else it would resume another conversation, or none.
+pub fn restore_command(pc: &PaneCommand, cwd_exists: bool) -> Option<String> {
+    match resume_command_for(&pc.app).filter(|_| cwd_exists) {
+        Some(cmd) => Some(cmd.to_string()),
+        None => pc.command.clone(),
+    }
+}
+
+/// `-c <cwd>` when the directory exists (a missing one would be ignored by
+/// the server without a word), then the restore command.  `expanded` says
+/// the server runs the `-c` value through format expansion, as `new-window`
+/// and `split-window` do; the path is then escaped so `#` and `%` in it stay
+/// literal and `#(...)` never runs.
+fn pane_args(pc: &PaneCommand, exists: DirExists, expanded: bool) -> Vec<String> {
+    let cwd_exists = exists(&pc.cwd);
+    let mut args = Vec::new();
+    if cwd_exists {
+        args.push("-c".to_string());
+        args.push(if expanded {
+            pc.cwd.replace('#', "##").replace('%', "%%")
+        } else {
+            pc.cwd.clone()
+        });
+    }
+    args.extend(restore_command(pc, cwd_exists));
+    args
+}
+
+/// One line per pane whose saved directory no longer exists, saying where it
+/// starts instead and, for an agent pane, that it is not resumed.
+pub fn missing_dir_warnings(snap: &SessionSnapshot, exists: DirExists) -> Vec<String> {
+    let mut warnings = Vec::new();
+    for (wi, ws) in snap.windows.iter().enumerate() {
+        for (pi, pc) in ws.pane_commands.iter().enumerate() {
+            if exists(&pc.cwd) {
+                continue;
+            }
+            let mut line = format!(
+                "window {wi} pane {pi}: {} no longer exists; the pane starts in the directory resurrect was run from",
+                pc.cwd
+            );
+            if let Some(resume) = resume_command_for(&pc.app) {
+                line.push_str(&format!(" and does not run `{resume}`"));
+            }
+            warnings.push(line);
+        }
+    }
+    warnings
+}
+
+/// argv (without the executable) that recreates the snapshot's first pane.
+///
+/// The restore command is passed positionally, never after `--`: positional
+/// commands are shell-wrapped like `new-window`/`split-window` ones, while
+/// `--` spawns its argument as a raw program name, which fails for a command
+/// line such as `claude --continue` and for npm shims such as `pi.cmd`.
+pub fn first_pane_new_session_args(
+    session_name: &str,
+    snap: &SessionSnapshot,
+    exists: DirExists,
+) -> Vec<String> {
+    let mut args = vec![
+        "new-session".into(),
+        "-d".into(),
+        "-s".into(),
+        session_name.into(),
+    ];
+    let Some(first) = snap.windows.first() else {
+        return args;
+    };
+    if !first.name.is_empty() {
+        args.extend(["-n".to_string(), first.name.clone()]);
+    }
+    if let Some(pc) = first.pane_commands.first() {
+        let pane = pane_args(pc, exists, false);
+        // Always pass a directory: without -c and a command, new-session
+        // claims a warm standby and names the window with rename-window,
+        // which runs the name through format expansion.
+        if !exists(&pc.cwd) {
+            args.extend(["-c".to_string(), ".".to_string()]);
+        }
+        args.extend(pane);
+    }
+    args
+}
+
+/// One psmux invocation (argv without the executable) per step that rebuilds
+/// the rest of the snapshot after [`first_pane_new_session_args`]: a
+/// `new-window` for each later window, a `split-window` for each later pane,
+/// and `select-layout tiled` for a window with several panes.
+///
+/// Window names are given at creation (`new-window -n`, and `new-session -n`
+/// for the first window), which store them as they are.  `rename-window`
+/// would run a name through format expansion, and a name can come from a
+/// pane's OSC title, so `#(...)` in it would run on resurrect.
+///
+/// Every step starts with `-t <session>` before the subcommand, so the global
+/// parse routes it to the new session.  Without it a step inherits the target
+/// resolved when the session did not exist yet: the session the caller's pane
+/// is in (`TMUX`), or the most recent live session.  The steps run in order;
+/// `new-window` makes its window active, so the splits that follow it land
+/// in that window.
+pub fn restore_steps(
+    session_name: &str,
+    snap: &SessionSnapshot,
+    exists: DirExists,
+) -> Vec<Vec<String>> {
+    let step = |verb: &str, args: Vec<String>| -> Vec<String> {
+        let mut v = vec!["-t".to_string(), session_name.to_string(), verb.to_string()];
+        v.extend(args);
+        v
+    };
+    let mut steps = Vec::new();
+    for (wi, ws) in snap.windows.iter().enumerate() {
+        for (pi, pc) in ws.pane_commands.iter().enumerate() {
+            let mut args = Vec::new();
+            let verb = match (wi, pi) {
+                (0, 0) => continue,
+                (_, 0) => {
+                    if !ws.name.is_empty() {
+                        args.extend(["-n".to_string(), ws.name.clone()]);
+                    }
+                    "new-window"
+                }
+                _ => "split-window",
+            };
+            args.extend(pane_args(pc, exists, true));
+            steps.push(step(verb, args));
+        }
+        if ws.pane_commands.len() > 1 {
+            steps.push(step("select-layout", vec!["tiled".into()]));
+        }
+    }
+    steps
+}
+
+/// Rebuild session `name` from `snap`, the snapshot loaded from `dir` under
+/// `stem` (see [`snapshot_stem`]; it differs from `name` under `-L`).
+/// `run` runs one psmux invocation (argv without the executable) and says
+/// whether it succeeded; `settle` is how long the new server gets to start
+/// before the restore steps.
+///
+/// The snapshot is not deleted, and a copy is kept at [`backup_path`]: a
+/// resumed agent can exit at once (no conversation for its directory, or it
+/// fails to start), its pane and then the server exit with it, and a retry
+/// needs the snapshot.  The file itself is not enough, because the new server
+/// rewrites it on its own save points (each restore step, an agent appearing
+/// or leaving) and a pane that has died records no agent.
+pub fn resurrect(
+    name: &str,
+    stem: &str,
+    snap: &SessionSnapshot,
+    dir: &Path,
+    settle: Duration,
+    run: &mut dyn FnMut(&[String]) -> bool,
+) -> io::Result<()> {
+    // Every restore step names the session with `-t`, and a target such as
+    // `py3.12` reads as session `py3`, pane 12: the steps would land in `py3`.
+    if crate::cli::parse_target(name).session.as_deref() != Some(name) {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!("'{name}' reads as a session plus a window or pane in a -t target, so the restore cannot address it"),
+        ));
+    }
+    let backup = backup_path(stem, dir);
+    let snapshot = dir.join(format!("{stem}.json"));
+    fs::copy(&snapshot, &backup)?;
+    // The restored server prunes all but the 50 newest snapshots when it
+    // starts, and the one being restored is usually the oldest; pruning it
+    // also removes the copy.  Make it the newest.
+    fs::File::options()
+        .write(true)
+        .open(&snapshot)?
+        .set_modified(std::time::SystemTime::now())?;
+    eprintln!(
+        "psmux resurrect: if the restored session ends at once, rename {} to {stem}.json and run resurrect again",
+        backup.display()
+    );
+    let exists = |p: &str| Path::new(p).is_dir();
+    for warning in missing_dir_warnings(snap, &exists) {
+        eprintln!("psmux resurrect: {warning}");
+    }
+    let steps = restore_steps(name, snap, &exists);
+    eprintln!("Spawning session with {} setup commands...", steps.len());
+    if !run(&first_pane_new_session_args(name, snap, &exists)) {
+        return Err(io::Error::other(format!("new-session for '{name}' failed")));
+    }
+    thread::sleep(settle);
+    for step in &steps {
+        if !run(step) {
+            eprintln!("Warning: `{}` failed", step[2..].join(" "));
+        }
+    }
+    Ok(())
+}
+
+/// Whether an agent-state transition changes what resurrect would resume:
+/// an agent appearing in or leaving a pane does; flips between states do not.
+pub fn changes_resume_source(t: &crate::agent_state::AgentTransition) -> bool {
+    t.old.is_none() != t.new.is_none()
+}
+
+/// One row of the OS process table: pid, parent pid, lowercased image name.
+pub type ProcessRow = (u32, u32, String);
+
+fn is_shell_image(name: &str) -> bool {
+    matches!(
+        name,
+        "pwsh.exe" | "powershell.exe" | "cmd.exe" | "bash.exe" | "sh.exe"
+    )
+}
+
+fn is_console_host(name: &str) -> bool {
+    matches!(name, "conhost.exe" | "openconsole.exe")
+}
+
+/// The agent process of a pane whose child is `root`: `root` itself when the
+/// pane was spawned straight into a program, else the shallowest descendant
+/// that is neither a shell nor a console host.  Deeper processes (MCP
+/// servers, tool commands) are the agent's own children and may run in
+/// another directory.  `None` when no such process is alive.
+pub fn agent_pid(root: u32, table: &[ProcessRow]) -> Option<u32> {
+    let root_name = &table.iter().find(|r| r.0 == root)?.2;
+    if !is_shell_image(root_name) {
+        return Some(root);
+    }
+    let mut seen = std::collections::HashSet::from([root]);
+    let mut level = vec![root];
+    while !level.is_empty() {
+        let children: Vec<&ProcessRow> = table
+            .iter()
+            .filter(|r| level.contains(&r.1) && seen.insert(r.0))
+            .collect();
+        if let Some(r) = children
+            .iter()
+            .find(|r| !is_shell_image(&r.2) && !is_console_host(&r.2))
+        {
+            return Some(r.0);
+        }
+        level = children
+            .iter()
+            .filter(|r| is_shell_image(&r.2))
+            .map(|r| r.0)
+            .collect();
+    }
+    None
 }
 
 // ---------------------------------------------------------------------------
@@ -137,6 +412,11 @@ pub fn prune_snapshots_in(dir: &Path, keep: usize) {
     files.sort_by(|a, b| b.1.cmp(&a.1));
     for (path, _) in files.into_iter().skip(keep) {
         let _ = fs::remove_file(&path);
+        // The copy resurrect kept (`<name>.json.bak`) is not a `.json` file,
+        // so nothing else would ever remove it.
+        let mut backup = path.into_os_string();
+        backup.push(".bak");
+        let _ = fs::remove_file(backup);
     }
 }
 
@@ -161,8 +441,16 @@ pub fn list_resurrectable(dir: &Path) -> Vec<String> {
     names
 }
 
-/// Delete the snapshot file for `session_name` from `dir`.
+/// Where resurrect keeps a copy of the snapshot it restores from.  Neither
+/// [`list_resurrectable`] nor [`prune_snapshots_in`] sees it.
+pub fn backup_path(session_name: &str, dir: &Path) -> PathBuf {
+    dir.join(format!("{session_name}.json.bak"))
+}
+
+/// Delete the snapshot file for `session_name` from `dir`, and the copy
+/// resurrect kept of it.
 pub fn delete_snapshot(session_name: &str, dir: &Path) -> io::Result<()> {
+    let _ = fs::remove_file(backup_path(session_name, dir));
     let path = dir.join(format!("{session_name}.json"));
     fs::remove_file(path)
 }
@@ -223,35 +511,65 @@ fn serialize_tree(node: &Node) -> LayoutTreeNode {
     }
 }
 
+/// The process table, read once per snapshot and only if a pane needs it.
+type LazyProcessTable = std::cell::OnceCell<Vec<ProcessRow>>;
+
 /// Collect spawn metadata from leaf panes in DFS order.
-fn collect_pane_commands(node: &Node, out: &mut Vec<PaneCommand>) {
+fn collect_pane_commands(node: &Node, table: &LazyProcessTable, out: &mut Vec<PaneCommand>) {
     match node {
-        Node::Leaf(pane) => {
-            let cwd = pane
-                .spawn_cwd
-                .as_ref()
-                .map(|p| p.to_string_lossy().to_string())
-                .unwrap_or_else(|| ".".to_string());
-            out.push(PaneCommand {
-                command: pane.spawn_command.clone(),
-                cwd,
-                env: pane.spawn_env.clone(),
-            });
-        }
+        Node::Leaf(pane) => out.push(pane_command(pane, table)),
         Node::Split { children, .. } => {
             for child in children {
-                collect_pane_commands(child, out);
+                collect_pane_commands(child, table, out);
             }
         }
     }
 }
 
+/// Spawn metadata of one pane.  A live pane whose agent process is still
+/// running records the agent's `app` and the agent's own cwd, because
+/// `--continue` is keyed on the directory the agent was started in.  A dead
+/// pane, or one whose agent exited leaving a done/error record, records none.
+fn pane_command(pane: &crate::types::Pane, table: &LazyProcessTable) -> PaneCommand {
+    let app = &pane.agent_state.details().app;
+    let agent = resume_command_for(app)
+        .filter(|_| !pane.dead)
+        .and(pane.child_pid)
+        .and_then(|pid| {
+            agent_pid(
+                pid,
+                table.get_or_init(crate::platform::process_info::process_table),
+            )
+        });
+    let cwd = agent
+        .and_then(crate::platform::process_info::get_process_cwd)
+        .or_else(|| {
+            pane.spawn_cwd
+                .as_ref()
+                .map(|p| p.to_string_lossy().to_string())
+        })
+        .unwrap_or_else(|| ".".to_string());
+    let app = if agent.is_some() {
+        app.clone()
+    } else {
+        String::new()
+    };
+    PaneCommand {
+        command: pane.spawn_command.clone(),
+        cwd,
+        env: pane.spawn_env.clone(),
+        resume_command: resume_command_for(&app).map(str::to_string),
+        app,
+    }
+}
+
 /// Build a complete snapshot from the current server state.
 pub fn build_snapshot(app: &AppState) -> SessionSnapshot {
+    let table = LazyProcessTable::new();
     let mut windows = Vec::new();
     for win in &app.windows {
         let mut pane_commands = Vec::new();
-        collect_pane_commands(&win.root, &mut pane_commands);
+        collect_pane_commands(&win.root, &table, &mut pane_commands);
         let layout_tree = serialize_tree(&win.root);
         windows.push(WindowSnapshot {
             name: win.name.clone(),
@@ -336,8 +654,9 @@ pub fn apply_snapshot(
 
 /// Best-effort save: build snapshot from AppState and write to disk.
 ///
-/// The snapshot is serialized on the calling thread (cheap — just cloning
-/// small metadata), then sent to a background writer thread.  Rapid
+/// The snapshot is built on the calling thread: cloning small metadata, plus
+/// one process-table snapshot and one cwd read per agent pane when any pane
+/// reports a known agent.  It is then sent to a background writer thread.  Rapid
 /// structural changes (split → resize → split) coalesce: the writer uses a
 /// 100ms debounce so at most ~10 writes/sec hit disk.
 ///
@@ -481,11 +800,15 @@ mod tests {
                         command: Some("nvim".into()),
                         cwd: "/home/user/project".into(),
                         env: vec![("TERM".into(), "xterm-256color".into())],
+                        app: "claude-code".into(),
+                        resume_command: Some("claude --continue".into()),
                     },
                     PaneCommand {
                         command: None,
                         cwd: "/home/user".into(),
                         env: vec![],
+                        app: String::new(),
+                        resume_command: None,
                     },
                 ],
             }],
@@ -517,6 +840,10 @@ mod tests {
         fs::remove_dir_all(&tmp).ok();
     }
 }
+
+#[cfg(test)]
+#[path = "../tests-rs/test_resurrection_resume.rs"]
+mod test_resurrection_resume;
 
 #[cfg(test)]
 mod test_snapshot_pruning {
