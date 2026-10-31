@@ -291,6 +291,8 @@ These fixes compound: the DCS buffer growth caused memory pressure, which slowed
 
 psmux ships with a [cable channel pack](cable/) for [television](https://github.com/alexpasmantier/television) (`tv`) — a fast Rust fuzzy finder. Fuzzy-search your sessions, windows, and panes with live `capture-pane` preview.
 
+![psmux and television](demos/television.png)
+
 ```powershell
 # Install channels
 pwsh cable/install.ps1
