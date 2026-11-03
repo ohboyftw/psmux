@@ -60,7 +60,7 @@ Replace with proper process-level primitives that agent orchestrators (canopy, p
 - [x] Default timeout: 1 hour
 
 ### Task 9: Mycel event integration for pane lifecycle
-- [x] Already implemented behind `--features mycel` flag
+- [x] Implemented in the `mycel` feature, now on by default, with an in-tree bus (`psmux bus`; `PSMUX_BUS=0` turns publishing off)
 - [x] `src/mycel.rs`: MycelBus + publish_pane_event
 - [x] Lifecycle hooks: pane/created, pane/died
 - [x] Server init at startup with auto-discovery

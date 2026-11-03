@@ -75,6 +75,14 @@ path = "tests-rs/test_rails_smoke.rs"
 name = "test_cc_emit_lifecycle_singleton"
 path = "tests-rs/test_cc_emit_lifecycle_singleton.rs"
 
+# Embeds the application icon and the VS_VERSIONINFO block into the .exe
+# (issue #620). Windows hosts only: this is what build.rs's #[cfg(windows)]
+# arm links against. default-features would pull in a whole toml stack purely
+# to read `[package.metadata.winresource]`, which build.rs does not use because
+# it sets every field explicitly.
+[target.'cfg(windows)'.build-dependencies]
+winresource = { version = "=0.1.31", default-features = false }
+
 # Windows only
 [target.'cfg(not(windows))'.dependencies]
 [target.'cfg(windows)'.dependencies]
@@ -113,10 +121,7 @@ serde_json = "1.0"
 regex = "1"
 glob = "0.3"
 base64 = "0.22"
-
-# Optional: mycel pub/sub event bus integration
-mycel-client = { path = "../mycel/clients/rust", optional = true }
-tokio = { version = "1", features = ["rt", "net", "io-util", "time", "sync"], optional = true }
+prost = "0.13.5"
 
 # Optional: spike — interprocess crate as named-pipe abstraction
 # (replaces hand-rolled Win32 named-pipe code in src/backend/pipe.rs).
@@ -124,8 +129,9 @@ tokio = { version = "1", features = ["rt", "net", "io-util", "time", "sync"], op
 interprocess = { version = "1.2", optional = true }
 
 [features]
-default = []
-mycel = ["dep:mycel-client", "dep:tokio"]
+default = ["mycel"]
+# Publish lifecycle events on the in-tree mycel bus (src/bus).
+mycel = []
 interprocess-pipe = ["dep:interprocess"]
 
 [profile.release]

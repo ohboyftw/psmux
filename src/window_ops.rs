@@ -1328,6 +1328,8 @@ pub fn respawn_active_pane(
     pane.child_pid = crate::platform::mouse_inject::get_child_pid(&*child);
     pane.child = child;
     pane.term = term;
+    pane.agent_state.parser_replaced();
+    pane.readiness_notified = false;
     pane.data_version = data_version;
     pane.last_output_time = last_output_time;
     pane.cursor_shape = cursor_shape;

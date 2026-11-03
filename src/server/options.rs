@@ -198,6 +198,13 @@ pub(crate) fn get_option_value(app: &AppState, name: &str) -> String {
                 "off".into()
             }
         }
+        "agent-toasts" => {
+            if app.agent_toasts.enabled() {
+                "on".into()
+            } else {
+                "off".into()
+            }
+        }
         "monitor-silence" => app.monitor_silence.to_string(),
         "activity-action" => app.activity_action.clone(),
         "silence-action" => app.silence_action.clone(),
@@ -507,6 +514,10 @@ pub(crate) fn apply_set_option(app: &mut AppState, option: &str, value: &str, _q
         }
         "pane-active-border-style" => {
             app.pane_active_border_style = value.to_string();
+        }
+        "agent-toasts" => {
+            app.agent_toasts
+                .set_enabled(matches!(value, "on" | "true" | "1"));
         }
         "pane-border-status" => match value {
             "top" | "bottom" | "off" => app.pane_border_status = value.to_string(),

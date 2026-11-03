@@ -154,3 +154,48 @@ fn test_route_when_explicit_warm_standby_registered_then_routed_to_it() {
     let (name, _, _) = resolve_server_in("kill-session\n", &r).expect("routed");
     assert_eq!(name, "__warm__");
 }
+
+fn route_for(line: &str, dir: &std::path::Path) -> String {
+    let route = RouteEnv {
+        dir,
+        env_target: Some("s"),
+        explicit: Some("s"),
+        tmux: None,
+    };
+    resolve_server_in(line, &route).expect("route").0
+}
+
+#[test]
+fn test_route_when_quoted_value_contains_dash_t_then_env_target_kept() {
+    let dir = sweep_dir("quoted_dash_t");
+    seed_set(&dir, "s", 1);
+    seed_set(&dir, "decoy", 2);
+    for line in [
+        "new-window -c \"D:\\x -t decoy\" \"cmd\"\n",
+        "new-window -n \"build -t decoy\" \"cmd\"\n",
+        "new-window \"ssh -t decoy\"\n",
+        "new-window -n \"-t\" \"decoy\"\n",
+    ] {
+        assert_eq!(route_for(line, &dir), "s", "{line}");
+    }
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn test_route_when_bare_dash_t_flag_then_it_routes() {
+    let dir = sweep_dir("bare_dash_t");
+    seed_set(&dir, "s", 1);
+    seed_set(&dir, "other", 2);
+    assert_eq!(route_for("send-keys -t other \"x\"\n", &dir), "other");
+    assert_eq!(route_for("send-keys -t \"other\" \"x\"\n", &dir), "other");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn test_route_when_dash_t_after_double_dash_then_ignored() {
+    let dir = sweep_dir("dash_t_after_dd");
+    seed_set(&dir, "s", 1);
+    seed_set(&dir, "decoy", 2);
+    assert_eq!(route_for("new-window-raw -- ssh -t decoy\n", &dir), "s");
+    let _ = std::fs::remove_dir_all(&dir);
+}

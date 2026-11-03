@@ -34,6 +34,7 @@ use crate::tree::{
     active_pane_mut, compute_rects, find_window_index_by_id, focus_pane_by_id, focus_pane_by_index,
     kill_all_children, reap_children, resize_all_panes,
 };
+use crate::tree_chooser::with_agent_glyph;
 use crate::types::{AppState, CtrlReq, LayoutKind, Mode};
 use crate::util::{list_tree_json, list_windows_json, list_windows_tmux};
 use crate::window_ops::{
@@ -779,28 +780,28 @@ pub fn run(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> io::Result<
                         } else {
                             ""
                         };
-                        lines.push(
-                            Line::from(format!(
-                                "{} {} {}{}",
-                                marker,
-                                if entry.is_current_session {
-                                    "▼"
-                                } else {
-                                    "▶"
-                                },
-                                entry.session_name,
-                                tag,
-                            ))
-                            .style(
-                                Style::default()
-                                    .fg(Color::Yellow)
-                                    .add_modifier(ratatui::style::Modifier::BOLD),
-                            ),
+                        let header_style = Style::default()
+                            .fg(Color::Yellow)
+                            .add_modifier(ratatui::style::Modifier::BOLD);
+                        let text = format!(
+                            "{} {} {}{}",
+                            marker,
+                            if entry.is_current_session {
+                                "▼"
+                            } else {
+                                "▶"
+                            },
+                            entry.session_name,
+                            tag,
                         );
+                        lines.push(with_agent_glyph(
+                            Span::styled(text, header_style),
+                            entry.agent_state,
+                        ));
                     } else {
                         let active_mark = if entry.is_active_window { "*" } else { " " };
                         let wi = entry.window_index.unwrap_or(0);
-                        lines.push(Line::from(format!(
+                        let text = format!(
                             "{}   {}: {}{} ({} panes) [{}]",
                             marker,
                             wi,
@@ -808,7 +809,8 @@ pub fn run(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> io::Result<
                             active_mark,
                             entry.window_panes,
                             entry.window_size,
-                        )));
+                        );
+                        lines.push(with_agent_glyph(Span::raw(text), entry.agent_state));
                     }
                 }
                 // Cap overlay height to available terminal space

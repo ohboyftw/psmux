@@ -249,3 +249,22 @@ fn ready_workers_unblocks_after_dep_completes() {
     let ids: Vec<&str> = ready.iter().map(|w| w.id.as_str()).collect();
     assert!(ids.contains(&"b"));
 }
+
+// ─── Agent state (ticket 08) ────────────────────────────────────────────────
+
+#[test]
+fn blocked_running_worker_is_not_terminal() {
+    let json = r#"{"session":"s","workers":{
+        "a":{"status":"running","pane_id":"%1","agent_state":"blocked"}}}"#;
+    let state: psmux::orchestrate::OrchestrationState = serde_json::from_str(json).unwrap();
+    assert!(!state.workers["a"].is_terminal());
+    assert!(state.completed_ids().is_empty());
+}
+
+#[test]
+fn state_json_without_agent_state_loads() {
+    let json = r#"{"session":"s","workers":{
+        "a":{"status":"succeeded","pane_id":"%1","exit_code":0}}}"#;
+    let state: psmux::orchestrate::OrchestrationState = serde_json::from_str(json).unwrap();
+    assert_eq!(state.workers["a"].agent_state, None);
+}

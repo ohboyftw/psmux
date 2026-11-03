@@ -369,7 +369,8 @@ pub fn run_remote(
     let mut chooser = false; // local display-panes digit chooser overlay
     let mut choices: Vec<(usize, usize)> = Vec::new(); // (digit, pane_id) for chooser
     let mut tree_chooser = false;
-    let mut tree_entries: Vec<(bool, usize, usize, String, String)> = Vec::new(); // (is_win, id, sub_id, label, session_name)
+    let mut tree_entries: Vec<crate::tree_chooser::TreeRow> = Vec::new();
+    let mut tree_poller = crate::tree_chooser::TreePoller::default();
     let mut tree_selected: usize = 0;
     let mut tree_scroll: usize = 0;
     let mut session_chooser = false;
@@ -774,6 +775,18 @@ pub fn run_remote(
         }
         if quit && !got_frame {
             break;
+        }
+        // choose-tree overlay: refresh agent glyphs about once a second.
+        if let Some(sessions) = tree_poller.poll(tree_chooser, &current_session) {
+            if let Some((rows, selected)) = crate::tree_chooser::refreshed_rows(
+                &tree_entries,
+                tree_selected,
+                &sessions,
+                &current_session,
+            ) {
+                tree_entries = rows;
+                tree_selected = selected;
+            }
         }
 
         // ── STEP 1: Poll events with adaptive timeout ────────────────────
@@ -1513,172 +1526,16 @@ pub fn run_remote(
                                     }
                                     KeyCode::Char('w') => {
                                         tree_chooser = true;
-                                        tree_entries.clear();
+                                        let sessions =
+                                            crate::tree_chooser::collect_sessions(&current_session);
+                                        tree_entries = crate::tree_chooser::rows_or_fallback(
+                                            &sessions,
+                                            &current_session,
+                                            &last_tree,
+                                        );
                                         tree_selected = 0;
                                         tree_scroll = 0;
-                                        // Query ALL sessions (like tmux choose-tree)
-                                        let dir = crate::paths::psmux_dir();
-                                        if let Ok(entries) = std::fs::read_dir(&dir) {
-                                            #[allow(clippy::type_complexity)]
-                                            let mut sessions: Vec<(
-                                                String,
-                                                Vec<(usize, String, Vec<(usize, String)>)>,
-                                            )> = Vec::new();
-                                            for e in entries.flatten() {
-                                                if let Some(fname) =
-                                                    e.file_name().to_str().map(|s| s.to_string())
-                                                {
-                                                    if let Some((base, ext)) =
-                                                        fname.rsplit_once('.')
-                                                    {
-                                                        if ext == "port" {
-                                                            // Hide warm (standby) sessions from user
-                                                            if crate::session::is_warm_session(base)
-                                                            {
-                                                                continue;
-                                                            }
-                                                            if let Ok(port_str) =
-                                                                std::fs::read_to_string(e.path())
-                                                            {
-                                                                if let Ok(p) =
-                                                                    port_str.trim().parse::<u16>()
-                                                                {
-                                                                    let sess_addr =
-                                                                        format!("127.0.0.1:{}", p);
-                                                                    let sess_key =
-                                                                        read_session_key(base)
-                                                                            .unwrap_or_default();
-                                                                    if let Ok(mut ss) = std::net::TcpStream::connect_timeout(
-                                                                    &sess_addr.parse().unwrap(), Duration::from_millis(50)
-                                                                ) {
-                                                                    let _ = ss.set_read_timeout(Some(Duration::from_millis(100)));
-                                                                    let _ = writeln!(ss, "AUTH {}", sess_key);
-                                                                    let _ = ss.write_all(b"list-tree\n");
-                                                                    let _ = ss.flush();
-                                                                    let mut br = BufReader::new(ss);
-                                                                    let mut al = String::new();
-                                                                    let _ = br.read_line(&mut al); // AUTH OK
-                                                                    let mut tree_line = String::new();
-                                                                    if br.read_line(&mut tree_line).is_ok() {
-                                                                        // Parse JSON array of WinTree
-                                                                        if let Ok(wins) = serde_json::from_str::<Vec<WinTree>>(tree_line.trim()) {
-                                                                            let mut win_data = Vec::new();
-                                                                            for w in &wins {
-                                                                                let panes: Vec<(usize, String)> = w.panes.iter().map(|p| (p.id, p.title.clone())).collect();
-                                                                                win_data.push((w.id, w.name.clone(), panes));
-                                                                            }
-                                                                            sessions.push((base.to_string(), win_data));
-                                                                        }
-                                                                    }
-                                                                }
-                                                                }
-                                                            }
-                                                        }
-                                                    }
-                                                }
-                                            }
-                                            // Sort sessions: current session first, then alphabetical
-                                            sessions.sort_by(|a, b| {
-                                                if a.0 == current_session {
-                                                    std::cmp::Ordering::Less
-                                                } else if b.0 == current_session {
-                                                    std::cmp::Ordering::Greater
-                                                } else {
-                                                    a.0.cmp(&b.0)
-                                                }
-                                            });
-                                            // Build tree entries: session > window > pane
-                                            // tree_entries format: (is_win, id, sub_id, label, session_name)
-                                            // For session headers: is_win=true with id=usize::MAX as sentinel
-                                            // For windows: is_win=true
-                                            // For panes: is_win=false
-                                            for (sess_name, wins) in &sessions {
-                                                let is_current = sess_name == &current_session;
-                                                let attached =
-                                                    if is_current { " (attached)" } else { "" };
-                                                let nw = wins.len();
-                                                // Session header line
-                                                tree_entries.push((
-                                                    true,
-                                                    usize::MAX,
-                                                    0,
-                                                    format!(
-                                                        "{}: {} windows{}",
-                                                        sess_name, nw, attached
-                                                    ),
-                                                    sess_name.clone(),
-                                                ));
-                                                if is_current {
-                                                    // Show windows and panes for current session
-                                                    for (wi, (wid, wname, panes)) in
-                                                        wins.iter().enumerate()
-                                                    {
-                                                        let flag = "";
-                                                        tree_entries.push((
-                                                            true,
-                                                            *wid,
-                                                            0,
-                                                            format!(
-                                                                "  {}: {}{} ({} panes)",
-                                                                wi,
-                                                                wname,
-                                                                flag,
-                                                                panes.len()
-                                                            ),
-                                                            sess_name.clone(),
-                                                        ));
-                                                        for (pid, ptitle) in panes {
-                                                            tree_entries.push((
-                                                                false,
-                                                                *wid,
-                                                                *pid,
-                                                                format!("    {}", ptitle),
-                                                                sess_name.clone(),
-                                                            ));
-                                                        }
-                                                    }
-                                                } else {
-                                                    // Show windows for other sessions (collapsed)
-                                                    for (wi, (wid, wname, panes)) in
-                                                        wins.iter().enumerate()
-                                                    {
-                                                        tree_entries.push((
-                                                            true,
-                                                            *wid,
-                                                            0,
-                                                            format!(
-                                                                "  {}: {} ({} panes)",
-                                                                wi,
-                                                                wname,
-                                                                panes.len()
-                                                            ),
-                                                            sess_name.clone(),
-                                                        ));
-                                                    }
-                                                }
-                                            }
-                                        }
-                                        // Fallback: if no sessions found, use current session data
-                                        if tree_entries.is_empty() {
-                                            for wi in &last_tree {
-                                                tree_entries.push((
-                                                    true,
-                                                    wi.id,
-                                                    0,
-                                                    wi.name.clone(),
-                                                    current_session.clone(),
-                                                ));
-                                                for pi in &wi.panes {
-                                                    tree_entries.push((
-                                                        false,
-                                                        wi.id,
-                                                        pi.id,
-                                                        pi.title.clone(),
-                                                        current_session.clone(),
-                                                    ));
-                                                }
-                                            }
-                                        }
+                                        tree_poller.restart(sessions);
                                     }
                                     KeyCode::Char('s') => {
                                         session_chooser = true;
@@ -2007,8 +1864,13 @@ pub fn run_remote(
                                     tree_selected = tree_entries.len().saturating_sub(1);
                                 }
                                 KeyCode::Enter if tree_chooser => {
-                                    if let Some((is_win, wid, pid, _label, sess_name)) =
-                                        tree_entries.get(tree_selected)
+                                    if let Some(crate::tree_chooser::TreeRow {
+                                        is_win,
+                                        id: wid,
+                                        sub_id: pid,
+                                        session: sess_name,
+                                        ..
+                                    }) = tree_entries.get(tree_selected)
                                     {
                                         if *wid == usize::MAX {
                                             // Session header — switch to that session
@@ -3696,16 +3558,15 @@ pub fn run_remote(
                     tree_scroll = tree_selected;
                 }
                 let mut lines: Vec<Line> = Vec::new();
-                for (i, (is_win, wid, _pid, label, _sess)) in tree_entries.iter().enumerate().skip(tree_scroll).take(visible_h) {
-                    let line = if i == tree_selected {
-                        Line::from(Span::styled(label.clone(), sel_style))
-                    } else if *is_win && *wid == usize::MAX {
-                        // Session header — bold
-                        Line::from(Span::styled(label.clone(), Style::default().add_modifier(Modifier::BOLD)))
+                for (i, entry) in tree_entries.iter().enumerate().skip(tree_scroll).take(visible_h) {
+                    let label_style = if i == tree_selected {
+                        sel_style
+                    } else if entry.is_header() {
+                        Style::default().add_modifier(Modifier::BOLD)
                     } else {
-                        Line::from(label.clone())
+                        Style::default()
                     };
-                    lines.push(line);
+                    lines.push(crate::tree_chooser::row_line(entry, label_style));
                 }
                 let para = Paragraph::new(Text::from(lines));
                 f.render_widget(para, inner);

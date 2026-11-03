@@ -10,7 +10,6 @@ use crate::util::base64_decode;
 
 static NEXT_CLIENT_ID: AtomicU64 = AtomicU64::new(1);
 use super::helpers::TMUX_COMMANDS;
-use crate::commands::parse_command_line;
 
 /// Strip all ANSI/VT escape sequences from text, producing clean UTF-8 output.
 /// Handles CSI sequences (\x1b[...X), OSC sequences (\x1b]...BEL/ST), and
@@ -57,6 +56,47 @@ fn strip_ansi_escapes(s: &str) -> String {
         }
     }
     out
+}
+
+/// Block until pane `pid` is ready or `limit` passes, then focus it again for
+/// the keys that follow.
+///
+/// Each `QueryPaneState` poll is a non-temp request, so the server restores
+/// the real focus after it and drops the `-t` temp focus. Without the final
+/// `FocusPaneTempCheck`, the keys land in the originally active pane. Returns
+/// false when the pane is gone, so the keys must not be sent anywhere.
+///
+/// A missing pane polls as "no state", the same as a live pane with no output
+/// yet, so that case is told apart with `PaneExists` and ends the wait early.
+fn wait_ready_then_refocus(tx: &mpsc::Sender<CtrlReq>, pid: usize, limit: Duration) -> bool {
+    let deadline = std::time::Instant::now() + limit;
+    let (qtx, qrx) = mpsc::channel();
+    loop {
+        let _ = tx.send(CtrlReq::QueryPaneState(pid, qtx.clone()));
+        if let Ok((_, readiness)) = qrx.recv_timeout(Duration::from_secs(2)) {
+            if readiness.is_ready() {
+                break;
+            }
+            if readiness.state.is_none() && !pane_exists(tx, pid) {
+                return false;
+            }
+        }
+        if std::time::Instant::now() >= deadline {
+            break; // timeout: deliver the keys anyway
+        }
+        std::thread::sleep(Duration::from_millis(100));
+    }
+    let (check_tx, check_rx) = mpsc::channel();
+    let _ = tx.send(CtrlReq::FocusPaneTempCheck(pid, check_tx));
+    matches!(check_rx.recv_timeout(Duration::from_secs(2)), Ok(true))
+}
+
+/// Ask the server whether pane `pid` exists, without moving focus. A reply
+/// that never arrives counts as "exists", so the wait goes on to its limit.
+fn pane_exists(tx: &mpsc::Sender<CtrlReq>, pid: usize) -> bool {
+    let (exists_tx, exists_rx) = mpsc::channel();
+    let _ = tx.send(CtrlReq::PaneExists(pid, exists_tx));
+    !matches!(exists_rx.recv_timeout(Duration::from_secs(2)), Ok(false))
 }
 
 /// Handle a single TCP connection from a client.
@@ -253,8 +293,20 @@ pub(crate) fn handle_connection(
             }
         }
 
-        // Use quote-aware parser to preserve arguments with spaces
-        let parsed = crate::cli::normalize_flag_equals(parse_command_line(&line));
+        // Use quote-aware parser to preserve arguments with spaces. Only an
+        // unquoted argument can be a flag: `quoted_args` keeps that bit so a
+        // quoted value such as a window name `"-d"` is never read as one.
+        let mut parsed: Vec<String> = Vec::new();
+        let mut parsed_quoted: Vec<bool> = Vec::new();
+        for (tok, quoted) in crate::session::split_wire_line(&line) {
+            let parts = if quoted {
+                vec![tok]
+            } else {
+                crate::cli::normalize_flag_equals(vec![tok])
+            };
+            parsed_quoted.extend(std::iter::repeat_n(quoted, parts.len()));
+            parsed.extend(parts);
+        }
         let raw_cmd = parsed.first().map(|s| s.as_str()).unwrap_or("");
         // Check command aliases before normal dispatch
         let alias_expanded = if let Ok(map) = aliases.read() {
@@ -271,6 +323,10 @@ pub(crate) fn handle_connection(
         } else {
             (raw_cmd, parsed.iter().skip(1).map(|s| s.as_str()).collect())
         };
+        // Alias words are unquoted; the line's own arguments keep their bit.
+        let quoted: Vec<bool> = std::iter::repeat_n(false, args.len() + 1 - parsed.len().max(1))
+            .chain(parsed_quoted.iter().skip(1).copied())
+            .collect();
 
         // Parse -t argument from command line (takes precedence over global TARGET)
         let mut window_spec: Option<WindowSpec> = global_window_spec.clone();
@@ -286,50 +342,41 @@ pub(crate) fn handle_connection(
         // A bare `--` ends flag parsing. A `-t` after it belongs to the operand
         // — a send-keys payload, or the command line behind `exec -t %N --` —
         // and consuming it there silently ate two tokens out of that operand.
-        let end_of_opts = args.iter().position(|a| *a == "--");
-        let is_flag_pos = |i: usize| end_of_opts.is_none_or(|eo| i < eo);
-        let mut i = 0;
-        while i < args.len() {
-            if args[i] == "-t" && is_flag_pos(i) {
-                if let Some(v) = args.get(i + 1) {
-                    raw_target = Some(v.to_string());
-                    // Parse the -t value using parse_target for consistent handling
-                    let pt = parse_target(v);
-                    if let Some(spec) = pt.window_spec() {
-                        window_spec = Some(spec);
-                    }
-                    if pt.pane.is_some() {
-                        target_pane = pt.pane;
-                        pane_is_id = pt.pane_is_id;
-                    }
-                    // This -t replaces the TARGET line's verdict, good or bad.
-                    unresolved_target = if pt.window_unresolved {
-                        Some((TargetKind::Window, v.to_string()))
-                    } else if pt.pane_unresolved {
-                        Some((TargetKind::Pane, v.to_string()))
-                    } else {
-                        None
-                    };
+        let target_positions = super::spawn_args::target_flag_positions(&args, &quoted);
+        for &i in &target_positions {
+            if let Some(v) = args.get(i + 1) {
+                raw_target = Some(v.to_string());
+                // Parse the -t value using parse_target for consistent handling
+                let pt = parse_target(v);
+                if let Some(spec) = pt.window_spec() {
+                    window_spec = Some(spec);
                 }
-                i += 2;
-                continue;
+                if pt.pane.is_some() {
+                    target_pane = pt.pane;
+                    pane_is_id = pt.pane_is_id;
+                }
+                // This -t replaces the TARGET line's verdict, good or bad.
+                unresolved_target = if pt.window_unresolved {
+                    Some((TargetKind::Window, v.to_string()))
+                } else if pt.pane_unresolved {
+                    Some((TargetKind::Pane, v.to_string()))
+                } else {
+                    None
+                };
             }
-            i += 1;
         }
         // Build args without -t and its value so command handlers get clean positional args
-        let args: Vec<&str> = {
-            let mut filtered = Vec::new();
-            let mut i = 0;
-            while i < args.len() {
-                if args[i] == "-t" && is_flag_pos(i) {
-                    i += 2; // skip -t and its value
-                    continue;
-                }
-                filtered.push(args[i]);
-                i += 1;
-            }
-            filtered
+        let dropped = |i: &usize| {
+            target_positions.contains(i) || (*i > 0 && target_positions.contains(&(i - 1)))
         };
+        let quoted: Vec<bool> = (0..args.len())
+            .filter(|i| !dropped(i))
+            .map(|i| quoted[i])
+            .collect();
+        let args: Vec<&str> = (0..args.len())
+            .filter(|i| !dropped(i))
+            .map(|i| args[i])
+            .collect();
         // detach-client's `-t` names a CLIENT, so pane/window syntax does not
         // apply to it at all (98a9188).
         let target_names_a_client = matches!(cmd, "detach-client" | "detach");
@@ -479,60 +526,33 @@ pub(crate) fn handle_connection(
         }
         match cmd {
             "new-window" | "neww" => {
-                let name: Option<String> = args
-                    .windows(2)
-                    .find(|w| w[0] == "-n")
-                    .map(|w| w[1].trim_matches('"').to_string());
-                let start_dir: Option<String> = args
-                    .windows(2)
-                    .find(|w| w[0] == "-c")
-                    .map(|w| w[1].trim_matches('"').to_string());
-                let detached = args.contains(&"-d");
-                let print_info = args.contains(&"-P");
-                let format_str: Option<String> = args
-                    .windows(2)
-                    .find(|w| w[0] == "-F")
-                    .map(|w| w[1].trim_matches('"').to_string());
+                let spawn = super::spawn_args::parse_spawn_args(
+                    &args,
+                    &quoted,
+                    &["-n", "-c", "-F", "-e", "--shell"],
+                );
+                let name: Option<String> =
+                    spawn.value("-n").map(|v| v.trim_matches('"').to_string());
+                let start_dir: Option<String> =
+                    spawn.value("-c").map(|v| v.trim_matches('"').to_string());
+                let detached = spawn.has("-d");
+                let print_info = spawn.has("-P");
+                let format_str: Option<String> =
+                    spawn.value("-F").map(|v| v.trim_matches('"').to_string());
                 // Parse -e KEY=VAL environment variables (can appear multiple times)
-                let env_vars: Vec<(String, String)> = args
-                    .windows(2)
-                    .filter(|w| w[0] == "-e")
-                    .filter_map(|w| {
-                        let s = w[1].trim_matches('"');
-                        s.split_once('=')
+                let env_vars: Vec<(String, String)> = spawn
+                    .values("-e")
+                    .filter_map(|v| {
+                        v.trim_matches('"')
+                            .split_once('=')
                             .map(|(k, v)| (k.to_string(), v.to_string()))
                     })
                     .collect();
-                // Parse --shell SHELL override
-                let shell_arg: Option<String> = args
-                    .windows(2)
-                    .find(|w| w[0] == "--shell")
-                    .map(|w| w[1].trim_matches('"').to_string());
-                // Parse command: everything after "--" is the command, or
-                // fall back to finding a single positional arg.
-                let cmd_str: Option<String> =
-                    if let Some(pos) = args.iter().position(|a| *a == "--") {
-                        let after: Vec<&str> = args[pos + 1..]
-                            .iter()
-                            .map(|s| s.trim_matches('"'))
-                            .collect();
-                        if after.is_empty() {
-                            None
-                        } else {
-                            Some(after.join(" "))
-                        }
-                    } else {
-                        args.iter()
-                            .find(|a| {
-                                !a.starts_with('-')
-                                    && args.windows(2).all(|w| !(w[0] == "-n" && w[1] == **a))
-                                    && args.windows(2).all(|w| !(w[0] == "-c" && w[1] == **a))
-                                    && args.windows(2).all(|w| !(w[0] == "-F" && w[1] == **a))
-                                    && args.windows(2).all(|w| !(w[0] == "-e" && w[1] == **a))
-                                    && args.windows(2).all(|w| !(w[0] == "--shell" && w[1] == **a))
-                            })
-                            .map(|s| s.trim_matches('"').to_string())
-                    };
+                let shell_arg: Option<String> = spawn
+                    .value("--shell")
+                    .map(|v| v.trim_matches('"').to_string());
+                // Everything after "--" is the command, else the first positional.
+                let cmd_str: Option<String> = spawn.command;
                 if print_info {
                     let (rtx, rrx) = mpsc::channel::<String>();
                     let _ = tx.send(CtrlReq::NewWindowPrint(
@@ -592,72 +612,42 @@ pub(crate) fn handle_connection(
                 }
             }
             "split-window" | "splitw" => {
-                let kind = if args.contains(&"-h") {
+                let spawn = super::spawn_args::parse_spawn_args(
+                    &args,
+                    &quoted,
+                    &["-c", "-p", "-l", "-F", "-e", "--shell"],
+                );
+                let kind = if spawn.has("-h") {
                     LayoutKind::Horizontal
                 } else {
                     LayoutKind::Vertical
                 };
-                let detached = args.contains(&"-d");
-                let print_info = args.contains(&"-P");
-                let format_str: Option<String> = args
-                    .windows(2)
-                    .find(|w| w[0] == "-F")
-                    .map(|w| w[1].trim_matches('"').to_string());
-                let start_dir: Option<String> = args
-                    .windows(2)
-                    .find(|w| w[0] == "-c")
-                    .map(|w| w[1].trim_matches('"').to_string());
-                let size_pct: Option<u16> = args
-                    .windows(2)
-                    .find(|w| w[0] == "-p")
-                    .and_then(|w| w[1].trim_matches('%').parse().ok())
-                    .or_else(|| {
-                        args.windows(2).find(|w| w[0] == "-l").and_then(|w| {
-                            let s = w[1].trim_matches('%');
-                            s.parse().ok()
-                        })
-                    });
+                let detached = spawn.has("-d");
+                let print_info = spawn.has("-P");
+                let format_str: Option<String> =
+                    spawn.value("-F").map(|v| v.trim_matches('"').to_string());
+                let start_dir: Option<String> =
+                    spawn.value("-c").map(|v| v.trim_matches('"').to_string());
+                let pct = |flag| {
+                    spawn
+                        .value(flag)
+                        .and_then(|v: &str| v.trim_matches('%').parse::<u16>().ok())
+                };
+                let size_pct: Option<u16> = pct("-p").or_else(|| pct("-l"));
                 // Parse -e KEY=VAL environment variables (can appear multiple times)
-                let env_vars: Vec<(String, String)> = args
-                    .windows(2)
-                    .filter(|w| w[0] == "-e")
-                    .filter_map(|w| {
-                        let s = w[1].trim_matches('"');
-                        s.split_once('=')
+                let env_vars: Vec<(String, String)> = spawn
+                    .values("-e")
+                    .filter_map(|v| {
+                        v.trim_matches('"')
+                            .split_once('=')
                             .map(|(k, v)| (k.to_string(), v.to_string()))
                     })
                     .collect();
-                // Parse --shell SHELL override
-                let shell_arg: Option<String> = args
-                    .windows(2)
-                    .find(|w| w[0] == "--shell")
-                    .map(|w| w[1].trim_matches('"').to_string());
-                // Parse command: everything after "--" is the command, or
-                // fall back to finding a single positional arg.
-                let cmd_str: Option<String> =
-                    if let Some(pos) = args.iter().position(|a| *a == "--") {
-                        let after: Vec<&str> = args[pos + 1..]
-                            .iter()
-                            .map(|s| s.trim_matches('"'))
-                            .collect();
-                        if after.is_empty() {
-                            None
-                        } else {
-                            Some(after.join(" "))
-                        }
-                    } else {
-                        args.iter()
-                            .find(|a| {
-                                !a.starts_with('-')
-                                    && args.windows(2).all(|w| !(w[0] == "-c" && w[1] == **a))
-                                    && args.windows(2).all(|w| !(w[0] == "-p" && w[1] == **a))
-                                    && args.windows(2).all(|w| !(w[0] == "-l" && w[1] == **a))
-                                    && args.windows(2).all(|w| !(w[0] == "-F" && w[1] == **a))
-                                    && args.windows(2).all(|w| !(w[0] == "-e" && w[1] == **a))
-                                    && args.windows(2).all(|w| !(w[0] == "--shell" && w[1] == **a))
-                            })
-                            .map(|s| s.trim_matches('"').to_string())
-                    };
+                let shell_arg: Option<String> = spawn
+                    .value("--shell")
+                    .map(|v| v.trim_matches('"').to_string());
+                // Everything after "--" is the command, else the first positional.
+                let cmd_str: Option<String> = spawn.command;
                 if print_info {
                     let (rtx, rrx) = mpsc::channel::<String>();
                     let _ = tx.send(CtrlReq::SplitWindowPrint(
@@ -1053,34 +1043,21 @@ pub(crate) fn handle_connection(
                         repeat_count = count_str.parse::<usize>().unwrap_or(1).max(1);
                     }
                 }
-                // --wait-ready: poll pane readiness before delivering keys.
-                // Uses the same 500ms silence heuristic as wait-pane --ready.
-                if wait_ready {
+                // --wait-ready: poll readiness, then put the -t focus back on the
+                // target. Only a pane id can be polled; an index is not an id.
+                if wait_ready && pane_is_id {
                     if let Some(pid) = target_pane {
-                        let deadline =
-                            std::time::Instant::now() + std::time::Duration::from_secs(30);
-                        let (qtx, qrx) = mpsc::channel::<(u64, u64)>();
-                        loop {
-                            let qtx2 = qtx.clone();
-                            let _ = tx.send(CtrlReq::QueryPaneReady(pid, qtx2));
-                            if let Ok((dv, lot)) =
-                                qrx.recv_timeout(std::time::Duration::from_secs(2))
-                            {
-                                if dv > 0 && lot > 0 {
-                                    let now_ms = std::time::SystemTime::now()
-                                        .duration_since(std::time::UNIX_EPOCH)
-                                        .unwrap_or_default()
-                                        .as_millis()
-                                        as u64;
-                                    if now_ms.saturating_sub(lot) >= 500 {
-                                        break; // pane is ready
-                                    }
-                                }
-                            }
-                            if std::time::Instant::now() >= deadline {
-                                break; // timeout — deliver keys anyway
-                            }
-                            std::thread::sleep(std::time::Duration::from_millis(100));
+                        if !wait_ready_then_refocus(&tx, pid, Duration::from_secs(30)) {
+                            let pane_id_str = format!("%{pid}");
+                            let _ = writeln!(
+                                write_stream,
+                                "{}{}",
+                                crate::types::UNRESOLVED_PANE_PREFIX,
+                                raw_target.as_deref().unwrap_or(&pane_id_str)
+                            );
+                            let _ = write_stream.flush();
+                            line.clear();
+                            continue;
                         }
                     }
                 }
@@ -1251,6 +1228,7 @@ pub(crate) fn handle_connection(
                 // --timeout is milliseconds (matches wait-for semantics).
                 let mut timeout_ms: Option<u64> = None;
                 let mut wait_ready = false;
+                let mut until: Option<&str> = None;
                 let mut i = 0;
                 while i < args.len() {
                     match args[i] {
@@ -1263,35 +1241,42 @@ pub(crate) fn handle_connection(
                         "--ready" => {
                             wait_ready = true;
                         }
+                        "--until" => {
+                            until = Some(args.get(i + 1).copied().unwrap_or(""));
+                            i += 1;
+                        }
                         _ => {}
                     }
                     i += 1;
                 }
-                if let Some(pid) = pane_id {
+                if let (Some(pid), Some(name)) = (pane_id, until) {
+                    let code = crate::agent_state::parse_state(name)
+                        .map_or(crate::wait_until::UNTIL_GONE, |want| {
+                            crate::wait_until::wait_until(&tx, Some(pid), want, timeout_ms)
+                        });
+                    let _ = write!(write_stream, "{}", code);
+                    let _ = write_stream.flush();
+                } else if until.is_some() {
+                    // --until needs a %N id; an index target is a usage error,
+                    // not a timeout, so it must not fall through to "1".
+                    let _ = write!(write_stream, "{}", crate::wait_until::UNTIL_GONE);
+                    let _ = write_stream.flush();
+                } else if let Some(pid) = pane_id {
                     if wait_ready {
-                        // Poll pane readiness: output has stabilised (no new
-                        // output for >=500ms after initial burst).
+                        // Poll Pane::readiness until the pane is idle.
                         let deadline = timeout_ms.map(|ms| {
                             std::time::Instant::now() + std::time::Duration::from_millis(ms)
                         });
-                        let (qtx, qrx) = mpsc::channel::<(u64, u64)>();
+                        let (qtx, qrx) = mpsc::channel();
                         loop {
-                            let qtx2 = qtx.clone();
-                            let _ = tx.send(CtrlReq::QueryPaneReady(pid, qtx2));
-                            if let Ok((dv, lot)) =
+                            let _ = tx.send(CtrlReq::QueryPaneState(pid, qtx.clone()));
+                            if let Ok((_, readiness)) =
                                 qrx.recv_timeout(std::time::Duration::from_secs(2))
                             {
-                                if dv > 0 && lot > 0 {
-                                    let now_ms = std::time::SystemTime::now()
-                                        .duration_since(std::time::UNIX_EPOCH)
-                                        .unwrap_or_default()
-                                        .as_millis()
-                                        as u64;
-                                    if now_ms.saturating_sub(lot) >= 500 {
-                                        let _ = write!(write_stream, "0");
-                                        let _ = write_stream.flush();
-                                        break;
-                                    }
+                                if readiness.is_ready() {
+                                    let _ = write!(write_stream, "0");
+                                    let _ = write_stream.flush();
+                                    break;
                                 }
                             }
                             if let Some(dl) = deadline {
@@ -2119,10 +2104,14 @@ pub(crate) fn handle_connection(
                     .find(|w| w[0] == "--timeout")
                     .and_then(|w| w[1].parse().ok())
                     .unwrap_or(3_600_000); // default 1 hour
+                let until: Option<&str> = args.windows(2).find(|w| w[0] == "--until").map(|w| w[1]);
 
                 // If any new-style condition flag is set, use the wait_for executors.
-                let use_executor =
-                    file_path.is_some() || exit_pid.is_some() || output_pat.is_some() || ready_mode;
+                let use_executor = file_path.is_some()
+                    || exit_pid.is_some()
+                    || output_pat.is_some()
+                    || ready_mode
+                    || until.is_some();
 
                 if use_executor {
                     let outcome: crate::wait_for::WaitOutcome = if let Some(pid) = exit_pid {
@@ -2174,6 +2163,16 @@ pub(crate) fn handle_connection(
                             }
                             Err(e) => crate::wait_for::WaitOutcome::Error {
                                 reason: format!("invalid regex: {e}"),
+                            },
+                        }
+                    } else if let Some(name) = until {
+                        let target_pane_id = if pane_is_id { target_pane } else { None };
+                        match crate::agent_state::parse_state(name) {
+                            Some(want) => {
+                                crate::wait_until::wait_state(&tx, target_pane_id, want, timeout_ms)
+                            }
+                            None => crate::wait_for::WaitOutcome::Error {
+                                reason: format!("unknown state: {name}"),
                             },
                         }
                     } else {
@@ -2800,3 +2799,7 @@ pub(crate) fn handle_connection(
         }
     } // end command loop
 }
+
+#[cfg(test)]
+#[path = "../../tests-rs/test_send_keys_wait_ready.rs"]
+mod send_keys_wait_ready_tests;

@@ -191,6 +191,11 @@ pub struct WorkerState {
     /// when the worker's pane vanished without a clean exit code.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub crash_dump_path: Option<String>,
+    /// Last `#{pane_agent_state}` read from the worker's pane: the worst-of
+    /// OSC 7501 state, or `None` when the agent reports nothing. It is
+    /// informational only; a `blocked` worker stays `Running`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent_state: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -213,6 +218,7 @@ impl WorkerState {
             started_at: None,
             finished_at: None,
             crash_dump_path: None,
+            agent_state: None,
         }
     }
 
@@ -527,8 +533,28 @@ fn spawn_worker_pane(plan: &Plan, plan_dir: &Path, worker: &Worker) -> Result<St
     Ok(pane_id)
 }
 
-/// Query a pane's dead/exit-code status via `psmux list-panes`.
-/// Returns `Ok(Some(exit_code))` if the pane is dead, `Ok(None)` if still alive.
+/// Exit-code sentinels emitted by [`check_pane_exit`] when the real worker
+/// exit code isn't available. Distinguishing these from genuine worker exits
+/// matters for downstream CI: a killed session is not the same as a crash.
+pub const EXIT_PANE_GONE: i32 = -1;
+pub const EXIT_SESSION_GONE: i32 = -3;
+
+/// What one `list-panes` poll says about a worker's pane.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum PaneCheck {
+    /// The pane is running; `agent_state` is its `#{pane_agent_state}`.
+    Alive { agent_state: Option<String> },
+    /// The pane is dead or gone. `code` is `None` for a dead pane whose exit
+    /// code is empty, and a sentinel when the pane or session is gone.
+    /// `agent_state` is what a dead pane kept (`done`/`error` survive exit);
+    /// it is `None` when nothing survived or when the pane could not be read.
+    Dead {
+        code: Option<i32>,
+        agent_state: Option<String>,
+    },
+}
+
+/// Query a pane's dead/exit-code status and agent state via `psmux list-panes`.
 ///
 /// Targets `list-panes -t <session>` (session-name routing is unambiguous — it
 /// reads `<session>.port` directly) and then filters for the requested
@@ -536,13 +562,7 @@ fn spawn_worker_pane(plan: &Plan, plan_dir: &Path, worker: &Worker) -> Result<St
 /// reverse-mtime scan in session::resolve_server_for_command and could land on
 /// the wrong server if multiple live servers exist (common under test harnesses
 /// when the user's attached terminal shares a numeric id).
-/// Exit-code sentinels emitted by [`check_pane_exit`] when the real worker
-/// exit code isn't available. Distinguishing these from genuine worker exits
-/// matters for downstream CI: a killed session is not the same as a crash.
-pub const EXIT_PANE_GONE: i32 = -1;
-pub const EXIT_SESSION_GONE: i32 = -3;
-
-fn check_pane_exit(session: &str, pane_id: &str) -> Result<Option<i32>, String> {
+fn check_pane_exit(session: &str, pane_id: &str) -> Result<PaneCheck, String> {
     let exe = psmux_exe()?;
     let output = std::process::Command::new(&exe)
         .args([
@@ -551,36 +571,119 @@ fn check_pane_exit(session: &str, pane_id: &str) -> Result<Option<i32>, String> 
             session,
             "-s",
             "-F",
-            "#{pane_id}:#{pane_dead}:#{pane_exit_code}",
+            "#{pane_id}:#{pane_dead}:#{pane_exit_code}:#{pane_agent_state}",
         ])
         .output()
         .map_err(|e| format!("list-panes failed to spawn: {e}"))?;
     if !output.status.success() {
         // The whole session is gone (user killed it, or server died).
         // Distinct from per-pane pruning so callers can tell the two apart.
-        return Ok(Some(EXIT_SESSION_GONE));
+        return Ok(PaneCheck::Dead {
+            code: Some(EXIT_SESSION_GONE),
+            agent_state: None,
+        });
     }
-    let raw = String::from_utf8_lossy(&output.stdout);
-    for line in raw.lines() {
-        let line = line.trim();
-        if line.is_empty() {
-            continue;
-        }
+    Ok(parse_pane_check(
+        &String::from_utf8_lossy(&output.stdout),
+        pane_id,
+    ))
+}
+
+/// Find `pane_id` in `list-panes` output of the form
+/// `id:dead:exit_code:agent_state`. A dead pane wins over any agent state.
+/// The state labels never contain `:`, so a plain split is safe.
+fn parse_pane_check(raw: &str, pane_id: &str) -> PaneCheck {
+    for line in raw.lines().map(str::trim).filter(|l| !l.is_empty()) {
         let mut parts = line.split(':');
-        let reported_id = parts.next().unwrap_or("").trim();
-        if reported_id != pane_id {
+        if parts.next().unwrap_or("").trim() != pane_id {
             continue;
         }
-        let dead_flag = parts.next().unwrap_or("0").trim();
+        let dead = matches!(parts.next().unwrap_or("0").trim(), "1" | "true");
         let exit_raw = parts.next().unwrap_or("").trim();
-        let dead = matches!(dead_flag, "1" | "true");
+        let state = parts.next().unwrap_or("").trim();
+        let agent_state = (!state.is_empty()).then(|| state.to_string());
         if !dead {
-            return Ok(None);
+            return PaneCheck::Alive { agent_state };
         }
-        return Ok(Some(exit_raw.parse::<i32>().unwrap_or(EXIT_PANE_GONE)));
+        // An empty code is a dead pane whose status was not reported, not a
+        // pruned pane: its record is still read and the pane is still there.
+        let code = exit_raw.parse::<i32>().ok();
+        return PaneCheck::Dead { code, agent_state };
     }
     // Pane not found in any window of the session — pruned by the server.
-    Ok(Some(EXIT_PANE_GONE))
+    PaneCheck::Dead {
+        code: Some(EXIT_PANE_GONE),
+        agent_state: None,
+    }
+}
+
+/// Record a worker's dead pane on `ws`: `Succeeded` only for exit code 0,
+/// else `Failed`.  Returns whether the pane is still there to kill, which is
+/// false only for the gone sentinels.  A sentinel means nothing was read, so
+/// the last agent state is kept; any other death records what the pane kept.
+fn record_pane_death(ws: &mut WorkerState, code: Option<i32>, dead_state: Option<String>) -> bool {
+    let gone = matches!(code, Some(EXIT_PANE_GONE | EXIT_SESSION_GONE));
+    if !gone {
+        ws.agent_state = dead_state;
+    }
+    ws.exit_code = code;
+    ws.finished_at = Some(now_iso8601());
+    ws.status = if code == Some(0) {
+        WorkerStatus::Succeeded
+    } else {
+        WorkerStatus::Failed
+    };
+    // Pane vanished from an otherwise live session: try to associate a psmux
+    // crash report for post-mortem inspection. EXIT_SESSION_GONE means the
+    // whole session was torn down and there's no crash to attribute.
+    if code == Some(EXIT_PANE_GONE) {
+        if let Some(path) = find_crash_for(ws) {
+            ws.crash_dump_path = Some(path);
+        }
+    }
+    !gone
+}
+
+/// Mark every Running or Pending worker Failed with `exit_code = -2` when the
+/// `--timeout` ceiling fires. Returns the ids of workers whose last agent
+/// state was `blocked`, sorted, so the caller can say who was waiting.
+fn fail_unfinished_on_timeout(state: &mut OrchestrationState) -> Vec<String> {
+    let mut blocked = Vec::new();
+    for (id, ws) in state.workers.iter_mut() {
+        if ws.status == WorkerStatus::Running || ws.status == WorkerStatus::Pending {
+            ws.status = WorkerStatus::Failed;
+            ws.exit_code = Some(-2);
+            ws.finished_at = Some(now_iso8601());
+            if ws.agent_state.as_deref() == Some("blocked") {
+                blocked.push(id.clone());
+            }
+        }
+    }
+    blocked.sort();
+    blocked
+}
+
+/// Message for a fired `--timeout`. It must start with
+/// `"orchestrate timed out"`: `main.rs` maps that prefix to exit code 3.
+fn timeout_message(limit_ms: u64, blocked: &[String]) -> String {
+    if blocked.is_empty() {
+        format!("orchestrate timed out after {limit_ms} ms")
+    } else {
+        format!(
+            "orchestrate timed out after {limit_ms} ms; blocked: {}",
+            blocked.join(", ")
+        )
+    }
+}
+
+/// Store a live pane's agent state. Returns true when it changed, so the
+/// poll loop rewrites `state.json` only on a change.
+fn record_agent_state(ws: &mut WorkerState, agent_state: Option<String>) -> bool {
+    if ws.agent_state == agent_state {
+        return false;
+    }
+    ws.agent_state = agent_state;
+    true
 }
 
 /// Main orchestration loop: spawn ready workers, poll for completion, advance
@@ -617,17 +720,11 @@ pub fn run_plan(
         // a worker hangs indefinitely.
         if let Some(limit) = timeout_ms {
             if started.elapsed().as_millis() as u64 >= limit {
-                for ws in state.workers.values_mut() {
-                    if ws.status == WorkerStatus::Running || ws.status == WorkerStatus::Pending {
-                        ws.status = WorkerStatus::Failed;
-                        ws.exit_code = Some(-2);
-                        ws.finished_at = Some(now_iso8601());
-                    }
-                }
+                let blocked = fail_unfinished_on_timeout(state);
                 state
                     .save(state_path)
                     .map_err(|e| format!("save state: {e}"))?;
-                return Err(format!("orchestrate timed out after {} ms", limit));
+                return Err(timeout_message(limit, &blocked));
             }
         }
 
@@ -679,27 +776,20 @@ pub fn run_plan(
 
         let mut updated = false;
         for (worker_id, pane_id) in running {
-            let exit = check_pane_exit(&plan.session, &pane_id)?;
-            let Some(code) = exit else { continue };
-            if let Some(ws) = state.workers.get_mut(&worker_id) {
-                ws.exit_code = Some(code);
-                ws.finished_at = Some(now_iso8601());
-                ws.status = if code == 0 {
-                    WorkerStatus::Succeeded
-                } else {
-                    WorkerStatus::Failed
-                };
-                // Pane vanished with no usable exit code — try to associate a
-                // psmux crash report for post-mortem inspection. Only do this
-                // for EXIT_PANE_GONE (worker disappeared from an otherwise live
-                // session); EXIT_SESSION_GONE means the whole session was torn
-                // down and there's no crash to attribute.
-                if code == EXIT_PANE_GONE {
-                    if let Some(path) = find_crash_for(ws) {
-                        ws.crash_dump_path = Some(path);
-                    }
+            let (code, dead_state) = match check_pane_exit(&plan.session, &pane_id)? {
+                PaneCheck::Alive { agent_state } => {
+                    updated |= state
+                        .workers
+                        .get_mut(&worker_id)
+                        .is_some_and(|ws| record_agent_state(ws, agent_state));
+                    continue;
                 }
-            }
+                PaneCheck::Dead { code, agent_state } => (code, agent_state),
+            };
+            let pane_left = state
+                .workers
+                .get_mut(&worker_id)
+                .is_some_and(|ws| record_pane_death(ws, code, dead_state));
             if state
                 .workers
                 .get(&worker_id)
@@ -708,11 +798,10 @@ pub fn run_plan(
                 skip_dependents(plan, state, &worker_id);
             }
             updated = true;
-            // The pane exited with a real exit code (remain-on-exit kept it
-            // visible as a dead pane). Kill it now so dead panes don't
-            // accumulate in the session. EXIT_PANE_GONE means the pane was
-            // already reaped, so no kill is needed in that case.
-            if code != EXIT_PANE_GONE && code != EXIT_SESSION_GONE {
+            // remain-on-exit kept the dead pane visible. Kill it now so dead
+            // panes don't accumulate in the session. A gone sentinel means
+            // there is no pane left to kill.
+            if pane_left {
                 if let Ok(exe) = psmux_exe() {
                     // Reported, not discarded: a silent failure here is exactly
                     // how the leak went unnoticed — the run still exits 0 and
@@ -733,6 +822,10 @@ pub fn run_plan(
         std::thread::sleep(std::time::Duration::from_millis(500));
     }
 }
+
+#[cfg(test)]
+#[path = "../tests-rs/test_orchestrate_agent_state.rs"]
+mod orchestrate_agent_state_tests;
 
 #[cfg(test)]
 mod tests {

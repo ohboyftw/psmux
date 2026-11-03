@@ -553,17 +553,39 @@ struct ExitedPaneInfo {
     exit_code: Option<i32>,
     elapsed_ms: Option<u64>,
     command: Option<String>,
+    /// The pane's last OSC 7501 transition, read at exit.
+    status: Option<crate::agent_state::AgentTransition>,
+    /// Killed (kill-pane, kill-window) rather than exited on its own.
+    killed: bool,
 }
 
 pub fn prune_exited(
     n: Node,
     remain_on_exit: crate::types::RemainOnExit,
     control_clients: &[crate::control::ControlClient],
+    toasts: &mut crate::agent_toast::AgentToasts,
+    session_name: &str,
 ) -> Option<Node> {
     let mut exited: Vec<ExitedPaneInfo> = Vec::new();
     let result = prune_exited_inner(n, remain_on_exit, &mut exited);
-    // Push context_exited events for all newly-dead panes
+    // Push context_exited events for all newly-dead panes.  The final
+    // state_changed goes first, and here rather than on the next tick: a
+    // dropped pane is gone by then.  Best effort: bytes the reader had not
+    // parsed when try_wait saw the exit are lost with a dropped pane.
     for info in &exited {
+        if let Some(t) = &info.status {
+            crate::server::helpers::emit_status_transition(control_clients, info.pane_id, t);
+            if !info.killed {
+                toasts.offer(info.pane_id, t, session_name, std::time::Instant::now());
+            }
+        }
+        // A killed pane says nothing, even when it stays in the tree as
+        // the last pane and the server exits with its toast still waiting.
+        if info.killed {
+            toasts.forget(info.pane_id);
+        } else {
+            toasts.note_exited(info.pane_id);
+        }
         let event = crate::backend::protocol::ContextExitedEvent {
             method: "context_exited".into(),
             params: crate::backend::protocol::ContextExitedParams {
@@ -588,6 +610,19 @@ pub fn prune_exited(
         );
     }
     result
+}
+
+/// Applies the OSC 7501 process-exit rule to a pane whose child just exited
+/// (working, blocked and idle records go; done and error stay), refreshes
+/// the pane's cache, since the sequence only moves when something was
+/// removed, and returns the transition still unreported, if any.
+fn end_agent_run(p: &mut Pane) -> Option<crate::agent_state::AgentTransition> {
+    let Ok(mut term) = p.term.lock() else {
+        return None;
+    };
+    term.screen_mut().program_status_on_process_exit();
+    p.agent_state.refresh(term.screen());
+    p.agent_state.observe(term.screen())
 }
 
 /// Inner recursive implementation of prune_exited that collects newly-exited
@@ -618,11 +653,14 @@ fn prune_exited_inner(
                         .unwrap_or_default()
                         .as_millis() as u64,
                 );
+                let agent_status = end_agent_run(&mut p);
                 exited.push(ExitedPaneInfo {
                     pane_id: p.id,
                     exit_code,
                     elapsed_ms: Some(p.spawn_time.elapsed().as_millis() as u64),
                     command: p.spawn_command.clone(),
+                    status: agent_status,
+                    killed: true,
                 });
                 return if remain_on_exit.keeps(exit_code) {
                     p.dead = true;
@@ -641,11 +679,14 @@ fn prune_exited_inner(
                             .unwrap_or_default()
                             .as_millis() as u64,
                     );
+                    let agent_status = end_agent_run(&mut p);
                     exited.push(ExitedPaneInfo {
                         pane_id: p.id,
                         exit_code,
                         elapsed_ms: Some(p.spawn_time.elapsed().as_millis() as u64),
                         command: p.spawn_command.clone(),
+                        status: agent_status,
+                        killed: false,
                     });
                     if remain_on_exit.keeps(exit_code) {
                         p.dead = true;
@@ -992,6 +1033,17 @@ pub fn count_panes(node: &Node) -> usize {
     }
 }
 
+/// Worst OSC 7501 state over a window's panes, read from each pane's
+/// agent-state cache (never the parser).
+pub fn window_agent_state(node: &Node) -> Option<vt100::ProgramState> {
+    match node {
+        Node::Leaf(p) => p.agent_state.worst(),
+        Node::Split { children, .. } => {
+            crate::agent_state::worst_of(children.iter().map(window_agent_state))
+        }
+    }
+}
+
 /// Immutable reference to the active pane (follows path through splits).
 pub fn active_pane<'a>(node: &'a Node, path: &[usize]) -> Option<&'a Pane> {
     match node {
@@ -1071,7 +1123,13 @@ pub fn reap_children(app: &mut AppState) -> io::Result<(bool, bool)> {
                 children: vec![],
             },
         );
-        match prune_exited(root, remain, &app.control_clients) {
+        match prune_exited(
+            root,
+            remain,
+            &app.control_clients,
+            &mut app.agent_toasts,
+            &app.session_name,
+        ) {
             Some(new_root) => {
                 let leaves_after = count_panes(&new_root);
                 if leaves_after < leaves_before {

@@ -823,6 +823,10 @@ pub fn parse_option_value(app: &mut AppState, key: &str, value: &str, _is_global
         "visual-bell" => {
             app.visual_bell = matches!(value, "on" | "true" | "1");
         }
+        "agent-toasts" => {
+            app.agent_toasts
+                .set_enabled(matches!(value, "on" | "true" | "1"));
+        }
         "activity-action" => {
             app.activity_action = value.to_string();
         }

@@ -411,6 +411,7 @@ const OPTIONS_REF: &[(&str, &str)] = &[
     ("monitor-silence",            "0"),
     ("visual-activity",            "off"),
     ("visual-bell",                "off"),
+    ("agent-toasts",               "on"),
     ("bell-action",                "any"),
     // Layout
     ("main-pane-width",            "0 (60% heuristic)"),

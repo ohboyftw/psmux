@@ -130,6 +130,7 @@ psmux split-window -- "C:/Program Files/Git/bin/bash.exe"
 | `silence-action` | Str | `other` | Action on window silence: `any`, `none`, `current`, `other` |
 | `bell-action` | Str | `any` | Bell action: `any`, `none`, `current`, `other` |
 | `visual-bell` | Bool | `off` | Visual bell indicator |
+| `agent-toasts` | Bool | `on` | Windows toast when an agent that reports OSC 7501 state blocks, finishes or fails (see [scripting.md](scripting.md#agent-state-toasts)) |
 | `allow-passthrough` | Str | `off` | Allow terminal passthrough sequences (`on`/`off`/`all`) |
 | `allow-rename` | Bool | `on` | Allow programs to set window title via escape sequences |
 | `allow-predictions` | Bool | `off` | Preserve PSReadLine prediction settings (see below) |
@@ -312,6 +313,17 @@ $env:PSMUX_CONPTY_DIR = "C:\tools\openconsole"
 # breakaway. Detached psmux servers themselves break away from any job that
 # allows it, so a server started from a pane or an SSH session outlives it.
 $env:PSMUX_NO_PANE_JOB = "1"
+
+# Turn mycel publishing off: session servers never start the event bus
+# (`psmux bus`) and never publish, not even to a bus that is already running
+# (a standalone `mycel` or another psmux bus). Read once, when a session
+# server starts. See docs/mycel-topics.md.
+$env:PSMUX_BUS = "0"
+
+# Where to look for the mycel bus and where `psmux bus` hosts it. Defaults:
+# port 4321 and %USERPROFILE%\.mycel\server (the file every mycel client reads).
+$env:PSMUX_BUS_PORT = "4321"
+$env:PSMUX_BUS_DISCOVERY = "C:\Users\me\.mycel\server"
 
 # These are set INSIDE psmux panes (tmux-compatible):
 # TMUX       - socket path and server info

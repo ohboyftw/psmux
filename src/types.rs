@@ -221,10 +221,9 @@ pub struct Pane {
     /// output is processed.  Checked by the server to know when the screen
     /// has actually changed (avoids serialising stale frames).
     pub data_version: std::sync::Arc<std::sync::atomic::AtomicU64>,
-    /// Epoch millis of the most recent PTY output.  Used together with
-    /// `data_version` to determine pane readiness: a pane is "ready" when it
-    /// has produced output (`data_version > 0`) **and** the output has
-    /// stabilised (no new output for ≥500 ms).  Exposed as `#{pane_ready}`.
+    /// Epoch millis of the most recent PTY output.  With `data_version` it
+    /// gives the silence fallback of `Pane::readiness` (`#{pane_ready}`)
+    /// for panes that report no OSC 7501 state.
     pub last_output_time: std::sync::Arc<std::sync::atomic::AtomicU64>,
     /// Timestamp of the last auto-rename foreground-process check (throttled to ~1/s).
     pub last_title_check: Instant,
@@ -243,6 +242,9 @@ pub struct Pane {
     pub dead_time: Option<u64>,
     /// True after a `context_ready` push event has been sent for this pane.
     pub readiness_notified: bool,
+    /// OSC 7501 agent state sampled by the server tick; read by
+    /// `#{pane_agent_state}` so format expansion never locks `term`.
+    pub agent_state: crate::agent_state::AgentStateCache,
     /// Monotonic instant when this pane was spawned. Used to compute elapsed_ms
     /// in `context_exited` events.
     pub spawn_time: std::time::Instant,
@@ -277,6 +279,8 @@ pub struct Pane {
     /// Supports arbitrary @-prefixed keys for swarm orchestration queries
     /// (e.g. `@agent`, `@task`).  Queryable via `show-options -p @key`
     /// and format variables `#{pane_agent}`, `#{pane_task}`.
+    /// `#{pane_agent}` is this `@agent` value, not the OSC 7501 state
+    /// (that is `#{pane_agent_state}`, from `agent_state`).
     pub metadata: std::collections::HashMap<String, String>,
     /// Bounded queue of DCS passthrough sequences from the child process.
     /// Filled by the PTY reader thread's vt100 callback, drained by the
@@ -315,6 +319,8 @@ pub struct WarmPane {
     pub child: Box<dyn portable_pty::Child>,
     pub term: Arc<Mutex<vt100::Parser>>,
     pub data_version: std::sync::Arc<std::sync::atomic::AtomicU64>,
+    /// Written by the warm reader thread; moved into the adopted `Pane`.
+    pub last_output_time: std::sync::Arc<std::sync::atomic::AtomicU64>,
     pub cursor_shape: std::sync::Arc<std::sync::atomic::AtomicU8>,
     pub bell_pending: std::sync::Arc<std::sync::atomic::AtomicBool>,
     pub child_pid: Option<u32>,
@@ -801,6 +807,8 @@ pub struct AppState {
     pub bell_action: String,
     /// visual-bell: show visual indicator on bell
     pub visual_bell: bool,
+    /// agent-toasts: desktop toasts when an OSC 7501 agent blocks, finishes or fails
+    pub agent_toasts: crate::agent_toast::AgentToasts,
     /// Command prompt history
     pub command_history: Vec<String>,
     /// Command prompt history index (for up/down navigation)
@@ -871,6 +879,9 @@ pub struct AppState {
     /// Checked during the reap cycle; when a pane exits, the exit code is sent
     /// and the waiter is removed.
     pub wait_pane_queue: Vec<(usize, mpsc::Sender<i32>)>,
+    /// `--until` waiters, answered on the poll tick after the OSC 7501 sample
+    /// and the reap (`crate::wait_until`).
+    pub wait_until_queue: Vec<crate::wait_until::UntilWaiter>,
     /// Respawn callers awaiting a verdict. A spawn only proves the wrapper
     /// shell started; the payload can die microseconds later. Checked on the
     /// poll tick so the single-threaded event loop never blocks waiting.
@@ -1040,6 +1051,7 @@ impl AppState {
             monitor_silence: 0,
             bell_action: "any".to_string(),
             visual_bell: false,
+            agent_toasts: crate::agent_toast::AgentToasts::default(),
             command_history: Vec::new(),
             command_history_idx: 0,
             status_interval: 15,
@@ -1067,6 +1079,7 @@ impl AppState {
             warm_pool_size: 1,
             pending_plugin_scripts: Vec::new(),
             wait_pane_queue: Vec::new(),
+            wait_until_queue: Vec::new(),
             pending_respawn_replies: Vec::new(),
             resurrect_on_exit: false,
             resurrect_dir: None,
@@ -1402,9 +1415,24 @@ pub enum CtrlReq {
     /// Wait for a pane's child process to exit and return its exit code.
     /// (pane_id, exit_code_sender)
     WaitPane(usize, mpsc::Sender<i32>),
-    /// Query a pane's readiness state: returns (data_version, last_output_time_ms).
-    /// Used by `wait-pane --ready` to poll until the shell prompt has appeared.
+    /// Queue a `--until` waiter (`crate::wait_until`).  `pane_id` of `None`
+    /// watches the active pane.  Answered with 0 met, 1 timeout, 2 dead or gone.
+    WaitPaneUntil {
+        pane_id: Option<usize>,
+        want: vt100::ProgramState,
+        deadline: Option<std::time::Instant>,
+        resp: mpsc::Sender<i32>,
+    },
+    /// Returns a pane's (data_version, last_output_time_ms).  Used by capture
+    /// for data_version; readiness callers use `QueryPaneState`.
     QueryPaneReady(usize, mpsc::Sender<(u64, u64)>),
+    /// Query a pane's (data_version, readiness) through the single readiness
+    /// predicate, `Pane::readiness`.  An unknown pane answers data_version 0
+    /// and an unknown state.
+    QueryPaneState(
+        usize,
+        mpsc::Sender<(u64, crate::agent_state::PaneReadiness)>,
+    ),
     /// Read the pane's current screen buffer as text.
     /// `pane_id` of `None` targets the active pane; otherwise the pane with the
     /// given `%N` id. Used by `wait-for --output` for regex polling.

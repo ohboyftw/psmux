@@ -51,8 +51,13 @@ fn windows_profile_dir() -> Option<String> {
     #[link(name = "kernel32")]
     extern "system" {
         fn GetCurrentProcess() -> isize;
-        fn OpenProcessToken(process: isize, access: u32, token: *mut *mut c_void) -> i32;
         fn CloseHandle(h: isize) -> i32;
+    }
+    // Advapi32, not kernel32: OpenProcessToken is documented under
+    // Advapi32.lib / Advapi32.dll and is not in kernel32.lib.
+    #[link(name = "advapi32")]
+    extern "system" {
+        fn OpenProcessToken(process: isize, access: u32, token: *mut *mut c_void) -> i32;
     }
     #[link(name = "userenv")]
     extern "system" {

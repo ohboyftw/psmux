@@ -214,12 +214,12 @@ pub struct ExecParams {
 
 #[derive(Debug, Deserialize)]
 pub struct WaitForParams {
-    /// One of: `"exit"`, `"file"`, `"output"`, `"ready"`.
+    /// One of: `"exit"`, `"file"`, `"output"`, `"ready"`, `"state"`.
     pub condition: String,
-    /// Condition-specific argument (PID for exit, path for file, regex for output).
-    /// Ignored for `ready`.
+    /// Condition-specific argument (PID for exit, path for file, regex for
+    /// output, `idle|working|blocked|done|error` for state).  Ignored for `ready`.
     pub arg: Option<String>,
-    /// `%N`-style pane context for `output` / `ready` modes.
+    /// `%N`-style pane context for `output` / `ready` / `state` modes.
     pub pane_id: Option<String>,
     /// Wait ceiling. Defaults to 1 hour.
     pub timeout_ms: Option<u64>,
@@ -251,6 +251,46 @@ pub struct ContextInfo {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub shell_name: Option<String>,
     pub metadata: Option<AgentMetadata>,
+    /// The pane's reported OSC 7501 state; absent when nothing is reported.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub program_status: Option<ProgramStatusInfo>,
+}
+
+/// A pane's worst-of OSC 7501 record as `list` reports it.  `title` and
+/// `msg` are left out, as in `state_changed`.
+#[derive(Debug, Serialize)]
+pub struct ProgramStatusInfo {
+    /// `idle|working|done|blocked|error`.
+    pub state: String,
+    /// Id of the child record that carries the state; absent for the root.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub record_id: Option<String>,
+    /// `permission|question|auth`; only on blocked records that name one.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub kind: Option<String>,
+    /// Progress 0-100, when reported.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub progress: Option<u8>,
+    /// Reporting app, inherited from the nearest ancestor record.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub app: Option<String>,
+}
+
+impl ProgramStatusInfo {
+    /// Reads the pane's cache (never the parser); `None` when no record is left.
+    pub fn from_cache(cache: &crate::agent_state::AgentStateCache) -> Option<Self> {
+        use crate::agent_state::{kind_label, state_label};
+        let state = cache.worst()?;
+        let d = cache.details();
+        let non_empty = |s: &str| (!s.is_empty()).then(|| s.to_owned());
+        Some(Self {
+            state: state_label(Some(state)).to_owned(),
+            record_id: cache.worst_id().map(str::to_owned),
+            kind: non_empty(kind_label(d.kind)),
+            progress: d.progress,
+            app: non_empty(&d.app),
+        })
+    }
 }
 
 #[derive(Debug, Serialize)]
@@ -303,6 +343,56 @@ pub struct ExecCompletedParams {
     pub elapsed_ms: u64,
 }
 
+/// Push event sent when a pane's reported (OSC 7501) worst-of agent state
+/// changes.  Never sent for progress-only updates or inferred state.
+#[derive(Debug, Serialize)]
+pub struct StateChangedEvent {
+    /// Always `"state_changed"`.
+    pub method: String,
+    /// The change.
+    pub params: StateChangedParams,
+}
+
+/// Parameters of a [`StateChangedEvent`].
+#[derive(Debug, Serialize)]
+pub struct StateChangedParams {
+    /// `%N` pane id.
+    pub context_id: String,
+    /// `idle|working|done|blocked|error`; `null` when no record is left.
+    pub state: Option<String>,
+    /// The state before the change; `null` when there was no record.
+    pub previous_state: Option<String>,
+    /// Id of the child record that carries the state; absent for the root.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub record_id: Option<String>,
+    /// `permission|question|auth`; only on blocked records that name one.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub kind: Option<String>,
+    /// Reporting app, inherited from the nearest ancestor record.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub app: Option<String>,
+}
+
+impl StateChangedEvent {
+    /// Builds the event for pane `pane_id` from a cache transition.
+    pub fn new(pane_id: usize, t: &crate::agent_state::AgentTransition) -> Self {
+        use crate::agent_state::{kind_label, state_label};
+        let name = |s: Option<vt100::ProgramState>| s.map(|s| state_label(Some(s)).to_owned());
+        let non_empty = |s: &str| (!s.is_empty()).then(|| s.to_owned());
+        Self {
+            method: "state_changed".into(),
+            params: StateChangedParams {
+                context_id: format!("%{pane_id}"),
+                state: name(t.new),
+                previous_state: name(t.old),
+                record_id: t.record_id.clone(),
+                kind: non_empty(kind_label(t.details.kind)),
+                app: non_empty(&t.details.app),
+            },
+        }
+    }
+}
+
 impl RpcResponse {
     pub fn success(id: serde_json::Value, result: impl Serialize) -> Self {
         Self {
@@ -341,3 +431,11 @@ impl RpcResponse {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "../../tests-rs/test_state_changed_event.rs"]
+mod state_changed_event_tests;
+
+#[cfg(test)]
+#[path = "../../tests-rs/test_context_program_status.rs"]
+mod context_program_status_tests;

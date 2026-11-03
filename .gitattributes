@@ -16,3 +16,6 @@
 *.exe binary
 *.dll binary
 *.nupkg binary
+
+# Icon resources embedded by build.rs (must preserve exact bytes)
+*.ico binary

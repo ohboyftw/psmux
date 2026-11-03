@@ -103,12 +103,42 @@ spawning the worker. `--cleanup` reverses this (`git worktree remove`).
    session holding the windows it started with. A kill that fails is reported
    on stderr rather than passed over — a silent one used to leave one dead
    window per worker, per run.
-4. **Failed** — any non-zero exit code, OR the pane vanished without an
+4. **Failed** — any non-zero exit code, OR the pane died without
+   reporting an exit code (`#{pane_exit_code}` empty: no `exit_code` key in
+   `state.json`; the dead pane is still killed), OR the pane vanished without an
    observable code (`exit_code = -1`, "pane gone"), OR the whole session
    was torn down (`exit_code = -3`, "session gone"), OR the `--timeout`
    fired (`exit_code = -2`, "orchestrate timed out").
 5. **Skipped** — a dependency reached `Failed`; downstream workers
    never start.
+
+### Agent state
+
+Each poll also reads the pane's `#{pane_agent_state}` (the worst-of OSC 7501
+state an agent reports: `idle`, `working`, `done`, `blocked` or `error`) and
+stores it as `agent_state` in `state.json` when it changes. It is recorded,
+never acted on: only the pane's exit decides `Succeeded` or `Failed`, so a
+worker that reports `blocked` stays `Running` and the run does not finish
+while it waits. When the pane dies, `agent_state` takes what the dead pane
+kept (`done` and `error` survive exit; everything else is cleared), also when
+it reported no exit code. When the pane or session is gone (`-1`/`-3`) the
+last reading is kept. A worker whose
+agent reports nothing has no `agent_state` key.
+
+If `--timeout` fires while a worker is `blocked`, that worker is marked
+`Failed` with `exit_code = -2` and keeps `agent_state: "blocked"`, the error
+line ends with `; blocked: <ids>`, and the human summary prints
+`agent=blocked` next to it.
+
+**Pi in `--print` mode reports nothing.** In Pi 1.1.0 the program status
+reporter is built only by interactive mode
+(`dist/modes/interactive/interactive-mode.js`); `print-mode.js` and `modes/rpc/` never reference it, and
+the support query is sent by the TUI terminal setup. `PI_PROGRAM_STATUS=1`
+only skips that query, so it cannot help a `--print` worker. Workers run as
+`node cli.js --print @task.md` therefore have no `agent_state`, and
+orchestrate gates on exit codes alone, as before. Agent state comes from
+agents that run interactively in the pane, such as Claude Code or interactive
+Pi.
 
 ## `state.json`
 
@@ -134,6 +164,12 @@ crashing; subsequent re-runs resume from the persisted state.
       "started_at": "2026-04-19T10:34:02.150Z",
       "finished_at": "2026-04-19T10:34:18.302Z",
       "crash_dump_path": null
+    },
+    "review": {
+      "status": "running",
+      "pane_id": "%5",
+      "started_at": "2026-04-19T10:34:02.150Z",
+      "agent_state": "blocked"
     }
   }
 }
@@ -192,3 +228,6 @@ If `orchestrate` is killed mid-run:
   timeout today; encode it inside the command (e.g. `timeout /t 60 /nobreak`).
 - Dependency edges are all "succeeded-only" — there is no "run-on-failure"
   edge type.
+- A worker stuck `blocked` (waiting for a permission or an answer) only ends
+  when someone answers it in its pane or `--timeout` fires. A reported `done`
+  does not release dependents; the pane must exit.
