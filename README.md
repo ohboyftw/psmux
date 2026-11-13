@@ -115,6 +115,56 @@ See [docker/README.md](docker/README.md) for full details.
   - Download PowerShell: `winget install --id Microsoft.PowerShell`
   - Or visit: https://aka.ms/powershell
 
+## Run the tests
+
+CI (`.github/workflows/ci.yml`) runs on pushes to `ohboy-builds` and `master`, on every pull request, and on manual dispatch. All jobs run on `windows-latest` with stable Rust — psmux is Windows-only, so the commands below assume a Windows machine with PowerShell 7+.
+
+**Setup.** `Cargo.toml` has a path dependency on `../mycel/clients/rust` (optional, but Cargo still resolves it), so clone the mycel repo next to your psmux checkout:
+
+```powershell
+git clone --depth 1 https://github.com/ohboyftw/mycel.git ../mycel
+```
+
+**Build** — the same release build on three targets:
+
+```powershell
+rustup target add x86_64-pc-windows-msvc i686-pc-windows-msvc aarch64-pc-windows-msvc
+
+cargo build --release --target x86_64-pc-windows-msvc   # Windows x64
+cargo build --release --target i686-pc-windows-msvc     # Windows x86
+cargo build --release --target aarch64-pc-windows-msvc  # Windows ARM64
+```
+
+**Contract and unit tests** — four named targets plus the full suite:
+
+```powershell
+cargo test --test backend_contracts
+cargo test --test backend_lifecycle
+cargo test --test control_mode_contracts
+cargo test --test passthrough_tests
+cargo test
+```
+
+Before the `cargo test` step, CI warms up Windows PowerShell (`powershell -NoProfile -NonInteractive -Command 'echo hello'`, three times): `#(command)` tests run it under psmux's 2 s status timeout, and a cold first start on a fresh machine can take longer.
+
+**Rails bench** — builds a release binary, puts it on `PATH`, then runs the PowerShell feature bench (45 minute job timeout, 20 minutes for the bench step itself):
+
+```powershell
+cargo build --release
+
+$dest = Join-Path $env:LOCALAPPDATA 'psmux'
+New-Item -ItemType Directory -Path $dest -Force | Out-Null
+Copy-Item target/release/psmux.exe $dest/
+$env:PATH = "$dest;$env:PATH"
+
+pwsh tests/verify_parity.ps1
+pwsh tests/run_rails_bench.ps1
+```
+
+Bench logs are written to `tests/bench-logs/` (CI uploads them as the `rails-bench-logs` artifact). While iterating, `pwsh tests/run_rails_bench.ps1 -Filter wait_for` runs only the matching `test_rails_*.ps1` files.
+
+**Not in CI.** `ci.yml` does not run `cargo fmt --check` or `cargo clippy -- -D warnings`; the repo convention is to run both locally before opening a pull request.
+
 ## Why psmux?
 
 If you've used tmux on Linux/macOS and wished you had something like it on Windows, **this is it**. Split panes, multiple windows, session persistence, full mouse support, tmux themes, 92 commands, 126+ format variables, 53 vim copy-mode keys. Your existing `.tmux.conf` works. Full details: **[docs/features.md](docs/features.md)** · **[docs/compatibility.md](docs/compatibility.md)**
